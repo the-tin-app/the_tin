@@ -163,13 +163,14 @@ async function main() {
     } else {
       console.log("[overnight] stopped — progress persisted; re-run to resume. NOT publishing.");
     }
+    process.exitCode = 2;
     return;
   }
 
   const setsRemaining = sets.filter((s) => !setsDone.has(s.setId)).length;
   const idCount = (db.prepare("SELECT COUNT(DISTINCT tcgplayer_id) AS n FROM card WHERE tcgplayer_id IS NOT NULL").get() as any).n as number;
   const popRemaining = sc.probe.populationEnabled ? Math.ceil(idCount / 50) - popBatchesDone.size : 0;
-  if (setsRemaining > 0 || popRemaining > 0) { console.log(`[overnight] ${setsRemaining} sets / ${popRemaining} pop batches remain — re-run to continue. NOT publishing.`); return; }
+  if (setsRemaining > 0 || popRemaining > 0) { console.log(`[overnight] ${setsRemaining} sets / ${popRemaining} pop batches remain — re-run to continue. NOT publishing.`); process.exitCode = 2; return; }
 
   console.log(`[overnight] all phases complete — publishing catalog v${version} to ${resolvedOut}/catalog/ …`);
   const manifest = await publishCatalog(dbPath, version, new LocalStorage(resolvedOut), new Date());

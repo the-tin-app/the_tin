@@ -115,17 +115,18 @@ step "4/7 build-catalog (offline compaction)"
 EXPORT_DIR=.export-cache npx tsx scripts/build-catalog.ts "$NEXT_VERSION" .seed-output
 
 # --- 5. enrich (REST sweep: condition prices, graded, population — separate large credit pool) ---
-# Enrichment is best-effort and resumable (sidecar ledger keeps per-set progress): PptClient
-# retries transient network errors in-request, and an outage that outlasts the retries becomes a
-# graceful stop inside fill-overnight (exit 0). This guard is the backstop for anything harder
-# (crash, OOM, halt exit 2): the base catalog from step 4 is complete (CSV raw+sealed prices),
-# so ALWAYS continue to publish — a night without fresh graded/pop data beats a night on the
-# previous version. The sweep picks up where it left off tomorrow.
+# Publish gate: a catalog missing enrichment (history/graded/condition) is WORSE for users than
+# yesterday's complete one, so any incomplete sweep — rate-limit/credit stop (exit 2), crash,
+# OOM — keeps the current live version and skips publish. fill-overnight exits non-zero on every
+# early-stop path. A full sweep needs ~95k PPT purchased credits; check the balance before
+# expecting a publish.
 step "5/7 fill-overnight (REST enrichment sweep)"
 if ! PPT_MINUTE_LIMIT="${PPT_MINUTE_LIMIT:-400}" \
      npx tsx scripts/fill-overnight.ts ".seed-output/catalog-v$NEXT_VERSION.sqlite" "$NEXT_VERSION" .seed-output; then
-  echo "[nightly] WARN: enrichment sweep failed — publishing base catalog anyway (sweep resumes next night)"
-  notify "Warning" "catalog-pipeline: fill-overnight failed — published v${NEXT_VERSION} without fresh enrichment (resumes tomorrow)"
+  echo "[nightly] enrichment incomplete — NOT publishing v${NEXT_VERSION}; keeping v$((NEXT_VERSION-1)) live"
+  notify "Warning" "catalog-pipeline: enrichment incomplete (credits/rate-limit?) — kept v$((NEXT_VERSION-1)) live, v${NEXT_VERSION} not published; retries next night"
+  trap - EXIT
+  exit 0
 fi
 
 # --- 6. publish tiers to the NAS (+ Firebase casual backup if creds are present) ---
