@@ -1,0 +1,132 @@
+name: TheTin
+options:
+  bundleIdPrefix: ai.reyes
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: 7.0.0
+  Gzip:
+    url: https://github.com/1024jp/GzipSwift
+    from: 6.0.0
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: 11.0.0
+  OpenCV:
+    url: https://github.com/yeatse/opencv-spm
+    exactVersion: 4.9.0
+targets:
+  TheTin:
+    type: application
+    platform: iOS
+    sources:
+      - path: TheTin/Sources
+      - path: TheTin/Assets.xcassets
+      - path: TheTin/Resources
+    # GoogleService-Info.plist is gitignored (bring your own Firebase project). Copied into
+    # the bundle only if present so a fresh clone builds with no Firebase config at all.
+    postBuildScripts:
+      - name: Copy GoogleService-Info.plist (if present)
+        basedOnDependencyAnalysis: false
+        script: |
+          PLIST="${SRCROOT}/TheTin/GoogleService-Info.plist"
+          if [ -f "$PLIST" ]; then
+            cp "$PLIST" "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/"
+          fi
+    dependencies:
+      - package: GRDB
+        product: GRDB
+      - package: Gzip
+        product: Gzip
+      - package: Firebase
+        product: FirebaseAuth
+      - package: Firebase
+        product: FirebaseAppCheck
+      - package: Firebase
+        product: FirebaseStorage
+      - package: OpenCV
+        product: OpenCV
+      - target: TheTinWidgets
+    info:
+      path: TheTin/Info.plist
+      properties:
+        CFBundleDisplayName: The Tin
+        # Reference the build setting instead of a baked literal so deploy-testflight.sh's
+        # per-run CURRENT_PROJECT_VERSION=<n> override actually reaches the bundle.
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiresFullScreen: true
+        AppIdentifierPrefix: $(AppIdentifierPrefix)
+        ITSAppUsesNonExemptEncryption: false
+        NSCameraUsageDescription: Scan your cards to identify them and add to your collection.
+        # Permits cleartext HTTP to private/link-local addresses only — used by DEBUG builds to
+        # reach a LAN dev catalog-server (APP_ATTEST_ENVIRONMENT=development) via SELFHOST_URL.
+        # Inert in release: the production app only ever talks to https://apithetin.reyes.ai.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        # Opportunistic background catalog refresh (wishlist price alerts spec 2026-07-14).
+        # "fetch" backs the BGAppRefreshTask manifest check; "processing" backs the
+        # BGProcessingTask tiered download. Best-effort — iOS schedules these when it likes.
+        UIBackgroundModes: [fetch, processing]
+        BGTaskSchedulerPermittedIdentifiers:
+          - ai.reyes.thetin.catalog-refresh
+          - ai.reyes.thetin.catalog-download
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.reyes.thetin
+        CODE_SIGN_ENTITLEMENTS: TheTin/TheTin.entitlements
+        DEVELOPMENT_TEAM: GXP2X83CRN
+        SWIFT_OBJC_BRIDGING_HEADER: TheTin/TheTin-Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: "c++17"
+        CLANG_CXX_LIBRARY: "libc++"
+  TheTinTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: TheTin/Tests
+      - path: TheTin/Resources/codebook.bin
+    dependencies:
+      - target: TheTin
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+  TheTinWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: TheTinWidgets/Sources
+      # Shared app↔widget file(s): the app target already compiles this via its whole-directory
+      # `TheTin/Sources` entry; listing the subdirectory here compiles the same files into the
+      # extension. Keep this directory Foundation-only.
+      - path: TheTin/Sources/Shared
+    info:
+      path: TheTinWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: The Tin
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.reyes.thetin.TheTinWidgets
+        CODE_SIGN_ENTITLEMENTS: TheTinWidgets/TheTinWidgets.entitlements
+        DEVELOPMENT_TEAM: GXP2X83CRN
+        SKIP_INSTALL: YES
+schemes:
+  TheTin:
+    build:
+      targets:
+        TheTin: all
+    test:
+      targets:
+        - TheTinTests

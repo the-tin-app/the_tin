@@ -1,0 +1,22 @@
+# catalog-server/docker-compose.yml
+services:
+  catalog-server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8180:8080"
+    environment:
+      PORT: "8080"
+      CATALOG_DIR: /data/catalog
+      DEVICE_DB_PATH: /data/devices.sqlite
+      SESSION_SECRET: ${CATALOG_SERVER_SESSION_SECRET}
+      APP_ID: ${CATALOG_SERVER_APP_ID}
+      APPLE_ROOT_CA_PATH: /data/apple-root-ca.pem
+      # development ⇒ accepts App Attest from development-signed (Xcode/debug) builds, which is
+      # what run-on-device.sh installs. Flip back to production before shipping a TestFlight/App
+      # Store build (those attest as production).
+      APP_ATTEST_ENVIRONMENT: development
+    volumes:
+      # Host directory holding the served catalog data (catalog/, devices.sqlite,
+      # apple-root-ca.pem). Point this at your own storage.
+      - /path/to/catalog-server-data:/data

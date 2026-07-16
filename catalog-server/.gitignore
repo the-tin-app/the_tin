@@ -1,0 +1,3 @@
+# Deployment CA only. Leading slash anchors this to
+# catalog-server/ so it does NOT swallow the committed test fixture test/fixtures/apple-root-ca.pem.
+/apple-root-ca.pem

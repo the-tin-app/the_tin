@@ -1,0 +1,12 @@
+[project]
+name = "fpcore"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["opencv-python-headless==4.9.0.80", "numpy>=1.26,<2", "certifi>=2024.2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fpcore*"]

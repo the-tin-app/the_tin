@@ -1,0 +1,140 @@
+// functions/test/overnight-sweep-core.test.ts
+import { describe, it, expect } from "vitest";
+import Database from "better-sqlite3";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runOvernightSweep, OvernightLedger } from "../src/pipeline/overnight-sweep-core";
+
+function freshDb() {
+  const out = join(tmpdir(), `sw-${process.pid}-${Math.round(performance.now())}-${Math.random()}.sqlite`);
+  const db = new Database(out);
+  db.exec(`
+    CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT, number TEXT, name TEXT, tcgplayer_id INTEGER);
+    CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL, psa3 REAL, psa7 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
+    CREATE TABLE price_history(card_id TEXT, date TEXT, raw_usd REAL NOT NULL, PRIMARY KEY(card_id,date));
+  `);
+  // NOTE: price_history_cond / price_by_condition intentionally NOT predefined here — the
+  // sweep's own IF-NOT-EXISTS DDL must create them.
+  db.prepare("INSERT INTO card VALUES ('base-4','base','4','Charizard',111)").run();
+  db.prepare("INSERT INTO price_latest VALUES ('base-4', 100, 90, NULL,NULL,NULL,NULL,'2026-07-01')").run();
+  return db;
+}
+function ledger(): OvernightLedger {
+  const setsDone = new Set<string>(), popBatchesDone = new Set<string>();
+  return { setsDone, popBatchesDone, markSet: (id) => setsDone.add(id), markPopBatch: (k) => popBatchesDone.add(k) };
+}
+const pricesRaw = {
+  primaryPrinting: "Holofoil",
+  variants: {
+    Holofoil: {
+      "Near Mint": { price: 95 },
+      "Lightly Played": { price: 80 },
+      "Moderately Played": { price: 60 },
+    },
+    "Reverse Holofoil": {
+      "Near Mint": { price: 140 },
+    },
+  },
+};
+// Nested-conditions shape: exercises both the existing NM-only price_history path (via
+// parseWeeklyHistory, which prefers "Near Mint") AND the new all-conditions path.
+const conditionPriceHistory = {
+  conditions: {
+    "Near Mint": { history: [{ date: "2026-07-01", market: 90 }, { date: "2026-07-08", market: 95 }] },
+    "Lightly Played": { history: [{ date: "2026-07-01", market: 75 }] },
+    "Heavily Played": { history: [] }, // 0 points → must not write any rows
+  },
+};
+const client = {
+  getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
+    priceHistory: conditionPriceHistory,
+    pricesRaw, gradedLatest: { psa10: 450 }, gradedSeries: [], ebayRaw: {} }]),
+  getPopulation: async () => ([{ tcgPlayerId: 111, grader: "PSA", grade: "g10", count: 5, gemRate: 100, totalPopulation: 5 }]),
+};
+const opts = { writeGradedHistory: false, populationEnabled: true, asOf: "2026-07-08" };
+const never = () => false;
+
+describe("runOvernightSweep", () => {
+  it("writes history + graded (preserving raw) + population, idempotently", async () => {
+    const db = freshDb();
+    const s = await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(s.historyRows).toBe(2);
+    const row = db.prepare("SELECT raw_usd, raw_eur, psa10 FROM price_latest WHERE card_id='base-4'").get() as any;
+    expect(row).toEqual({ raw_usd: 100, raw_eur: 90, psa10: 450 }); // raw preserved, graded added
+    expect(db.prepare("SELECT count FROM population WHERE card_id='base-4' AND grade='g10'").pluck().get()).toBe(5);
+    // idempotent re-run of the same set (fresh ledger) does not duplicate history
+    await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(db.prepare("SELECT COUNT(*) FROM price_history").pluck().get()).toBe(2);
+  });
+
+  it("writes ALL ungraded conditions to price_history_cond + price_by_condition (parallel tables)", async () => {
+    const db = freshDb();
+    const s = await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    // 2 Near Mint points + 1 Lightly Played point = 3; Heavily Played (0 points) contributes none
+    expect(s.condHistoryRows).toBe(3);
+    expect(s.byCondRows).toBe(3); // Near Mint, Lightly Played, Moderately Played from pricesRaw.variants
+    // ALL printings (not just primaryPrinting) land in price_by_variant, one NM price each.
+    expect(s.byVariantRows).toBe(2); // Holofoil + Reverse Holofoil
+    expect(db.prepare("SELECT printing, usd FROM price_by_variant WHERE card_id='base-4' ORDER BY printing").all())
+      .toEqual([{ printing: "Holofoil", usd: 95 }, { printing: "Reverse Holofoil", usd: 140 }]);
+    const histRows = db.prepare(
+      "SELECT condition, date, raw_usd FROM price_history_cond WHERE card_id='base-4' ORDER BY condition, date",
+    ).all();
+    expect(histRows).toEqual([
+      { condition: "Lightly Played", date: "2026-07-01", raw_usd: 75 },
+      { condition: "Near Mint", date: "2026-07-01", raw_usd: 90 },
+      { condition: "Near Mint", date: "2026-07-08", raw_usd: 95 },
+    ]);
+    const byCond = db.prepare(
+      "SELECT condition, usd, as_of FROM price_by_condition WHERE card_id='base-4' ORDER BY condition",
+    ).all();
+    expect(byCond).toEqual([
+      { condition: "Lightly Played", usd: 80, as_of: "2026-07-08" },
+      { condition: "Moderately Played", usd: 60, as_of: "2026-07-08" },
+      { condition: "Near Mint", usd: 95, as_of: "2026-07-08" },
+    ]);
+    // untouched: NM-only legacy tables preserved exactly as before
+    expect(s.historyRows).toBe(2);
+    const nmRow = db.prepare("SELECT raw_usd FROM price_latest WHERE card_id='base-4'").get() as any;
+    expect(nmRow.raw_usd).toBe(100); // price_latest NM raw_usd untouched by condition writes
+    // idempotent re-run does not duplicate condition rows
+    await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(db.prepare("SELECT COUNT(*) FROM price_history_cond").pluck().get()).toBe(3);
+    expect(db.prepare("SELECT COUNT(*) FROM price_by_condition").pluck().get()).toBe(3);
+  });
+
+  it("skips done sets and stops gracefully on a stop error", async () => {
+    const db = freshDb();
+    const l = ledger(); l.setsDone.add("base");
+    const throwing = { ...client, getPopulation: async () => { throw new Error("PPT 403 for population"); } };
+    const s = await runOvernightSweep(db as any, throwing as any, [{ setId: "base", pptName: "Base" }], l,
+      opts, (e) => /PPT 403/.test((e as Error).message));
+    expect(s.setsDone).toBe(0);          // set skipped (already done)
+    expect(s.stoppedEarly).toBe(true);   // population 403 → graceful stop
+    expect(s.stopReason).toMatch(/403/);
+  });
+
+  it("does not write a phantom all-null price_latest row when gradedLatest has no non-null values", async () => {
+    const db = freshDb();
+    const allNull = { ...client, getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
+      priceHistory: [], gradedLatest: { psa10: null }, gradedSeries: [], ebayRaw: {} }]) };
+    const before = db.prepare("SELECT * FROM price_latest WHERE card_id='base-4'").get();
+    const s = await runOvernightSweep(db as any, allNull as any, [{ setId: "base", pptName: "Base" }], ledger(),
+      { ...opts, populationEnabled: false }, never);
+    expect(s.gradedRows).toBe(0);
+    const after = db.prepare("SELECT * FROM price_latest WHERE card_id='base-4'").get();
+    expect(after).toEqual(before); // no as_of bump, no phantom write
+  });
+
+  it("does not write a phantom price_latest row when gradedLatest has ONLY non-psa grades", async () => {
+    const db = freshDb();
+    const nonPsaOnly = { ...client, getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
+      priceHistory: [], gradedLatest: { cgc10: 30 }, gradedSeries: [], ebayRaw: {} }]) };
+    const before = db.prepare("SELECT * FROM price_latest WHERE card_id='base-4'").get();
+    const s = await runOvernightSweep(db as any, nonPsaOnly as any, [{ setId: "base", pptName: "Base" }], ledger(),
+      { ...opts, populationEnabled: false }, never);
+    expect(s.gradedRows).toBe(0);
+    const after = db.prepare("SELECT * FROM price_latest WHERE card_id='base-4'").get();
+    expect(after).toEqual(before); // cgc10 alone must not create a phantom all-psa-null row
+  });
+});

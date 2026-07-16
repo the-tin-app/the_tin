@@ -1,0 +1,74 @@
+image, name, hp, numerator, denominator, condition
+IMG_1535.png, Charmander, 50, 58, 112,plain
+IMG_1536.png, Lotad, 50, 63, 107, plain
+IMG_1537.png, Cyndaquil, 50, 54, 115, plain
+IMG_1538.png, Togetic, 80, 103, 135, plain
+IMG_1539.png, Togetic, 80, 39, 90, plain
+IMG_1540.png, Bronzor, 50, 34, 99, plain
+IMG_1542.png, Articuno, 100, 032, null, case-sleeve
+IMG_1543.png, Articuno, 100, 032, null, sleeve
+IMG_1544.png, Moltres, 110, 115, 112, case-sleeve
+IMG_1546.png, Moltres, 110, 115, 112, sleeve
+IMG_1547.png, Blastoise, 110, 2, 100, case-sleeve
+IMG_1548.png, Umbreon, 90, 10, 90, case-sleeve
+IMG_1549.png, Charizard, 180, xy17, null, case-sleeve
+IMG_1550.png, Lt. Surge, null, 17, 132, case-sleeve
+IMG_1551.png, Miltank, 60, 94, 147, case-sleeve
+IMG_1552.png, Wailord, 120, 14, 92, case-sleeve
+IMG_1553.png, Slowking, 100, 85, 90, case-sleeve
+IMG_1554.png, Blaziken, 110, 3, 109, case-sleeve
+IMG_1555.png, Meowth, 170, 062, 088, top-sleeve
+IMG_1556.png, Rowlet, 80, 090, 088, top-sleeve
+IMG_1557.png, Tarragon, null, 116, 088, top-sleeve
+IMG_1558.png, Garchomp, 180, xy167, null, top-sleeve
+IMG_1559.png, Pikachu, 60, 049, 203, top-sleeve
+IMG_1560.png, Vaporeon, 280, 023, 131, top-sleeve
+IMG_1561.png, Dewgong, 130, 019, 088, top-sleeve
+IMG_1562.png, Shinx, 70, 026, 088, top-sleeve
+IMG_1563.png, Dewgong, 130, 097, 094, top-sleeve
+IMG_1564.png, Jolteon, 300, 051, 203, top-sleeve
+IMG_1565.png, Eevee, 50, 173, null, top-sleeve
+IMG_1566.png, Kyogre, 180, xy41, null, top-sleeve
+IMG_1567.png, Flareon, 130 , 167, null, top-sleeve
+IMG_1568.png, Blastoise, 100, 2, 102, top-sleeve
+IMG_1569.png, Spewpa, 80, 089, 088, top-sleeve
+IMG_1570.png, Gengar, 130, 050, 088, top-sleeve
+IMG_1571.png, Clefable, 320, 031, 088, top-sleeve
+IMG_1572.png, Probopass, 140, 096, 088, top-sleeve
+IMG_1573.png, Dewgong, 130, 019, 088, top-sleeve
+IMG_1574.png, Poke Pad, null, 113, 088, top-sleeve
+IMG_1575.png, Taragon, null, 116, 088, perfect
+IMG_1576.png, Garchomp, 180, xy167, null, sleeve
+IMG_1577.png, Pikachu, 60, 049, 203, sleeve
+IMG_1578.png, Vaporeon, 280, 023, 131, perfect
+IMG_1579.png, Dewgong, 130, 019, 088, sleeve
+IMG_1580.png, Shinx, 70, 026, 088, perfect
+IMG_1581.png, Dewgong, 130, 097, 094, sleeve
+IMG_1582.png, Eevee, 50, 173, null, sleeve
+IMG_1583.png, Kyogre, 180, xy41, null, perfect
+IMG_1584.png, Flareon, 130 , 167, null, sleeve
+IMG_1585.png, Blastoise, 100, 2, 102, sleeve
+IMG_1586.png, Spewpa, 80, 089, 088, perfect
+IMG_1587.png, Gengar, 130, 050, 088, perfect
+IMG_1588.png, Clefable, 320, 031, 088, perfect
+IMG_1589.png, Probopass, 140, 096, 088, perfect
+IMG_1590.png, Dewgong, 130, 019, 088, sleeve
+IMG_1591.png, Poke Pad, null, 113, 088, perfect
+IMG_1592.png, Rowlet, 80, 090, 088, perfect
+IMG_1593.png, Meowth, 170, 062, 088, perfect
+IMG_1594.png, Flareon, 130 , 167, null, raw
+IMG_1595.png, Blastoise, 100, 2, 102, raw
+IMG_1596.png, Eevee, 50, 173, null, raw
+IMG_1597.png, Dewgong, 130, 097, 094, raw
+IMG_1598.png, Dewgong, 130, 019, 088, raw
+IMG_1599.png, Pikachu, 60, 049, 203, raw
+IMG_1600.png, Garchomp, 180, xy167, null, raw
+IMG_1625.png, Meowth, 170, 062, 088, binder
+IMG_1626.png, Spewpa, 80, 089, 088, binder
+IMG_1627.png, Tarragon, null, 116, 088, binder
+IMG_1628.png, Poke Pad, null, 113, 088, binder
+IMG_1629.png, Clefable, 320, 031, 088, binder
+IMG_1630.png, Dewgong, 130, 019, 088, binder
+IMG_1631.png, Gengar, 130, 050, 088, binder
+IMG_1632.png, Probopass, 140, 096, 088, binder
+IMG_1633.png, Rowlet, 80, 090, 088, binder

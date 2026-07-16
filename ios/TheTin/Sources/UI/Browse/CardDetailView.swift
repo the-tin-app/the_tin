@@ -1,0 +1,440 @@
+import SwiftUI
+import Charts
+import Observation
+
+@MainActor @Observable
+final class CardDetailModel {
+    enum HistoryState: Equatable {
+        case loading
+        case loaded([PriceSeries])   // [0] = raw (primary); extras are expert overlays
+        case empty
+        case unavailable
+    }
+
+    let card: CardRecord
+    private(set) var setName: String?
+    private(set) var year: String?
+    private(set) var price: PriceRecord?
+    private(set) var conditions: [ConditionPrice] = []
+    private(set) var variants: [VariantPrice] = []
+    private(set) var population: [PopulationRow] = []
+    private(set) var historyState: HistoryState = .loading
+    /// The active catalog tier — drives how much price history the chart shows and its empty copy.
+    let tier: CatalogTier
+    private let store: CatalogStore
+    private let history: PriceHistoryProviding
+
+    init(store: CatalogStore, card: CardRecord, history: PriceHistoryProviding) {
+        self.card = card
+        self.store = store
+        self.history = history
+        self.tier = CatalogTier(rawValue: AppConfig.catalogTier) ?? .average
+        price = try? store.price(cardId: card.id)
+        conditions = (try? store.conditionPrices(cardId: card.id)) ?? []
+        variants = (try? store.variantPrices(cardId: card.id)) ?? []
+        population = (try? store.population(cardId: card.id)) ?? []
+        if let set = try? store.set(id: card.setId) {
+            setName = set.name
+            if let date = set.releaseDate, date.count >= 4 { year = String(date.prefix(4)) }
+        }
+    }
+
+    func loadHistory() async {
+        do {
+            let raw = try await history.rawHistory(cardId: card.id)
+            guard !raw.isEmpty else { historyState = .empty; return }
+            var series = [PriceSeries(name: "Raw", points: raw)]
+            // Expert tier only: overlay NM-condition and PSA 10 history. Those tables are dropped
+            // below expert, so the queries only run here — never on casual/average.
+            if tier == .expert {
+                if let nm = try? store.conditionHistory(cardId: card.id, condition: .nearMint), !nm.isEmpty {
+                    series.append(PriceSeries(name: "NM", points: nm))
+                }
+                if let psa10 = try? store.gradedHistory(cardId: card.id, grade: "10"), !psa10.isEmpty {
+                    series.append(PriceSeries(name: "PSA 10", points: psa10))
+                }
+            }
+            historyState = .loaded(series)
+        } catch {
+            historyState = .unavailable
+        }
+    }
+}
+
+struct CardDetailView: View {
+    let model: CardDetailModel
+    let store: CatalogStore
+    var collection: CollectionModel? = nil
+    var wants: WantsModel? = nil
+    @State private var showingAddSheet = false
+    @State private var selectedPrinting: String?
+    @State private var gradingFee: Double = AppConfig.gradingFeeUsd
+    @FocusState private var gradingFeeFocused: Bool
+
+    private static let priceColumns = [GridItem(.adaptive(minimum: 88), spacing: 8)]
+
+    /// The printing the price header is scoped to, when the card has more than one priced
+    /// printing. Defaults to the finish the rarity heuristic says this card is, else the cheapest.
+    private var currentPrinting: VariantPrice? {
+        guard model.variants.count > 1 else { return nil }
+        if let selectedPrinting, let v = model.variants.first(where: { $0.printing == selectedPrinting }) {
+            return v
+        }
+        let def = CardVariant.defaultFor(rarity: model.card.rarity)
+        return model.variants.first { def.matches(printing: $0.printing) } ?? model.variants.first
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                CardImageView(card: model.card, quality: "high")
+                    .frame(maxWidth: .infinity)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.card.name).font(.title2.bold())
+                    if let setName = model.setName {
+                        Text(model.year.map { "\(setName) · \($0)" } ?? setName)
+                            .font(.subheadline.weight(.medium))
+                    }
+                    Text("#\(model.card.number) · \(model.card.rarity ?? "—") · \(model.card.artist ?? "Unknown artist")")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    if let hp = model.card.hp { Text("HP \(hp)").font(.subheadline).foregroundStyle(.secondary) }
+                }
+
+                if let price = model.price {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack { Text("Prices").font(.headline); Spacer(); AsOfLabel(date: price.asOf) }
+                        // Multi-printing cards get a dropdown; the headline price is scoped to it.
+                        if model.variants.count > 1 {
+                            Menu {
+                                ForEach(model.variants) { v in
+                                    Button {
+                                        selectedPrinting = v.printing
+                                    } label: {
+                                        if v.printing == currentPrinting?.printing {
+                                            Label("\(v.printing) · \(v.usd.formatted(.currency(code: "USD")))",
+                                                  systemImage: "checkmark")
+                                        } else {
+                                            Text("\(v.printing) · \(v.usd.formatted(.currency(code: "USD")))")
+                                        }
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(currentPrinting?.printing ?? "Printing")
+                                        .font(.subheadline.weight(.semibold))
+                                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
+                                }
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(.quaternary.opacity(0.4), in: Capsule())
+                            }
+                            .tint(.primary)
+                        }
+                        // Headline number: the selected printing's market price when the card has
+                        // multiple printings; else raw market, else the NM condition price
+                        // (a separate feed — raw can be null while NM has a value; NM ≈ raw market).
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            if let printing = currentPrinting {
+                                Text(printing.usd, format: .currency(code: "USD"))
+                                    .font(.system(.title, design: .rounded).weight(.bold))
+                                Text("\(printing.printing) · market").font(.caption).foregroundStyle(.secondary)
+                            } else if let raw = price.rawUsd {
+                                Text(raw, format: .currency(code: "USD"))
+                                    .font(.system(.title, design: .rounded).weight(.bold))
+                                Text("raw market").font(.caption).foregroundStyle(.secondary)
+                            } else if let nm = model.conditions.first(where: { $0.condition == .nearMint })?.usd {
+                                Text(nm, format: .currency(code: "USD"))
+                                    .font(.system(.title, design: .rounded).weight(.bold))
+                                Text("NM · near mint market").font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Text("No raw price").font(.title3).foregroundStyle(.secondary)
+                                Text("raw market").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        // Graded (PSA) prices — only grades with data appear.
+                        let graded = Grade.allCases.filter { price.gradedOnly($0) != nil }
+                        if !graded.isEmpty {
+                            Text("Graded (PSA)").font(.subheadline.bold())
+                            LazyVGrid(columns: Self.priceColumns, spacing: 8) {
+                                ForEach(graded) { grade in
+                                    PriceTile(label: grade.label, value: price.gradedOnly(grade))
+                                }
+                            }
+                        }
+                        // Ungraded per-condition prices (NM/LP/MP/HP/DMG).
+                        if !model.conditions.isEmpty {
+                            Text("By condition").font(.subheadline.bold())
+                            LazyVGrid(columns: Self.priceColumns, spacing: 8) {
+                                ForEach(model.conditions) { cp in
+                                    PriceTile(label: cp.condition.label, value: cp.usd)
+                                }
+                            }
+                        }
+                        // Honest data note: PSA/condition feeds carry no printing dimension.
+                        if currentPrinting != nil, !graded.isEmpty || !model.conditions.isEmpty {
+                            Text("Graded and condition prices are for the card overall — they don't distinguish printings.")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                } else {
+                    Text("No sales data for this card").font(.subheadline).foregroundStyle(.secondary)
+                }
+
+                priceHistorySection
+
+                // "Grade it?" — grading-ROI verdict beside the population section. Hidden when
+                // compute() returns nil (no PSA rows, no graded prices, or no baseline).
+                if let roi = gradingROI {
+                    gradeItSection(roi)
+                }
+
+                // PSA population — collapsed by default at the bottom; most people don't dig into
+                // grade distributions. The "N graded · X% gem" summary stays on the collapsed row.
+                if !model.population.isEmpty {
+                    DisclosureGroup {
+                        let maxCount = max(model.population.map(\.count).max() ?? 1, 1)
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(model.population) { row in
+                                PopulationBar(grade: row.displayGrade, count: row.count, maxCount: maxCount)
+                            }
+                        }
+                        .padding(.top, 6)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text("PSA Population").font(.headline)
+                            if let total = model.population.first?.totalPopulation {
+                                Text("\(total) graded").font(.caption).foregroundStyle(.secondary)
+                            }
+                            if let gem = model.population.first?.gemRate {
+                                Text("· \(gem, format: .percent.precision(.fractionLength(0))) gem")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .tint(.secondary)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle(model.card.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await model.loadHistory() }
+        .toolbar { detailToolbar }
+        .sheet(isPresented: $showingAddSheet) {
+            if let collection {
+                NavigationStack {
+                    EntryFormView(card: model.card, groups: collection.groups, existing: nil,
+                                  variants: model.variants, conditions: model.conditions,
+                                  onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
+                        Task { await collection.saveEntry(entry) }
+                    }
+                }
+            }
+        }
+    }
+
+    // Broken out of `body` — combined with the rest of the modifier chain it pushed the type
+    // checker over its time budget ("unable to type-check this expression in reasonable time").
+    @ToolbarContentBuilder private var detailToolbar: some ToolbarContent {
+        if let wants {
+            ToolbarItem {
+                Button { wants.toggle(model.card.id) } label: {
+                    Image(systemName: wants.isWanted(model.card.id) ? "heart.fill" : "heart")
+                }
+            }
+        }
+        if collection != nil {
+            ToolbarItem {
+                Button { showingAddSheet = true } label: { Image(systemName: "plus.square.on.square") }
+            }
+        }
+        ToolbarItemGroup(placement: .keyboard) {
+            Spacer()
+            Button("Done") { gradingFeeFocused = false }
+        }
+    }
+
+    /// Price-history area of the detail screen. Loaded → interactive chart. Empty on the casual
+    /// tier → an upgrade nudge (history is intentionally stripped there); empty otherwise →
+    /// "not enough history yet". Unavailable → offline/error.
+    @ViewBuilder private var priceHistorySection: some View {
+        switch model.historyState {
+        case .loading:
+            ProgressView("Loading price history…")
+        case .loaded(let series):
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Price history").font(.headline)
+                PriceHistoryChart(series: series)
+            }
+        case .empty where model.tier == .casual:
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Price history is off on the Casual tier", systemImage: "chart.line.uptrend.xyaxis")
+                    .font(.subheadline.weight(.medium))
+                Text("Switch to Average or Expert in Settings to see the price-history graph.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+        case .empty:
+            Label("Not enough price history yet — check back soon", systemImage: "clock")
+                .font(.footnote).foregroundStyle(.secondary)
+        case .unavailable:
+            Label("No price history yet", systemImage: "chart.line.uptrend.xyaxis")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// The user's first raw (ungraded) copy of this card. Its condition drives the baseline and
+    /// the played-cards warning; graded copies are skipped — they're already graded.
+    private var ownedRawEntry: CollectionEntry? {
+        collection?.entries.first { $0.cardId == model.card.id && $0.grade == nil }
+    }
+
+    /// Baseline = what this copy sells for raw: the owned copy's unit value when owned
+    /// (entryValue multiplies by qty, so price a qty-1 copy), else NM market, else raw market.
+    private var gradingROI: GradingROI? {
+        guard let price = model.price else { return nil }
+        let baseline: Double?
+        if let entry = ownedRawEntry {
+            var one = entry
+            one.qty = 1
+            baseline = GroupStats.entryValue(one, price: price, variants: model.variants,
+                                             conditions: model.conditions)
+        } else {
+            baseline = model.conditions.first(where: { $0.condition == .nearMint })?.usd ?? price.rawUsd
+        }
+        return GradingROI.compute(population: model.population, price: price, baseline: baseline,
+                                  fee: gradingFee, ownedCondition: ownedRawEntry?.conditionValue)
+    }
+
+    private func verdictHeadline(_ roi: GradingROI) -> String {
+        let amount = abs(roi.evNet).formatted(.currency(code: "USD").precision(.fractionLength(0)))
+        switch roi.verdict {
+        case .grade:      return "Worth grading — expected +\(amount) after fees"
+        case .borderline: return "Borderline — about break-even after fees"
+        case .keep:       return "Keep it raw — expected −\(amount) after fees"
+        }
+    }
+
+    @ViewBuilder private func gradeItSection(_ roi: GradingROI) -> some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(verdictHeadline(roi))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(roi.verdict == .grade ? AnyShapeStyle(.green)
+                                                           : AnyShapeStyle(.primary))
+                    .padding(.top, 6)
+                // Expected-value math: per-grade odds × PSA price.
+                ForEach(roi.buckets) { b in
+                    HStack {
+                        Text(b.grade.label)
+                            .font(.subheadline.monospacedDigit())
+                            .frame(width: 68, alignment: .leading)
+                        Text("\(b.probability, format: .percent.precision(.fractionLength(0))) × \(b.price, format: .currency(code: "USD"))")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(b.probability * b.price, format: .currency(code: "USD"))
+                            .font(.caption.monospacedDigit())
+                    }
+                }
+                HStack {
+                    Text("Expected graded value").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(roi.ev, format: .currency(code: "USD")).font(.caption.weight(.semibold))
+                }
+                if let gem = roi.gemRate {
+                    HStack {
+                        Text("Gem rate").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(gem, format: .percent.precision(.fractionLength(0))).font(.caption)
+                    }
+                }
+                HStack {
+                    Text("Breakeven").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(roi.breakevenGrade.map { "needs a \($0.label) or better to beat raw" }
+                         ?? "no grade beats selling raw")
+                        .font(.caption)
+                }
+                HStack {
+                    Text("Assumed grading fee").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    TextField("Fee", value: $gradingFee, format: .currency(code: "USD"))
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 90)
+                        .focused($gradingFeeFocused)
+                        .onChange(of: gradingFee) { _, newValue in
+                            AppConfig.gradingFeeUsd = newValue   // clamped $0–$500 by the setter
+                        }
+                }
+                if roi.playedWarning {
+                    Text("Your copy is moderately played or worse — played cards rarely gem.")
+                        .font(.caption2).foregroundStyle(.orange)
+                }
+                Text("Estimate only — not what this specific copy will cost. Once you grade it, record the actual fee on the entry for accurate cost-basis and insurance reports.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                Text("Population reflects copies people chose to grade — your card's odds depend on its condition.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text("Grade it?").font(.headline)
+                if roi.lowConfidence {
+                    Text("low data")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.yellow.opacity(0.25), in: Capsule())
+                }
+            }
+        }
+        .tint(.secondary)
+    }
+}
+
+/// One PSA grade as a proportional bar (width relative to the most-populated grade), so the
+/// population reads as a distribution at a glance instead of a long table of raw counts.
+private struct PopulationBar: View {
+    let grade: String
+    let count: Int
+    let maxCount: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("PSA \(grade)")
+                .font(.subheadline.monospacedDigit())
+                .frame(width: 68, alignment: .leading)
+            GeometryReader { geo in
+                Capsule().fill(.tint)
+                    .frame(width: max(geo.size.width * CGFloat(count) / CGFloat(maxCount), 3))
+            }
+            .frame(height: 10)
+            Text("\(count)")
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 56, alignment: .trailing)
+        }
+    }
+}
+
+/// A compact price cell: label above the value, laid out in a grid so grade/condition prices
+/// read as a scannable set of tiles rather than a long vertical list.
+private struct PriceTile: View {
+    let label: String
+    let value: Double?
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            if let value {
+                Text(value, format: .currency(code: "USD")).font(.subheadline.weight(.semibold))
+            } else {
+                Text("—").font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+    }
+}

@@ -1,0 +1,139 @@
+import { describe, it, expect } from "vitest";
+import Database from "better-sqlite3";
+import {
+  parseCsv, parseCardsExport, parseSealedExport, parseEbayExport, parsePopulationExport,
+  ebayGradeToPsaColumn, applyExport,
+} from "../src/pipeline/ppt-export";
+
+// Sample CSVs use the documented export headers (api-reference, 2026-07-11).
+const CARDS_CSV =
+  "tcgPlayerId,name,setName,setId,cardNumber,rarity,language,printing,marketPrice,lowPrice,sellers,lastPriceUpdate\n" +
+  "100,Pikachu,Base,base1,58,Common,EN,Holofoil,5.25,4.00,12,2026-07-11\n" +
+  '200,"Charizard, Base",Base,base1,4,Rare,EN,Holofoil,350.00,300.00,8,2026-07-11\n' +
+  "777,Orphan Card,Other,x,1,Common,EN,Normal,1.00,0.50,1,2026-07-11\n" + // no matching card
+  "300,No Price,Base,base1,9,Common,EN,Normal,,,,2026-07-11\n";           // null market → skipped
+
+// Real dumps use lowercase no-space grades ("psa10","cgc9"); median≠smartMarketPrice on purpose.
+const EBAY_CSV =
+  "tcgPlayerId,grade,salesCount,averagePrice,medianPrice,smartMarketPrice,smartMarketConfidence,marketPrice7Day,marketTrend,salesVelocityWeekly\n" +
+  "200,psa10,40,1200,1150,1180.50,0.9,1175,up,3\n" +
+  "200,psa9,30,600,590,585,0.9,580,flat,2\n" +
+  "200,cgc9,5,700,690,695,0.8,700,flat,1\n"; // non-PSA → ignored for columns
+
+const SEALED_CSV =
+  "tcgPlayerId,name,setName,setId,productType,language,marketPrice,lowPrice,sellers,lastPriceUpdate\n" +
+  "9001,Base Booster Box,Base,base1,Booster Box,EN,7999.99,7500,3,2026-07-11\n";
+
+const POP_CSV =
+  "tcgPlayerId,grader,totalPopulation,gemRate,g1,g2,g3,g4,g5,g6,g7,g8,g9,g9_5,g10,auth,qualifiers,pristine,perfect,matchConfidence\n" +
+  "200,PSA,5000,0.42,1,0,2,0,3,0,10,50,900,0,2100,0,0,0,0,0.99\n";
+
+function makeDb(): Database.Database {
+  const db = new Database(":memory:");
+  db.exec(`
+    CREATE TABLE card(id TEXT PRIMARY KEY, tcgplayer_id INTEGER);
+    CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL,
+      psa3 REAL, psa7 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
+    CREATE TABLE sealed_product(tcgplayer_id INTEGER PRIMARY KEY, name TEXT NOT NULL, set_id TEXT,
+      product_type TEXT, market_usd REAL, low_usd REAL, as_of TEXT);
+    CREATE TABLE population(card_id TEXT NOT NULL, grader TEXT NOT NULL, grade TEXT NOT NULL,
+      count INTEGER, gem_rate REAL, total_population INTEGER, as_of TEXT NOT NULL,
+      PRIMARY KEY(card_id, grader, grade));
+    INSERT INTO card VALUES ('base1-58',100),('base1-4',200),('base1-9',300);
+  `);
+  return db;
+}
+
+describe("parseCsv (RFC-4180)", () => {
+  it("handles quoted fields with embedded commas and CRLF", () => {
+    const rows = parseCsv('a,b\r\n"x,y",z\r\n');
+    expect(rows).toEqual([{ a: "x,y", b: "z" }]);
+  });
+  it('unescapes doubled quotes', () => {
+    expect(parseCsv('a\n"he said ""hi"""')).toEqual([{ a: 'he said "hi"' }]);
+  });
+  it("ignores a trailing blank line", () => {
+    expect(parseCsv("a\n1\n").length).toBe(1);
+  });
+});
+
+describe("per-dataset parsers", () => {
+  it("parses cards, keeping the embedded-comma name and nulling empty prices", () => {
+    const rows = parseCardsExport(CARDS_CSV);
+    expect(rows.map((r) => r.tcgPlayerId)).toEqual([100, 200, 777, 300]);
+    expect(rows[1].name).toBe("Charizard, Base");
+    expect(rows[3].marketPrice).toBeNull();
+  });
+  it("parses population grade columns into labels, dropping zero counts", () => {
+    const [p] = parsePopulationExport(POP_CSV);
+    expect(p.grader).toBe("PSA");
+    expect(p.grades).toEqual({ "1": 1, "3": 2, "5": 3, "7": 10, "8": 50, "9": 900, "10": 2100 });
+    expect(p.totalPopulation).toBe(5000);
+  });
+  it("parses sealed + ebay rows", () => {
+    expect(parseSealedExport(SEALED_CSV)[0].productType).toBe("Booster Box");
+    expect(parseEbayExport(EBAY_CSV).map((r) => r.grade)).toEqual(["psa10", "psa9", "cgc9"]);
+  });
+});
+
+describe("ebayGradeToPsaColumn", () => {
+  it("maps PSA grades we have columns for (real lowercase form + tolerant of spaced)", () => {
+    expect(ebayGradeToPsaColumn("psa10")).toBe("psa10");
+    expect(ebayGradeToPsaColumn("psa9")).toBe("psa9");
+    expect(ebayGradeToPsaColumn("PSA 10")).toBe("psa10");
+  });
+  it("ignores grades with no column (psa8, psa9.5) and other graders (cgc/bgs)", () => {
+    expect(ebayGradeToPsaColumn("psa8")).toBeNull();
+    expect(ebayGradeToPsaColumn("cgc6")).toBeNull();
+    expect(ebayGradeToPsaColumn("bgs9.5")).toBeNull();
+  });
+});
+
+describe("applyExport", () => {
+  it("ingests raw + graded + sealed + population, skipping unmatched tcgPlayerIds", () => {
+    const db = makeDb();
+    const stats = applyExport(db, {
+      cards: parseCardsExport(CARDS_CSV),
+      ebay: parseEbayExport(EBAY_CSV),
+      sealed: parseSealedExport(SEALED_CSV),
+      population: parsePopulationExport(POP_CSV),
+      asOf: "2026-07-11",
+    });
+
+    // cards: 100 + 200 matched & priced; 300 null-priced skipped; 777 unmatched.
+    expect(stats.rawRows).toBe(2);
+    expect(stats.unmatched).toBe(1);
+    const char = db.prepare("SELECT * FROM price_latest WHERE card_id='base1-4'").get() as any;
+    expect(char.raw_usd).toBe(350);
+    expect(char.psa10).toBe(1150); // medianPrice, not smartMarketPrice (1180.5)
+    expect(char.psa9).toBe(590);
+
+    const box = db.prepare("SELECT * FROM sealed_product WHERE tcgplayer_id=9001").get() as any;
+    expect(box.market_usd).toBe(7999.99);
+    expect(box.product_type).toBe("Booster Box");
+
+    const pop = db.prepare("SELECT grade, count FROM population WHERE card_id='base1-4' AND grade='10'").get() as any;
+    expect(pop.count).toBe(2100);
+    expect(stats.popRows).toBe(7); // grades 1,3,5,7,8,9,10
+  });
+
+  it("uses an explicit idByTcg override (build pipeline supplies every printing SKU)", () => {
+    const db = makeDb(); // card table maps base1-58→100; override maps a DIFFERENT sku (555)
+    const csv =
+      "tcgPlayerId,name,setName,setId,cardNumber,rarity,language,printing,marketPrice,lowPrice,sellers,lastPriceUpdate\n" +
+      "555,X,S,1,1,C,english,Normal,9.99,5,1,2026-07-11\n";
+    const stats = applyExport(db, { cards: parseCardsExport(csv), asOf: "2026-07-11" },
+      new Map<number, string>([[555, "base1-58"]]));
+    expect(stats.rawRows).toBe(1); // matched via override, not the table's tcgplayer_id column
+    expect((db.prepare("SELECT raw_usd FROM price_latest WHERE card_id='base1-58'").get() as any).raw_usd).toBe(9.99);
+  });
+
+  it("preserves an existing raw price when only graded data arrives (COALESCE upsert)", () => {
+    const db = makeDb();
+    db.prepare("INSERT INTO price_latest(card_id, raw_usd, as_of) VALUES ('base1-4', 999, '2026-01-01')").run();
+    applyExport(db, { ebay: parseEbayExport(EBAY_CSV), asOf: "2026-07-11" });
+    const row = db.prepare("SELECT raw_usd, psa10 FROM price_latest WHERE card_id='base1-4'").get() as any;
+    expect(row.raw_usd).toBe(999);      // untouched by the graded-only upsert
+    expect(row.psa10).toBe(1150);       // medianPrice
+  });
+});

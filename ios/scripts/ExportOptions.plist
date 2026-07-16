@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>upload</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Apple Distribution: Tomas Reyes (GXP2X83CRN)</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>ai.reyes.thetin</key>
+		<string>The Tin App Store</string>
+		<key>ai.reyes.thetin.TheTinWidgets</key>
+		<string>The Tin Widgets App Store</string>
+	</dict>
+	<key>teamID</key>
+	<string>GXP2X83CRN</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

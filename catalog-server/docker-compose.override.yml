@@ -1,0 +1,6 @@
+services:
+  catalog-server:
+    volumes:
+      # Local override: bind-mount your own data directory here instead of the
+      # default in docker-compose.yml.
+      - /path/to/catalog-server-data:/data

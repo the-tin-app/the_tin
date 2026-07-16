@@ -1,0 +1,294 @@
+{
+ "note": "Trimmed real PPT /cards sample (Evolving Skies), captured 2026-07-08. Includes all ungraded conditions (history + latest) + graded.",
+ "data": [
+  {
+   "name": "Metal Energy (Secret)",
+   "tcgPlayerId": "246812",
+   "cardNumber": "237/203",
+   "prices": {
+    "market": 10.57,
+    "primaryPrinting": "Holofoil",
+    "variants": {
+     "Holofoil": {
+      "Near Mint": {
+       "price": 10.57
+      },
+      "Heavily Played": {
+       "price": 5.8
+      },
+      "Lightly Played": {
+       "price": 10.45
+      },
+      "Damaged": {
+       "price": 7.66
+      },
+      "Moderately Played": {
+       "price": 9.69
+      }
+     }
+    }
+   },
+   "priceHistory": {
+    "conditions": {
+     "Near Mint": {
+      "history": [
+       {
+        "date": "2026-04-10T00:00:00.000Z",
+        "market": 10.89,
+        "volume": 4
+       },
+       {
+        "date": "2026-04-11T00:00:00.000Z",
+        "market": 10.95,
+        "volume": 4
+       },
+       {
+        "date": "2026-04-12T00:00:00.000Z",
+        "market": 10.93,
+        "volume": 2
+       }
+      ]
+     },
+     "Heavily Played": {
+      "history": []
+     },
+     "Lightly Played": {
+      "history": [
+       {
+        "date": "2026-04-10T00:00:00.000Z",
+        "market": 10.74,
+        "volume": null
+       },
+       {
+        "date": "2026-04-11T00:00:00.000Z",
+        "market": 10.87,
+        "volume": 4
+       },
+       {
+        "date": "2026-04-12T00:00:00.000Z",
+        "market": 10.74,
+        "volume": null
+       }
+      ]
+     },
+     "Damaged": {
+      "history": [
+       {
+        "date": "2026-04-10T00:00:00.000Z",
+        "market": 8.66,
+        "volume": null
+       },
+       {
+        "date": "2026-04-11T00:00:00.000Z",
+        "market": 8.77,
+        "volume": 4
+       },
+       {
+        "date": "2026-04-12T00:00:00.000Z",
+        "market": 8.66,
+        "volume": null
+       }
+      ]
+     },
+     "Moderately Played": {
+      "history": [
+       {
+        "date": "2026-04-10T00:00:00.000Z",
+        "market": 11.35,
+        "volume": null
+       },
+       {
+        "date": "2026-04-11T00:00:00.000Z",
+        "market": 11.26,
+        "volume": 4
+       },
+       {
+        "date": "2026-04-12T00:00:00.000Z",
+        "market": 11.26,
+        "volume": 1
+       }
+      ]
+     }
+    },
+    "totalDataPoints": 356
+   },
+   "ebay": {
+    "salesByGrade": {
+     "psa9": {
+      "count": 1,
+      "averagePrice": 8.5,
+      "medianPrice": 8.5,
+      "smartMarketPrice": {
+       "price": 8.5,
+       "confidence": "low",
+       "method": "all_filtered_weighted",
+       "daysUsed": 124
+      }
+     },
+     "psa10": {
+      "count": 14,
+      "averagePrice": 41.63928571428572,
+      "medianPrice": 43,
+      "smartMarketPrice": {
+       "price": 44.62,
+       "confidence": "high",
+       "method": "90day_filtered_weighted",
+       "daysUsed": 90
+      }
+     },
+     "ace10": {
+      "count": 1,
+      "averagePrice": 26.87,
+      "medianPrice": 26.87,
+      "smartMarketPrice": {
+       "price": 26.87,
+       "confidence": "low",
+       "method": "all_filtered_weighted",
+       "daysUsed": 42
+      }
+     }
+    },
+    "priceHistory": {
+     "psa10": {
+      "2026-04-20": {
+       "average": 39.99,
+       "count": 1,
+       "totalValue": 39.99,
+       "sevenDayAverage": 39.99,
+       "sevenDayVolumeAvg": 1,
+       "sevenDayValueAvg": 39.99,
+       "rollingWindow": null
+      },
+      "2026-04-25": {
+       "average": 42,
+       "count": 1,
+       "totalValue": 42,
+       "sevenDayAverage": 40.995000000000005,
+       "sevenDayVolumeAvg": 1,
+       "sevenDayValueAvg": 40.995000000000005,
+       "rollingWindow": null
+      }
+     },
+     "psa9": {},
+     "ace10": {
+      "2026-05-21": {
+       "average": 26.55,
+       "count": 1,
+       "totalValue": 26.55,
+       "sevenDayAverage": 26.55,
+       "sevenDayVolumeAvg": 1,
+       "sevenDayValueAvg": 26.55,
+       "rollingWindow": null
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "Treasure Energy",
+   "tcgPlayerId": "246790",
+   "cardNumber": "165/203",
+   "prices": {
+    "market": 0.05,
+    "primaryPrinting": "Normal",
+    "variants": {
+     "Normal": {
+      "Lightly Played": {
+       "price": 0.07
+      },
+      "Moderately Played": {
+       "price": 0.04
+      },
+      "Near Mint": {
+       "price": 0.05
+      },
+      "Damaged": {
+       "price": 0.01
+      }
+     }
+    }
+   },
+   "priceHistory": {
+    "conditions": {
+     "Near Mint": {
+      "history": [
+       {
+        "date": "2026-04-10T00:00:00.000Z",
+        "market": 0.08,
+        "volume": 1
+       },
+       {
+        "date": "2026-04-11T00:00:00.000Z",
+        "market": 0.09,
+        "volume": 1
+       },
+       {
+        "date": "2026-04-12T00:00:00.000Z",
+        "market": 0.1,
+        "volume": 1
+       }
+      ]
+     },
+     "Lightly Played": {
+      "history": [
+       {
+        "date": "2026-04-10T00:00:00.000Z",
+        "market": 0.06,
+        "volume": 2
+       },
+       {
+        "date": "2026-04-11T00:00:00.000Z",
+        "market": 0.05,
+        "volume": 1
+       },
+       {
+        "date": "2026-04-12T00:00:00.000Z",
+        "market": 0.06,
+        "volume": 3
+       }
+      ]
+     },
+     "Moderately Played": {
+      "history": [
+       {
+        "date": "2026-04-10T00:00:00.000Z",
+        "market": 0.01,
+        "volume": null
+       },
+       {
+        "date": "2026-04-11T00:00:00.000Z",
+        "market": 0.01,
+        "volume": 2
+       },
+       {
+        "date": "2026-04-12T00:00:00.000Z",
+        "market": 0.03,
+        "volume": 1
+       }
+      ]
+     },
+     "Damaged": {
+      "history": [
+       {
+        "date": "2026-06-30T00:00:00.000Z",
+        "market": 0.01,
+        "volume": 1
+       },
+       {
+        "date": "2026-07-01T00:00:00.000Z",
+        "market": 0.01,
+        "volume": 4
+       },
+       {
+        "date": "2026-07-02T00:00:00.000Z",
+        "market": 0.01,
+        "volume": 13
+       }
+      ]
+     }
+    },
+    "totalDataPoints": 271
+   }
+  }
+ ]
+}

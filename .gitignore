@@ -1,0 +1,31 @@
+firebase-debug.log
+firestore-debug.log
+.DS_Store
+.env
+node_modules/
+functions/lib/
+catalog-server/dist/
+*.sqlite
+*.sqlite.gz
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+.firebase/
+ios/TheTin.xcodeproj/
+ios/DerivedData/
+!ios/TheTin/Tests/Fixtures/*.sqlite
+!ios/TheTin/Tests/Fixtures/Fingerprint/*.sqlite
+!ios/TheTin/Tests/Fixtures/ScanPhotos/*.sqlite
+ios/build/
+# Firebase app config (client config; kept out of git per project policy)
+GoogleService-Info.plist
+GoogleService-Info*.plist
+
+# ios-simulator-skill local device-preference cache
+ios/.claude/
+
+# Local git worktrees
+.worktrees/
+
+# local agent-tooling scratch
+.superpowers/

@@ -1,0 +1,9 @@
+
+# local seed artifacts (one-set seed output)
+.seed-output/
+
+# bulk-catalog pipeline cache (cards-database clone + price feeds)
+.cache/
+
+# saved PPT bulk-export CSVs (commercial data — must never be committed to the public repo)
+.export-cache/

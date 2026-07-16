@@ -1,0 +1,18 @@
+# functions/Dockerfile.pipeline — nightly catalog rebuild (not the Firebase Functions runtime).
+# Build context must be functions/:
+#   docker build -f Dockerfile.pipeline -t catalog-pipeline:latest .
+FROM node:20-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://bun.sh/install | bash \
+    && ln -s /root/.bun/bin/bun /usr/local/bin/bun
+
+WORKDIR /app/functions
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN chmod +x scripts/nightly-entrypoint.sh
+
+ENTRYPOINT ["scripts/nightly-entrypoint.sh"]

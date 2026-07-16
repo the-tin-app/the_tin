@@ -1,0 +1,454 @@
+[
+  {
+    "plate": "IMG_1535",
+    "truthIds": [
+      "ex6-58"
+    ],
+    "condition": "plain"
+  },
+  {
+    "plate": "IMG_1536",
+    "truthIds": [
+      "ex8-63"
+    ],
+    "condition": "plain"
+  },
+  {
+    "plate": "IMG_1537",
+    "truthIds": [
+      "ex10-54"
+    ],
+    "condition": "plain"
+  },
+  {
+    "plate": "IMG_1538",
+    "truthIds": [
+      "bw8-103"
+    ],
+    "condition": "plain"
+  },
+  {
+    "plate": "IMG_1539",
+    "truthIds": [
+      "hgss3-39"
+    ],
+    "condition": "plain"
+  },
+  {
+    "plate": "IMG_1540",
+    "truthIds": [
+      "pl4-34"
+    ],
+    "condition": "plain"
+  },
+  {
+    "plate": "IMG_1542",
+    "truthIds": [
+      "np-32"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1543",
+    "truthIds": [
+      "np-32"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1544",
+    "truthIds": [
+      "ex6-115"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1546",
+    "truthIds": [
+      "ex6-115"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1547",
+    "truthIds": [
+      "base1-2",
+      "base4-2",
+      "dp3-2",
+      "pl1-2"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1548",
+    "truthIds": [
+      "hgss3-10"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1549",
+    "truthIds": [
+      "xyp-XY17"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1550",
+    "truthIds": [
+      "gym1-17"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1551",
+    "truthIds": [
+      "ecard2-94"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1552",
+    "truthIds": [
+      "ex1-14",
+      "ex12-14"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1553",
+    "truthIds": [
+      "hgss3-85"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1554",
+    "truthIds": [
+      "ex1-3"
+    ],
+    "condition": "case-sleeve"
+  },
+  {
+    "plate": "IMG_1555",
+    "truthIds": [
+      "me03-062"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1556",
+    "truthIds": [
+      "me03-090"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1557",
+    "truthIds": [
+      "me03-116"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1558",
+    "truthIds": [
+      "xyp-XY167"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1559",
+    "truthIds": [
+      "swsh7-49"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1560",
+    "truthIds": [
+      "sv08.5-023"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1561",
+    "truthIds": [
+      "me03-019"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1562",
+    "truthIds": [
+      "me03-026"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1563",
+    "truthIds": [
+      "me02-097"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1564",
+    "truthIds": [
+      "swsh7-51"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1565",
+    "truthIds": [
+      "svp-173"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1566",
+    "truthIds": [
+      "xyp-XY41"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1567",
+    "truthIds": [
+      "svp-167"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1568",
+    "truthIds": [
+      "base1-2"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1569",
+    "truthIds": [
+      "me03-089"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1570",
+    "truthIds": [
+      "me03-050"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1571",
+    "truthIds": [
+      "me03-031"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1572",
+    "truthIds": [
+      "me03-096"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1573",
+    "truthIds": [
+      "me03-019"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1574",
+    "truthIds": [
+      "me03-113"
+    ],
+    "condition": "top-sleeve"
+  },
+  {
+    "plate": "IMG_1575",
+    "truthIds": [
+      "me03-116"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1576",
+    "truthIds": [
+      "xyp-XY167"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1577",
+    "truthIds": [
+      "swsh7-49"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1578",
+    "truthIds": [
+      "sv08.5-023"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1579",
+    "truthIds": [
+      "me03-019"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1580",
+    "truthIds": [
+      "me03-026"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1581",
+    "truthIds": [
+      "me02-097"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1582",
+    "truthIds": [
+      "svp-173"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1583",
+    "truthIds": [
+      "xyp-XY41"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1584",
+    "truthIds": [
+      "svp-167"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1585",
+    "truthIds": [
+      "base1-2"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1586",
+    "truthIds": [
+      "me03-089"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1587",
+    "truthIds": [
+      "me03-050"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1588",
+    "truthIds": [
+      "me03-031"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1589",
+    "truthIds": [
+      "me03-096"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1590",
+    "truthIds": [
+      "me03-019"
+    ],
+    "condition": "sleeve"
+  },
+  {
+    "plate": "IMG_1591",
+    "truthIds": [
+      "me03-113"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1592",
+    "truthIds": [
+      "me03-090"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1593",
+    "truthIds": [
+      "me03-062"
+    ],
+    "condition": "perfect"
+  },
+  {
+    "plate": "IMG_1594",
+    "truthIds": [
+      "svp-167"
+    ],
+    "condition": "raw"
+  },
+  {
+    "plate": "IMG_1595",
+    "truthIds": [
+      "base1-2"
+    ],
+    "condition": "raw"
+  },
+  {
+    "plate": "IMG_1596",
+    "truthIds": [
+      "svp-173"
+    ],
+    "condition": "raw"
+  },
+  {
+    "plate": "IMG_1597",
+    "truthIds": [
+      "me02-097"
+    ],
+    "condition": "raw"
+  },
+  {
+    "plate": "IMG_1598",
+    "truthIds": [
+      "me03-019"
+    ],
+    "condition": "raw"
+  },
+  {
+    "plate": "IMG_1599",
+    "truthIds": [
+      "swsh7-49"
+    ],
+    "condition": "raw"
+  },
+  {
+    "plate": "IMG_1600",
+    "truthIds": [
+      "xyp-XY167"
+    ],
+    "condition": "raw"
+  }
+]

@@ -1,0 +1,24 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /catalog/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    // Mirrored card images — licensing requires these stay non-public.
+    // Read needs auth (+ App Check at the service level); writes are Admin SDK only.
+    match /card-images/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    // Offline scanner fingerprint pack. Read needs a signed-in user (+ App Check);
+    // writes are server-side only.
+    match /fingerprint/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
