@@ -24,8 +24,8 @@ describe("getSetHistory", () => {
     expect(url).toContain("set=Evolving+Skies");
     expect(url).toContain("fetchAllInSet=true");
     expect(url).toContain("includeHistory=true");
-    expect(url).toContain("days=180");
-    expect(url).toContain("maxDataPoints=26");
+    expect(url).toContain("days=730");
+    expect(url).toContain("maxDataPoints=104");
     expect(cards).toHaveLength(2);
     expect(cards[0]).toEqual({ tcgPlayerId: 246807, cardNumber: "215", name: "Umbreon VMAX",
       priceHistory: [{ date: "2026-01-05", price: 88 }] });

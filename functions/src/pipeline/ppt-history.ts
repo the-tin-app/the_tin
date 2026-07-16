@@ -73,7 +73,7 @@ function toRawPoints(priceHistory: unknown): { date: Date; price: number }[] {
 
 /**
  * Normalize PPT price history to weekly USD rows for the `price_history` table: dedup by exact
- * UTC date (latest price wins), then thin to >=6-day spacing (maxDataPoints=26 already yields
+ * UTC date (latest price wins), then thin to >=6-day spacing (maxDataPoints=104 over 730 days already yields
  * ~weekly server-side; this makes it deterministic). Ascending by date.
  */
 export function parseWeeklyHistory(priceHistory: unknown): WeeklyPoint[] {

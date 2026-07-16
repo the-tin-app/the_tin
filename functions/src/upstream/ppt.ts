@@ -222,7 +222,7 @@ export class PptClient {
    *  it no longer affects the reserved cost. */
   async getSetHistory(setName: string, cardCountHint: number): Promise<PptHistoryCard[]> {
     const params = new URLSearchParams({
-      set: setName, fetchAllInSet: "true", includeHistory: "true", days: "180", maxDataPoints: "26",
+      set: setName, fetchAllInSet: "true", includeHistory: "true", days: "730", maxDataPoints: "104",
     });
     void cardCountHint; // retained for caller compatibility/telemetry; not used for cost — see above
     const res = await this.request(`${BASE}/cards?${params}`, `history ${setName}`, HISTORY_REQUEST_MINUTE_COST);
@@ -242,7 +242,7 @@ export class PptClient {
   async getSetEnrichment(setName: string): Promise<PptEnrichmentCard[]> {
     const params = new URLSearchParams({
       set: setName, fetchAllInSet: "true", includeHistory: "true", includeEbay: "true",
-      days: "180", maxDataPoints: "26",
+      days: "730", maxDataPoints: "104",
     });
     const res = await this.request(`${BASE}/cards?${params}`, `enrich ${setName}`, HISTORY_REQUEST_MINUTE_COST);
     const body: any = await res.json();
