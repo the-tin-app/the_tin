@@ -30,6 +30,15 @@ collector-grade tracker where everything works, free, forever:
 - **Open source.** The app and its backend are AGPL-3.0 — inspect it, fork it,
   self-host it.
 
+## Status & roadmap
+
+The Tin is currently in beta on iOS via TestFlight — **we're looking for beta
+testers!** If you'd like to help shake out bugs before the 1.0 release,
+[open an issue](../../issues) introducing yourself and we'll get you an invite.
+
+Once version 1.0 ships on the iOS App Store, the next step is an Android
+translation of the app, released on Google Play.
+
 ## Features
 
 ### Collection
