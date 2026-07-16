@@ -29,3 +29,6 @@ ios/.claude/
 
 # local agent-tooling scratch
 .superpowers/
+
+# local working notes / handoffs (never published)
+docs/
