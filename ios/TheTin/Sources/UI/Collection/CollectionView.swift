@@ -97,13 +97,13 @@ final class CollectionModel {
         return GroupStats.entryValue(entry, price: prices[entry.cardId], variants: variants, conditions: conditions)
     }
 
-    func groupValue(_ groupId: String) -> (total: Double, pricedEntries: Int, totalEntries: Int) {
+    func groupValue(_ groupId: String) -> (total: Double, pricedCards: Int, totalCards: Int) {
         GroupStats.totalValue(entries: entries(in: groupId), prices: prices,
                               variantsByCard: variantsByCard, conditionsByCard: conditionsByCard)
     }
 
     /// The whole tin's value across every group and ungrouped card.
-    var tinValue: (total: Double, pricedEntries: Int, totalEntries: Int) {
+    var tinValue: (total: Double, pricedCards: Int, totalCards: Int) {
         GroupStats.totalValue(entries: entries, prices: prices,
                               variantsByCard: variantsByCard, conditionsByCard: conditionsByCard)
     }
@@ -536,7 +536,7 @@ struct CollectionView: View {
                 .controlSize(.small)
                 .padding(.top, 6)
             } else {
-                Text("\(model.entries.cardCount) cards in your tin · \(v.pricedEntries) of \(v.totalEntries) priced")
+                Text("\(v.totalCards) cards in your tin · \(v.pricedCards) of \(v.totalCards) priced")
                     .font(.footnote).foregroundStyle(.secondary)
                 if let asOf = model.priceAsOf {
                     AsOfLabel(date: asOf)
@@ -662,9 +662,7 @@ struct CollectionView: View {
                         card: try? store.card(id: entry.cardId),
                         entry: entry,
                         dividerName: dividerName(entry),
-                        value: GroupStats.entryValue(entry, price: model.prices[entry.cardId],
-                                                     variants: model.variantsByCard[entry.cardId] ?? [],
-                                                     conditions: model.conditionsByCard[entry.cardId] ?? []))
+                        value: model.entryValue(entry))
                 }
                 .swipeActions {
                     Button("Remove", role: .destructive) { deletingEntry = entry }

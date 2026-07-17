@@ -137,7 +137,7 @@ struct GroupDetailView: View {
             let value = group.map { model.groupValue($0.id) } ?? model.tinValue
             VStack(alignment: .leading, spacing: 4) {
                 Text(value.total, format: .currency(code: "USD")).font(.title2.bold()).monospacedDigit()
-                Text("Priced \(value.pricedEntries) of \(value.totalEntries) entries")
+                Text("Priced \(value.pricedCards) of \(value.totalCards) cards")
                     .font(.caption).foregroundStyle(.secondary)
                 if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
             }
@@ -177,9 +177,7 @@ struct GroupDetailView: View {
                 entry: entry,
                 dividerName: showDivider
                     ? model.groups.first(where: { $0.id == entry.groupId })?.name : nil,
-                value: GroupStats.entryValue(entry, price: model.prices[entry.cardId],
-                                             variants: model.variantsByCard[entry.cardId] ?? [],
-                                             conditions: model.conditionsByCard[entry.cardId] ?? []))
+                value: model.entryValue(entry))
         }
         .swipeActions {
             Button("Remove", role: .destructive) { deletingEntry = entry }

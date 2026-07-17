@@ -46,12 +46,13 @@ enum GroupStats {
 
     /// The aggregate total is a best-effort ESTIMATE (spec §5.2): every entry contributes its
     /// fallback-chain value, so the tin header agrees with the portfolio series (which scales the
-    /// same estimates). Only `pricedEntries` is gated on exactness — an entry can be estimated in
-    /// the total yet display as unpriced.
+    /// same estimates). Only `pricedCards` is gated on exactness — an entry can be estimated in
+    /// the total yet display as unpriced. Counts are PHYSICAL cards (Σ qty), matching `cardCount`,
+    /// so "27 cards · 26 of 27 priced" never mixes units.
     static func totalValue(entries: [CollectionEntry], prices: [String: PriceRecord],
                            variantsByCard: [String: [VariantPrice]] = [:],
                            conditionsByCard: [String: [ConditionPrice]] = [:])
-        -> (total: Double, pricedEntries: Int, totalEntries: Int) {
+        -> (total: Double, pricedCards: Int, totalCards: Int) {
         var total = 0.0
         var priced = 0
         for entry in entries {
@@ -61,10 +62,10 @@ enum GroupStats {
                                          variants: variants, conditions: conditions) else { continue }
             total += value
             if isPricedExactly(entry, price: prices[entry.cardId], variants: variants, conditions: conditions) {
-                priced += 1
+                priced += entry.qty
             }
         }
-        return (total, priced, entries.count)
+        return (total, priced, entries.cardCount)
     }
 
     static func sortedByValueDescending(entries: [CollectionEntry], prices: [String: PriceRecord],

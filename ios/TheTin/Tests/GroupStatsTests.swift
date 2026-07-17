@@ -85,9 +85,9 @@ final class GroupStatsTests: XCTestCase {
         let prices = ["base1-4": rayPrice]
         let entries = [entry("dmg", card: "base1-4", condition: "DMG"), entry("nm", card: "base1-4")]
         let result = GroupStats.totalValue(entries: entries, prices: prices, conditionsByCard: conditions)
-        XCTAssertEqual(result.pricedEntries, 1)   // only the NM entry is exactly priced
-        XCTAssertEqual(result.totalEntries, 2)
-        XCTAssertEqual(result.total, 185.0)       // both entries estimate at rawUsd 92.5
+        XCTAssertEqual(result.pricedCards, 1)   // only the NM entry is exactly priced
+        XCTAssertEqual(result.totalCards, 2)
+        XCTAssertEqual(result.total, 185.0)     // both entries estimate at rawUsd 92.5
     }
 
     func testRegularMatchesUnlimitedPrinting() {
@@ -105,8 +105,9 @@ final class GroupStatsTests: XCTestCase {
         let entries = [entry("e1", card: "swsh7-215", qty: 2), entry("e2", card: "swsh7-12")]
         let result = GroupStats.totalValue(entries: entries, prices: prices)
         XCTAssertEqual(result.total, 185.0)
-        XCTAssertEqual(result.pricedEntries, 1)
-        XCTAssertEqual(result.totalEntries, 2)
+        // Counts are physical cards (Σ qty): the priced entry has qty 2.
+        XCTAssertEqual(result.pricedCards, 2)
+        XCTAssertEqual(result.totalCards, 3)
     }
 
     func testCardCountSumsQuantities() {

@@ -29,8 +29,8 @@ final class InsuranceReportTests: XCTestCase {
         let t = InsuranceReport.totals(entries: entries, prices: prices,
                                        variantsByCard: [:], conditionsByCard: [:])
         XCTAssertEqual(t.totalValue, 1010 + 277.5)   // 2×505 psa10 + 3×92.5 raw
-        XCTAssertEqual(t.pricedEntries, 2)
-        XCTAssertEqual(t.totalEntries, 3)            // cover: "Valued: 2 of 3 entries"
+        XCTAssertEqual(t.pricedCards, 5)             // cover: "Valued: 5 of 6 cards" (2 psa10 + 3 raw)
+        XCTAssertEqual(t.totalEntries, 3)
         XCTAssertEqual(t.totalCards, 6)              // Σ qty
         XCTAssertEqual(t.costBasis, 405)             // pricePaid is the ENTRY TOTAL — plain sum
     }
