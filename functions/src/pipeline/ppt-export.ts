@@ -151,20 +151,20 @@ export function parsePopulationExport(csv: string): PopulationExportRow[] {
 
 // ---------- Ingest into an existing catalog DB (join by tcgplayer_id) ----------
 
+export const PSA_COLUMNS = ["psa1", "psa2", "psa3", "psa4", "psa5", "psa6", "psa7", "psa8", "psa9", "psa10"] as const;
+export type PsaColumn = (typeof PSA_COLUMNS)[number];
+
 /** `ebay.grade` string → our psa column. Real dumps use lowercase "psa10"/"psa8"/"cgc6"; the
- *  regex tolerates spaced/upper forms too. Only PSA 3/7/9/10 have columns in price_latest —
- *  everything else (psa8, psa9.5, BGS/CGC/SGC) is ignored here (still available in the raw dump). */
-export function ebayGradeToPsaColumn(grade: string): "psa3" | "psa7" | "psa9" | "psa10" | null {
-  const m = grade.match(/(\d+(?:\.\d+)?)/);
+ *  regex tolerates spaced/upper forms too. Every integer PSA grade 1-10 has a column in
+ *  price_latest; half grades and other graders (BGS/CGC/SGC) are ignored here — they still
+ *  land in graded_history via the REST path. */
+export function ebayGradeToPsaColumn(grade: string): PsaColumn | null {
+  const m = grade.match(/(\d+(?:[._]\d+)?)/);
   if (!m) return null;
   if (!/psa/i.test(grade) && !/^\s*\d/.test(grade)) return null; // require PSA or a bare number
-  switch (m[1]) {
-    case "10": return "psa10";
-    case "9": return "psa9";
-    case "7": return "psa7";
-    case "3": return "psa3";
-    default: return null; // psa8/9.5/etc. have no column
-  }
+  const n = Number(m[1].replace("_", "."));
+  if (!Number.isInteger(n) || n < 1 || n > 10) return null; // half grades / out-of-range
+  return `psa${n}` as PsaColumn;
 }
 
 export interface ExportInputs {
@@ -205,11 +205,10 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
 
   const upRaw = db.prepare(`INSERT INTO price_latest(card_id, raw_usd, as_of) VALUES (@id,@raw,@as_of)
     ON CONFLICT(card_id) DO UPDATE SET raw_usd=@raw, as_of=@as_of`);
-  const upGraded = db.prepare(`INSERT INTO price_latest(card_id, psa3, psa7, psa9, psa10, as_of)
-    VALUES (@id,@psa3,@psa7,@psa9,@psa10,@as_of)
+  const upGraded = db.prepare(`INSERT INTO price_latest(card_id, ${PSA_COLUMNS.join(", ")}, as_of)
+    VALUES (@id,${PSA_COLUMNS.map((c) => `@${c}`).join(",")},@as_of)
     ON CONFLICT(card_id) DO UPDATE SET
-      psa3=COALESCE(@psa3,psa3), psa7=COALESCE(@psa7,psa7),
-      psa9=COALESCE(@psa9,psa9), psa10=COALESCE(@psa10,psa10), as_of=@as_of`);
+      ${PSA_COLUMNS.map((c) => `${c}=COALESCE(@${c},${c})`).join(", ")}, as_of=@as_of`);
   const upSealed = db.prepare(`INSERT OR REPLACE INTO
     sealed_product(tcgplayer_id, name, set_id, product_type, market_usd, low_usd, as_of)
     VALUES (@tcg,@name,@set,@type,@market,@low,@as_of)`);
@@ -226,7 +225,9 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
     }
 
     // Collapse ebay rows (one per grade) into one psa* update per card.
-    const psaByCard = new Map<string, { psa3: number | null; psa7: number | null; psa9: number | null; psa10: number | null }>();
+    const emptyPsa = (): Record<PsaColumn, number | null> =>
+      Object.fromEntries(PSA_COLUMNS.map((c) => [c, null])) as Record<PsaColumn, number | null>;
+    const psaByCard = new Map<string, Record<PsaColumn, number | null>>();
     for (const e of inputs.ebay ?? []) {
       const id = idByTcg.get(e.tcgPlayerId);
       if (!id) { stats.unmatched++; continue; }
@@ -235,12 +236,12 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
       // medianPrice is the headline: smartMarketPrice can diverge ~2x from real sales (probed).
       const price = e.medianPrice ?? e.smartMarketPrice ?? e.averagePrice;
       if (price == null) continue;
-      const cur = psaByCard.get(id) ?? { psa3: null, psa7: null, psa9: null, psa10: null };
+      const cur = psaByCard.get(id) ?? emptyPsa();
       cur[col] = price;
       psaByCard.set(id, cur);
     }
     for (const [id, g] of psaByCard) {
-      upGraded.run({ id, psa3: g.psa3, psa7: g.psa7, psa9: g.psa9, psa10: g.psa10, as_of: inputs.asOf });
+      upGraded.run({ id, ...g, as_of: inputs.asOf });
       stats.gradedRows++;
     }
 
