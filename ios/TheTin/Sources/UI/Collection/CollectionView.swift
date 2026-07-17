@@ -59,9 +59,22 @@ final class CollectionModel {
     }
     private(set) var catalogGeneration = 0
 
+    /// True when the catalog store can't be read (corrupt/missing DB) — the single honest
+    /// signal for the ~26 silently-degrading `try?` catalog reads across collection views:
+    /// every read funnels through the same store, so if prices fail here, names fail there.
+    private(set) var catalogUnavailable = false
+
     private func reloadPrices() {
         let ids = Array(Set(entries.map(\.cardId)))
-        prices = (try? store.prices(cardIds: ids)) ?? [:]
+        // The base price read is the health signal; variant/condition reads may legitimately
+        // come up empty on minimal catalogs and still degrade per-call.
+        do {
+            prices = try store.prices(cardIds: ids)
+            catalogUnavailable = false
+        } catch {
+            prices = [:]
+            catalogUnavailable = true
+        }
         variantsByCard = (try? store.variantPrices(cardIds: ids)) ?? [:]
         conditionsByCard = (try? store.conditionPrices(cardIds: ids)) ?? [:]
     }
@@ -349,6 +362,7 @@ struct CollectionView: View {
     var body: some View {
         List {
             if searchText.isEmpty {
+                if model.catalogUnavailable { catalogNotice.tinRow() }
                 header.tinRow()
                 everythingRow.tinRow()
                 ForEach(model.groups) { group in
@@ -597,6 +611,21 @@ struct CollectionView: View {
             if out.count == Self.riffleLimit { break }
         }
         return out
+    }
+
+    /// Honest degraded state when the catalog store can't be read: without it, names fall
+    /// back to raw card ids and prices just vanish, which reads as data loss. Same visual
+    /// pattern as PortfolioView's history notice.
+    private var catalogNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Couldn't read the card catalog", systemImage: "exclamationmark.triangle")
+                .font(.subheadline.weight(.medium))
+            Text("Card names and prices can't be shown right now — your collection itself is safe. Restart the app, or re-download the catalog in Settings.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var newDividerRow: some View {
