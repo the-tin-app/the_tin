@@ -168,14 +168,6 @@ final class CollectionModel {
         }
     }
 
-    func sortedEntries(in groupId: String, byValue: Bool) -> [CollectionEntry] {
-        let list = entries(in: groupId)
-        return byValue ? GroupStats.sortedByValueDescending(entries: list, prices: prices,
-                                                            variantsByCard: variantsByCard,
-                                                            conditionsByCard: conditionsByCard)
-                       : list.sorted { $0.addedAt > $1.addedAt }
-    }
-
     /// Set when a collection write fails (disk full, etc.); MainTabView presents it as an
     /// alert wherever the user is. The repository rolls failed writes back, so "wasn't saved"
     /// is literally what the UI now shows.
@@ -339,9 +331,10 @@ struct CollectionView: View {
     let store: CatalogStore
     var wants: WantsModel? = nil
     var onGetStarted: ((GetStartedTab) -> Void)? = nil
-    /// Pushes a divider's list view (nil = the whole tin). VoiceOver's custom-action mirror
-    /// of the context menu's "Open as list" — actions can't tap the invisible NavigationLinks.
-    var openAsList: ((String?) -> Void)? = nil
+    /// Pushes a stack's flip-through deck (nil = the whole tin). VoiceOver's custom-action
+    /// mirror of the context menu's "Flip through cards" — actions can't tap the invisible
+    /// NavigationLinks. (Row activation itself opens the list-first landing.)
+    var openPager: ((String?) -> Void)? = nil
     @State private var newGroupName = ""
     @State private var showingNewGroup = false
     @State private var renamingGroupId: String?
@@ -465,7 +458,7 @@ struct CollectionView: View {
             Button("Cancel", role: .cancel) {}
         }
         .navigationDestination(for: TinPagerRoute.self) { route in
-            GroupPagerView(model: model, store: store, groupId: route.groupId, onGetStarted: onGetStarted)
+            GroupPagerView(model: model, store: store, groupId: route.groupId)
         }
         .navigationDestination(for: PortfolioRoute.self) { route in
             PortfolioView(model: model, groupId: route.groupId)
@@ -551,11 +544,13 @@ struct CollectionView: View {
         return TinRiffleRow(name: "Everything", color: DividerPalette.steel,
                             cards: riffleCards(entries), count: entries.cardCount,
                             value: model.tinValue.total)
-            .background(navLink(TinPagerRoute(groupId: nil)))
+            .background(navLink(TinAllCardsRoute()))
             .contextMenu {
-                NavigationLink(value: TinAllCardsRoute()) { Label("Open as list", systemImage: "list.bullet") }
+                NavigationLink(value: TinPagerRoute(groupId: nil)) {
+                    Label("Flip through cards", systemImage: "rectangle.stack")
+                }
             }
-            .accessibilityAction(named: "Open as list") { openAsList?(nil) }
+            .accessibilityAction(named: "Flip through cards") { openPager?(nil) }
     }
 
     private func groupRow(_ group: CardGroup) -> some View {
@@ -563,11 +558,13 @@ struct CollectionView: View {
         return TinRiffleRow(name: group.name, color: DividerPalette.color(for: group.id),
                             cards: riffleCards(entries), count: entries.cardCount,
                             value: model.groupValue(group.id).total)
-            .background(navLink(TinPagerRoute(groupId: group.id)))
+            .background(navLink(group.id))
             .contextMenu {
                 Button { renameGroupName = group.name; renamingGroupId = group.id }
                     label: { Label("Rename", systemImage: "pencil") }
-                NavigationLink(value: group.id) { Label("Open as list", systemImage: "list.bullet") }
+                NavigationLink(value: TinPagerRoute(groupId: group.id)) {
+                    Label("Flip through cards", systemImage: "rectangle.stack")
+                }
                 Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
                     label: { Label("Print sheet…", systemImage: "printer") }
                     .disabled(model.entries(in: group.id).isEmpty)
@@ -587,7 +584,7 @@ struct CollectionView: View {
             .accessibilityAction(named: "Rename") {
                 renameGroupName = group.name; renamingGroupId = group.id
             }
-            .accessibilityAction(named: "Open as list") { openAsList?(group.id) }
+            .accessibilityAction(named: "Flip through cards") { openPager?(group.id) }
             .accessibilityAction(named: "Print sheet") {
                 if !entries.isEmpty {
                     printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store)

@@ -81,9 +81,7 @@ private struct MainTabView: View {
             NavigationStack(path: $tinPath) {
                 CollectionView(model: collection, store: store, wants: wants,
                                onGetStarted: { selection = $0 == .scan ? .scan : .browse },
-                               openAsList: { id in
-                                   if let id { tinPath.append(id) } else { tinPath.append(TinAllCardsRoute()) }
-                               })
+                               openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) })
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { showingSettings = true } label: {
