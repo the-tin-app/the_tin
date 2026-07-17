@@ -14,7 +14,7 @@ const cards: TcgdexCard[] = [
   { id: "swsh7-1", localId: "1", name: "Lotad", hp: 70, types: ["Water"], rarity: "Common", artist: "x", text: "Rain Splash\nAqua Wave\nFlip a coin.", imageBase: "https://x/1", rawUsd: null, rawEur: null }
 ];
 const prices = new Map<string, PptPrice>([
-  ["swsh7-215", { tcgPlayerId: 246807, setName: "Evolving Skies", cardNumber: "215", name: "Rayquaza VMAX", raw: 92.5, graded: { psa9: 180, psa10: 505 } }]
+  ["swsh7-215", { tcgPlayerId: 246807, setName: "Evolving Skies", cardNumber: "215", name: "Rayquaza VMAX", raw: 92.5, graded: { psa8: 42, psa9: 180, psa10: 505 } }]
 ]);
 const scenes = [
   { sceneId: "es-ray", title: "Rayquaza sky", cardIds: ["swsh7-215", "swsh7-94"] },
@@ -35,6 +35,8 @@ describe("buildCatalog", () => {
     expect(ray.raw_usd).toBe(92.5);
     expect(ray.raw_eur).toBe(85.0);
     expect(ray.psa10).toBe(505);
+    expect(ray.psa8).toBe(42);   // every integer PSA grade ships, not just 3/7/9/10
+    expect(ray.psa7).toBeNull();
     expect(ray.as_of).toBe("2026-07-04");
     expect(db.prepare("SELECT COUNT(*) n FROM connected_art WHERE scene_id='es-ray'").get()).toEqual({ n: 2 });
   });
