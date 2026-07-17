@@ -277,26 +277,36 @@ struct CollectionView: View {
     @State private var printRequest: PrintSheetRequest?
     @State private var showingReport = false
     @State private var deletingGroup: CardGroup?
+    @State private var searchText = ""
+    @State private var editingEntry: CollectionEntry?
+    /// cardId → name for search filtering (reference type: filled during body evaluation).
+    private final class NameCache { var names: [String: String] = [:] }
+    @State private var nameCache = NameCache()
 
     /// How many cards a riffle row spreads before collapsing into "+N".
     private static let riffleLimit = 7
 
     var body: some View {
         List {
-            header.tinRow()
-            everythingRow.tinRow()
-            ForEach(model.groups) { group in
-                groupRow(group).tinRow()
+            if searchText.isEmpty {
+                header.tinRow()
+                everythingRow.tinRow()
+                ForEach(model.groups) { group in
+                    groupRow(group).tinRow()
+                }
+                .onMove { from, to in
+                    var ids = model.groups.map(\.id)
+                    ids.move(fromOffsets: from, toOffset: to)
+                    Task { await model.reorderGroups(ids: ids) }
+                }
+                newDividerRow.tinRow()
+                if let wants { wishlistLink(wants).tinRow() }
+            } else {
+                searchResults
             }
-            .onMove { from, to in
-                var ids = model.groups.map(\.id)
-                ids.move(fromOffsets: from, toOffset: to)
-                Task { await model.reorderGroups(ids: ids) }
-            }
-            newDividerRow.tinRow()
-            if let wants { wishlistLink(wants).tinRow() }
         }
         .listStyle(.plain)
+        .searchable(text: $searchText, prompt: "Search your tin")
         .environment(\.editMode, $editMode)
         .printSheetFlow($printRequest)
         .collectionReportFlow(isActive: $showingReport, collection: model, store: store)
@@ -381,7 +391,16 @@ struct CollectionView: View {
             if let wants { WantedCardsView(store: store, wants: wants, collection: model) }
         }
         .navigationDestination(for: TinAllCardsRoute.self) { _ in
-            TinAllCardsView(model: model, store: store)
+            GroupDetailView(model: model, group: nil, store: store)
+        }
+        .sheet(item: $editingEntry) { entry in
+            if let card = try? store.card(id: entry.cardId) {
+                NavigationStack {
+                    EntryFormView(card: card, groups: model.groups, existing: entry) { updated in
+                        await model.saveEntry(updated)
+                    }
+                }
+            }
         }
         .navigationDestination(for: CardID.self) { cardID in
             if let card = try? store.card(id: cardID.raw) {
@@ -469,6 +488,46 @@ struct CollectionView: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+
+    /// Whole-collection search: "do I own this?" answered from the Tin root. Rows carry the
+    /// divider the copy lives behind; tap opens the entry editor.
+    @ViewBuilder private var searchResults: some View {
+        let matches = model.entries
+            .filter { cardName($0).localizedCaseInsensitiveContains(searchText) }
+            .sorted { $0.addedAt > $1.addedAt }
+        if matches.isEmpty {
+            ContentUnavailableView {
+                Label("No cards named “\(searchText)” in your tin", systemImage: "magnifyingglass")
+            } description: {
+                Text("This only searches cards you own — the Search tab covers the whole catalog.")
+            }
+        } else {
+            ForEach(matches) { entry in
+                Button { editingEntry = entry } label: {
+                    CollectionEntryRow(
+                        card: try? store.card(id: entry.cardId),
+                        entry: entry,
+                        dividerName: dividerName(entry),
+                        value: GroupStats.entryValue(entry, price: model.prices[entry.cardId],
+                                                     variants: model.variantsByCard[entry.cardId] ?? [],
+                                                     conditions: model.conditionsByCard[entry.cardId] ?? []))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func dividerName(_ entry: CollectionEntry) -> String {
+        entry.groupId.isEmpty ? "Unfiled"
+            : (model.groups.first { $0.id == entry.groupId }?.name ?? "Unfiled")
+    }
+
+    private func cardName(_ entry: CollectionEntry) -> String {
+        if let cached = nameCache.names[entry.cardId] { return cached }
+        let name = (try? store.card(id: entry.cardId))?.name ?? entry.cardId
+        nameCache.names[entry.cardId] = name
+        return name
     }
 
     private func wishlistLink(_ wants: WantsModel) -> some View {
