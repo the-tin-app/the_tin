@@ -89,6 +89,14 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: TheTin/TheTin-Bridging-Header.h
         CLANG_CXX_LANGUAGE_STANDARD: "c++17"
         CLANG_CXX_LIBRARY: "libc++"
+      configs:
+        # Release archives sign manually: xcodebuild cloud signing (-allowProvisioningUpdates)
+        # auth-fails on this machine, so profiles are created via the ASC API and installed
+        # locally (see docs/HANDOFF.md). Debug stays automatic for run-on-device.
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "The Tin App Store"
   TheTinTests:
     type: bundle.unit-test
     platform: iOS
@@ -122,6 +130,11 @@ targets:
         CODE_SIGN_ENTITLEMENTS: TheTinWidgets/TheTinWidgets.entitlements
         DEVELOPMENT_TEAM: GXP2X83CRN
         SKIP_INSTALL: YES
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "The Tin Widgets App Store"
 schemes:
   TheTin:
     build:
