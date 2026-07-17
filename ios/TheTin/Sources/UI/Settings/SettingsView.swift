@@ -256,15 +256,24 @@ struct SettingsView: View {
 
     // MARK: CSV export / import
 
-    private func makeExportDocument() -> CSVDocument? {
+    /// Snapshot the main-actor model state, then build the CSV off the main actor —
+    /// mirrors `runImport`, so a 20k-entry export can't freeze the UI either.
+    private func makeExportDocument() async -> CSVDocument? {
         guard let collection = app.collection, let store = app.store else { return nil }
-        let ids = Array(Set(collection.entries.map(\.cardId)))
-        let cards = Dictionary(uniqueKeysWithValues: ((try? store.cards(ids: ids)) ?? []).map { ($0.id, $0) })
-        let sets = Dictionary(uniqueKeysWithValues: ((try? store.sets()) ?? []).map { ($0.id, $0) })
-        return CSVDocument(data: CollectionCSV.export(
-            entries: collection.entries, groups: collection.groups, cards: cards, sets: sets,
-            prices: collection.prices, variantsByCard: collection.variantsByCard,
-            conditionsByCard: collection.conditionsByCard))
+        let entries = collection.entries
+        let groups = collection.groups
+        let prices = collection.prices
+        let variantsByCard = collection.variantsByCard
+        let conditionsByCard = collection.conditionsByCard
+        return await Task.detached {
+            let ids = Array(Set(entries.map(\.cardId)))
+            let cards = Dictionary(uniqueKeysWithValues: ((try? store.cards(ids: ids)) ?? []).map { ($0.id, $0) })
+            let sets = Dictionary(uniqueKeysWithValues: ((try? store.sets()) ?? []).map { ($0.id, $0) })
+            return CSVDocument(data: CollectionCSV.export(
+                entries: entries, groups: groups, cards: cards, sets: sets,
+                prices: prices, variantsByCard: variantsByCard,
+                conditionsByCard: conditionsByCard))
+        }.value
     }
 
     private func runImport(_ picked: Result<URL, Error>) async {
@@ -333,7 +342,7 @@ struct SettingsView: View {
             Button("Collection report (PDF)") { showingReport = true }
                 .disabled(app.collection?.entries.isEmpty ?? true)
             Button {
-                exportDoc = makeExportDocument()
+                Task { exportDoc = await makeExportDocument() }
             } label: {
                 Label("Export collection (CSV)", systemImage: "square.and.arrow.up")
             }
