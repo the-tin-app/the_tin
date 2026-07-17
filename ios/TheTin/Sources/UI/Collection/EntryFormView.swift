@@ -53,13 +53,17 @@ struct EntryFormView: View {
                 }
                 Stepper("Quantity: \(qty)", value: $qty, in: 1...999)
                 Picker("Printing", selection: $variant) {
-                    ForEach(CardVariant.allCases) { Text(variantLabel($0)).tag($0) }
+                    ForEach(Self.validVariants(catalog: variants, current: existing?.variantValue)) {
+                        Text(variantLabel($0)).tag($0)
+                    }
                 }
                 // A graded card's condition IS its grade — the raw-condition picker only
                 // applies (and only shows) when the copy is raw.
                 if grade == nil {
                     Picker("Condition", selection: $condition) {
-                        ForEach(CardCondition.allCases) { Text(conditionLabel($0)).tag($0) }
+                        ForEach(Self.validConditions(catalog: conditions, current: existing?.conditionValue)) {
+                            Text(conditionLabel($0)).tag($0)
+                        }
                     }
                 }
                 Picker("Grade", selection: $grade) {
@@ -107,6 +111,25 @@ struct EntryFormView: View {
         .onAppear(perform: populate)
     }
 
+    /// Printings the picker offers: only the finishes the catalog's `price_by_variant` actually
+    /// names for this card — a card never sold as 1st Edition shouldn't offer it. The saved
+    /// entry's finish is always kept so editing never silently rewrites what the user recorded.
+    /// No variant rows at all ⇒ the full list (no data ≠ doesn't exist; minimal tiers).
+    static func validVariants(catalog: [VariantPrice], current: CardVariant?) -> [CardVariant] {
+        let backed = CardVariant.allCases.filter { v in catalog.contains { v.matches(printing: $0.printing) } }
+        guard !backed.isEmpty else { return CardVariant.allCases }
+        return CardVariant.allCases.filter { backed.contains($0) || $0 == current }
+    }
+
+    /// Same rule for conditions over `price_by_condition` rows; NM is always offered (it's the
+    /// baseline every raw price implies). Empty condition data ⇒ the full list.
+    static func validConditions(catalog: [ConditionPrice], current: CardCondition?) -> [CardCondition] {
+        guard !catalog.isEmpty else { return CardCondition.allCases }
+        return CardCondition.allCases.filter { c in
+            c == .nm || c == current || catalog.contains { $0.condition == c.catalog }
+        }
+    }
+
     /// "Reverse Holo · $140" when that printing is priced, else just the finish name.
     private func variantLabel(_ v: CardVariant) -> String {
         if let usd = v.price(in: variants) {
@@ -140,6 +163,10 @@ struct EntryFormView: View {
             // divider is a choice, never a requirement.
             groupId = ""
             variant = .defaultFor(rarity: card.rarity)
+            // The rarity heuristic can suggest a finish this card was never sold in — clamp
+            // to the offered list so the picker never starts on a hidden option.
+            let offered = Self.validVariants(catalog: variants, current: nil)
+            if !offered.contains(variant) { variant = offered.first ?? .regular }
         }
         baseline = snapshot
     }
