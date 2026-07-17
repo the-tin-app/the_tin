@@ -269,9 +269,13 @@ enum DividerPalette {
 /// divider, its cards spread newest-first behind a colored index tab. Tap a row to flip through
 /// it; long-press for rename/delete/list; the reorder toolbar button turns on drag handles.
 struct CollectionView: View {
+    /// Where the empty-tin call-to-action routes; the host (MainTabView) switches tabs.
+    enum GetStartedTab { case scan, browse }
+
     @Bindable var model: CollectionModel
     let store: CatalogStore
     var wants: WantsModel? = nil
+    var onGetStarted: ((GetStartedTab) -> Void)? = nil
     @State private var newGroupName = ""
     @State private var showingNewGroup = false
     @State private var renamingGroupId: String?
@@ -415,23 +419,43 @@ struct CollectionView: View {
 
     private var header: some View {
         let v = model.tinValue
+        let isEmpty = model.entries.isEmpty
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
                 Text(v.total, format: WidgetShared.tinCurrency(v.total))
                     .font(.system(.largeTitle, design: .rounded).weight(.bold))
                     .monospacedDigit()
                     .contentTransition(.numericText())
-                Image(systemName: "chevron.right")
-                    .font(.body.weight(.semibold)).foregroundStyle(.tertiary)
+                // An empty tin's "$0 ›" led to a screen that just said "add cards" —
+                // no chevron, no route until there's a portfolio to show.
+                if !isEmpty {
+                    Image(systemName: "chevron.right")
+                        .font(.body.weight(.semibold)).foregroundStyle(.tertiary)
+                }
             }
-            .background(navLink(PortfolioRoute()))
-            .accessibilityLabel("Portfolio value history")
-            Text(model.entries.isEmpty
-                 ? "Your tin is empty — scan a card or browse a set to add your first."
-                 : "\(model.entries.cardCount) cards in your tin · \(v.pricedEntries) of \(v.totalEntries) priced")
-                .font(.footnote).foregroundStyle(.secondary)
-            if !model.entries.isEmpty, let asOf = model.priceAsOf {
-                AsOfLabel(date: asOf)
+            .background { if !isEmpty { navLink(PortfolioRoute()) } }
+            .accessibilityLabel(isEmpty ? "Tin value" : "Portfolio value history")
+            if isEmpty {
+                Text("Your tin is empty — add your first card.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Button { onGetStarted?(.scan) } label: {
+                        Label("Scan a card", systemImage: "camera.viewfinder")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button { onGetStarted?(.browse) } label: {
+                        Label("Browse sets", systemImage: "square.grid.2x2")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .controlSize(.small)
+                .padding(.top, 6)
+            } else {
+                Text("\(model.entries.cardCount) cards in your tin · \(v.pricedEntries) of \(v.totalEntries) priced")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if let asOf = model.priceAsOf {
+                    AsOfLabel(date: asOf)
+                }
             }
         }
         .padding(.bottom, 6)
@@ -463,6 +487,14 @@ struct CollectionView: View {
                     .disabled(model.entries(in: group.id).isEmpty)
                 Button(role: .destructive) { deletingGroup = group }
                     label: { Label("Delete divider", systemImage: "trash") }
+            }
+            // The context menu is invisible until long-pressed; swipe actions are the
+            // discoverable path to the same Rename/Delete (delete still confirms).
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) { deletingGroup = group }
+                    label: { Label("Delete", systemImage: "trash") }
+                Button { renameGroupName = group.name; renamingGroupId = group.id }
+                    label: { Label("Rename", systemImage: "pencil") }
             }
     }
 
