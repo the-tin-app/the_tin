@@ -72,7 +72,7 @@ kitsch.
 - Stock HIG structure everywhere; custom drawing reserved for the tin glyph
 - Semantic system colors and system blue tint; brand palette confined to brand moments
 - Dynamic Type only — no hard-coded body sizes; dense caption-level data presentation
-- Flat surfaces; depth via system materials, never shadows
+- Flat chrome; depth via system materials — only card art, as a physical object, casts shadows
 - Dark Mode and Reduce Motion are first-class, not afterthoughts
 
 ## 2. Colors
@@ -119,11 +119,14 @@ neutral — never compete with a holo.
 
 **Display Font:** SF Pro Display (system)
 **Body Font:** SF Pro Text (system)
+**Accent Font:** New York (system serif), italic — the "penned label" voice
 **Numeric style:** monospaced digits for every price, count, and percentage
 
-**Character:** Pure San Francisco through Dynamic Type text styles — no custom faces,
+**Character:** San Francisco through Dynamic Type text styles — no third-party faces,
 no hard-coded sizes. Hierarchy comes from weight (semibold emphasis) and the secondary/
-tertiary color axis rather than from size jumps.
+tertiary color axis rather than from size jumps. One sanctioned accent: New York serif
+italic as the handwritten-index-card voice, used only where the tin metaphor is physical
+(divider tab labels, the pager's title plaque) — never in controls, data, or body text.
 
 ### Hierarchy
 - **Display** (bold, Large Title 34pt): top-level screen titles, collapsing to inline
@@ -142,17 +145,23 @@ is stated quietly, never dramatized.
 **The Dynamic Type Rule.** System text styles only. A hard-coded point size on text is
 a defect except in fixed-canvas contexts (print/PDF report pages, the drawn tin glyph).
 
+**The Penned Label Rule.** New York serif italic is the one sanctioned accent face —
+the handwritten index-card voice, used only where the tin metaphor is physical (divider
+tabs, the pager title plaque). Never in controls, data, or body text.
+
 ## 4. Elevation
 
-Flat by doctrine. Surfaces do not cast shadows; depth is conveyed by system materials —
+Flat by doctrine. Chrome does not cast shadows; depth is conveyed by system materials —
 `.thinMaterial` for persistent overlays (funding bar, staging surfaces),
 `.ultraThinMaterial` for floating badges over card art — and by system background
 layering (systemBackground vs. secondarySystemBackground). Sheets and navigation get
 their depth from UIKit's own transitions.
 
 ### Named Rules
-**The Flat Tin Rule.** No `.shadow()` modifiers. If a layer needs separation, it earns
-a system material or a background-level shift, nothing else.
+**The Flat Tin Rule.** No `.shadow()` on chrome. Card art is the one exception: a card
+is a physical object held above the surface, and may cast a soft contact shadow
+(riffle spreads, the pager's hero art). Buttons, bars, tiles, and text never do — if a
+chrome layer needs separation, it earns a system material or a background-level shift.
 
 ## 5. Components
 
@@ -223,5 +232,6 @@ donation unlocks anything.
   web-shaped buttons, or reinvented system controls.
 - **Don't** touch *kiddie Pokémon kitsch*: no Pikachu-yellow, cartoon fonts, or IP
   cosplay. The cards supply the Pokémon; the app supplies the tin.
-- **Don't** add shadows (The Flat Tin Rule), hard-code text sizes (The Dynamic Type
-  Rule), or invent a second theatrical animation beyond the tin loading loop.
+- **Don't** add shadows to chrome (The Flat Tin Rule — card art may cast them),
+  hard-code text sizes (The Dynamic Type Rule), or invent a second theatrical animation
+  beyond the tin loading loop.

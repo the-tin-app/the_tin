@@ -78,7 +78,8 @@
       { "name": "The Treasure Rule", "body": "Card art is the color of the app. Around imagery, chrome goes neutral — never compete with a holo.", "section": "colors" },
       { "name": "The Caption Ledger Rule", "body": "Collection data runs dense and small: caption-level type, secondary color, monospaced digits, always with provenance ('as of [date]'). Precision is stated quietly, never dramatized.", "section": "typography" },
       { "name": "The Dynamic Type Rule", "body": "System text styles only. A hard-coded point size on text is a defect except in fixed-canvas contexts (print/PDF report pages, the drawn tin glyph).", "section": "typography" },
-      { "name": "The Flat Tin Rule", "body": "No .shadow() modifiers. If a layer needs separation, it earns a system material or a background-level shift, nothing else.", "section": "elevation" }
+      { "name": "The Penned Label Rule", "body": "New York serif italic is the one sanctioned accent face — the handwritten index-card voice, used only where the tin metaphor is physical (divider tabs, the pager title plaque). Never in controls, data, or body text.", "section": "typography" },
+      { "name": "The Flat Tin Rule", "body": "No .shadow() on chrome. Card art is the one exception: a card is a physical object held above the surface and may cast a soft contact shadow. If a chrome layer needs separation, it earns a system material or a background-level shift.", "section": "elevation" }
     ],
     "dos": [
       "Do use semantic system colors and system controls everywhere; the chrome is the tin — plain, sturdy, adaptive.",

@@ -9,7 +9,9 @@ struct EntryFormView: View {
     var variants: [VariantPrice] = []   // per-printing prices, for the inline picker labels
     var conditions: [ConditionPrice] = []   // per-condition prices, for the inline picker labels
     var onCreateGroup: ((String) async -> String)? = nil
-    let onSave: (CollectionEntry) -> Void
+    /// Returns whether the entry was actually persisted; the form only dismisses on true, so a
+    /// failed write never silently discards what the user typed.
+    let onSave: (CollectionEntry) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
     @FocusState private var amountFieldFocused: Bool
@@ -24,6 +26,17 @@ struct EntryFormView: View {
     @State private var hasAcquiredDate = false
     @State private var acquiredAt = Date()
     @State private var acquiredFrom = ""
+    /// Snapshot of the fields as populated, so Cancel/swipe-down can tell typed-then-abandoned
+    /// from untouched (only dirty forms earn a discard confirmation).
+    @State private var baseline: [String] = []
+    @State private var confirmingDiscard = false
+
+    private var snapshot: [String] {
+        [groupId, newGroupName, String(qty), condition.rawValue, variant.rawValue,
+         grade.map(String.init(describing:)) ?? "", pricePaidText, gradingFeeText,
+         hasAcquiredDate ? acquiredAt.description : "", acquiredFrom]
+    }
+    private var isDirty: Bool { snapshot != baseline }
 
     var body: some View {
         Form {
@@ -69,12 +82,20 @@ struct EntryFormView: View {
                                              : groupId.isEmpty)
             }
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") {
+                    if isDirty { confirmingDiscard = true } else { dismiss() }
+                }
             }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { amountFieldFocused = false }
             }
+        }
+        .interactiveDismissDisabled(isDirty)
+        .confirmationDialog("Discard what you've entered?", isPresented: $confirmingDiscard,
+                            titleVisibility: .visible) {
+            Button("Discard", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) {}
         }
         .onAppear(perform: populate)
     }
@@ -111,6 +132,7 @@ struct EntryFormView: View {
             groupId = groups.first?.id ?? ""
             variant = .defaultFor(rarity: card.rarity)
         }
+        baseline = snapshot
     }
 
     private func save() {
@@ -119,6 +141,9 @@ struct EntryFormView: View {
             if resolvedGroupId.isEmpty, let onCreateGroup {
                 resolvedGroupId = await onCreateGroup(
                     newGroupName.trimmingCharacters(in: .whitespaces))
+                // Group creation failed (already alerted); keep the form open so nothing typed
+                // is lost and Save can be retried.
+                guard !resolvedGroupId.isEmpty else { return }
             }
             let entry = CollectionEntry(
                 id: existing?.id ?? UUID().uuidString,
@@ -133,8 +158,7 @@ struct EntryFormView: View {
                 acquiredFrom: acquiredFrom.isEmpty ? nil : acquiredFrom,
                 addedAt: existing?.addedAt ?? Date(),
                 variant: variant.rawValue)
-            onSave(entry)
-            dismiss()
+            if await onSave(entry) { dismiss() }
         }
     }
 }

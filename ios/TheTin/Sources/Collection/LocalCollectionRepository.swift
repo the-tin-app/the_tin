@@ -12,9 +12,11 @@ struct CollectionPaths {
 /// `FirestoreCollectionRepository` per the local-only decision — routing/committing a card
 /// never leaves the device and needs no auth. Mirrors `InMemoryCollectionRepository`'s
 /// stream/notify contract exactly, persisting the whole set to one atomic JSON file (same
-/// pattern as `ScanStagingStore`/`CatalogUpdater`). Read/write failures degrade to in-memory
-/// (never crash). NOTE: existing cloud entries do not migrate, and server-side jobs that read
-/// `users/{uid}/entries` receive nothing while the collection is local.
+/// pattern as `ScanStagingStore`/`CatalogUpdater`). Read failures degrade to in-memory (never
+/// crash); a write failure rolls the mutation back and throws, so in-memory state never shows
+/// data that wouldn't survive a relaunch. NOTE: existing cloud entries do not migrate, and
+/// server-side jobs that read `users/{uid}/entries` receive nothing while the collection is
+/// local.
 @MainActor
 final class LocalCollectionRepository: CollectionRepository {
     private struct Snapshot: Codable {
@@ -35,12 +37,19 @@ final class LocalCollectionRepository: CollectionRepository {
             .flatMap { try? JSONDecoder().decode(Snapshot.self, from: $0) } ?? Snapshot()
     }
 
-    private func persist() {
-        try? FileManager.default.createDirectory(
+    private func persist() throws {
+        try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let encoded = try? JSONEncoder().encode(data) {
-            try? encoded.write(to: fileURL, options: .atomic)
-        }
+        try JSONEncoder().encode(data).write(to: fileURL, options: .atomic)
+    }
+
+    /// Apply a mutation, persist, notify — rolling the mutation back (no notify) if the disk
+    /// write fails, so observers only ever see state that's actually on disk.
+    private func mutate(_ change: (inout Snapshot) -> Void) throws {
+        let backup = data
+        change(&data)
+        do { try persist() } catch { data = backup; throw error }
+        notify()
     }
 
     nonisolated func groupsStream() -> AsyncStream<[CardGroup]> {
@@ -77,54 +86,53 @@ final class LocalCollectionRepository: CollectionRepository {
     func createGroup(name: String) async throws -> String {
         let group = CardGroup(id: UUID().uuidString, name: name,
                               sortOrder: (data.groups.map(\.sortOrder).max() ?? -1) + 1, createdAt: Date())
-        data.groups.append(group)
-        persist(); notify()
+        try mutate { $0.groups.append(group) }
         return group.id
     }
 
     func renameGroup(id: String, name: String) async throws {
-        guard let i = data.groups.firstIndex(where: { $0.id == id }) else { return }
-        data.groups[i].name = name
-        persist(); notify()
+        guard data.groups.contains(where: { $0.id == id }) else { return }
+        try mutate { snapshot in
+            if let i = snapshot.groups.firstIndex(where: { $0.id == id }) { snapshot.groups[i].name = name }
+        }
     }
 
     func deleteGroup(id: String) async throws {
-        data.groups.removeAll { $0.id == id }
-        data.entries.removeAll { $0.groupId == id }
-        persist(); notify()
+        try mutate { snapshot in
+            snapshot.groups.removeAll { $0.id == id }
+            snapshot.entries.removeAll { $0.groupId == id }
+        }
     }
 
     func reorderGroups(orderedIds: [String]) async throws {
-        for (i, id) in orderedIds.enumerated() {
-            if let idx = data.groups.firstIndex(where: { $0.id == id }) { data.groups[idx].sortOrder = i }
+        try mutate { snapshot in
+            for (i, id) in orderedIds.enumerated() {
+                if let idx = snapshot.groups.firstIndex(where: { $0.id == id }) { snapshot.groups[idx].sortOrder = i }
+            }
+            snapshot.groups.sort { $0.sortOrder < $1.sortOrder }
         }
-        data.groups.sort { $0.sortOrder < $1.sortOrder }
-        persist(); notify()
     }
 
     func addEntry(_ entry: CollectionEntry) async throws {
-        data.entries.append(entry)
-        persist(); notify()
+        try mutate { $0.entries.append(entry) }
     }
 
     func addEntries(_ newEntries: [CollectionEntry]) async throws {
-        data.entries.append(contentsOf: newEntries)
-        persist(); notify()
+        try mutate { $0.entries.append(contentsOf: newEntries) }
     }
 
     func updateEntry(_ entry: CollectionEntry) async throws {
-        guard let i = data.entries.firstIndex(where: { $0.id == entry.id }) else { return }
-        data.entries[i] = entry
-        persist(); notify()
+        guard data.entries.contains(where: { $0.id == entry.id }) else { return }
+        try mutate { snapshot in
+            if let i = snapshot.entries.firstIndex(where: { $0.id == entry.id }) { snapshot.entries[i] = entry }
+        }
     }
 
     func deleteEntry(id: String) async throws {
-        data.entries.removeAll { $0.id == id }
-        persist(); notify()
+        try mutate { $0.entries.removeAll { $0.id == id } }
     }
 
     func replaceAll(groups: [CardGroup], entries: [CollectionEntry]) async throws {
-        data = Snapshot(groups: groups, entries: entries)
-        persist(); notify()
+        try mutate { $0 = Snapshot(groups: groups, entries: entries) }
     }
 }

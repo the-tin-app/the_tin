@@ -226,7 +226,7 @@ struct CardDetailView: View {
                     EntryFormView(card: model.card, groups: collection.groups, existing: nil,
                                   variants: model.variants, conditions: model.conditions,
                                   onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
-                        Task { await collection.saveEntry(entry) }
+                        await collection.saveEntry(entry)
                     }
                 }
             }

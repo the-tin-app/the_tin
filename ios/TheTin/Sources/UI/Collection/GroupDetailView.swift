@@ -7,6 +7,7 @@ struct GroupDetailView: View {
     @State private var sortByValue = false
     @State private var editingEntry: CollectionEntry?
     @State private var printRequest: PrintSheetRequest?
+    @State private var deletingEntry: CollectionEntry?
 
     var body: some View {
         List {
@@ -24,9 +25,7 @@ struct GroupDetailView: View {
                     Button { editingEntry = entry } label: { entryRow(entry) }
                         .buttonStyle(.plain)
                         .swipeActions {
-                            Button("Delete", role: .destructive) {
-                                Task { await model.deleteEntry(id: entry.id) }
-                            }
+                            Button("Delete", role: .destructive) { deletingEntry = entry }
                         }
                 }
             }
@@ -39,11 +38,21 @@ struct GroupDetailView: View {
                 .disabled(model.entries(in: group.id).isEmpty)
         }
         .printSheetFlow($printRequest)
+        .confirmationDialog(
+            "Remove \((try? store.card(id: deletingEntry?.cardId ?? ""))?.name ?? "this card") from your tin?",
+            isPresented: Binding(get: { deletingEntry != nil },
+                                 set: { if !$0 { deletingEntry = nil } }),
+            titleVisibility: .visible,
+            presenting: deletingEntry
+        ) { entry in
+            Button("Remove", role: .destructive) { Task { await model.deleteEntry(id: entry.id) } }
+            Button("Cancel", role: .cancel) {}
+        }
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
                 NavigationStack {
                     EntryFormView(card: card, groups: model.groups, existing: entry) { updated in
-                        Task { await model.saveEntry(updated) }
+                        await model.saveEntry(updated)
                     }
                 }
             }
