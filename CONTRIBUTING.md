@@ -13,6 +13,7 @@ maintained in spare time, for the love of the game.
 
 ## Ground rules
 
+- Be decent — see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 - This is a hobby project: replies may take days, PRs may be declined,
   and there is no SLA. Nothing personal.
 - Tests required: run the suite for the area you touch — `cd functions &&
