@@ -120,6 +120,7 @@ neutral — never compete with a holo.
 **Display Font:** SF Pro Display (system)
 **Body Font:** SF Pro Text (system)
 **Accent Font:** New York (system serif), italic — the "penned label" voice
+**Money Font:** SF Rounded (system, `design: .rounded`), bold — hero currency values only
 **Numeric style:** monospaced digits for every price, count, and percentage
 
 **Character:** San Francisco through Dynamic Type text styles — no third-party faces,
@@ -148,6 +149,11 @@ a defect except in fixed-canvas contexts (print/PDF report pages, the drawn tin 
 **The Penned Label Rule.** New York serif italic is the one sanctioned accent face —
 the handwritten index-card voice, used only where the tin metaphor is physical (divider
 tabs, the pager title plaque). Never in controls, data, or body text.
+
+**The Money Face Rule.** SF Rounded, bold, monospaced digits is the sanctioned face for
+hero currency values — the tin total, a pager card's value, the portfolio headline. One
+number per screen wears it; caption-ledger prices stay SF Pro. Rounded is the warmth of
+the number, never a display face for text.
 
 ## 4. Elevation
 

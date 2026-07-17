@@ -145,8 +145,10 @@ struct GroupDetailView: View {
         }
     }
 
+    // Tap shows the card — the app-wide "open a card" verb (the cards are the hero);
+    // editing is the deliberate second gesture, on leading swipe + long-press.
     private func row(_ entry: CollectionEntry, showDivider: Bool) -> some View {
-        Button { editingEntry = entry } label: {
+        NavigationLink(value: CardID(raw: entry.cardId)) {
             CollectionEntryRow(
                 card: try? store.card(id: entry.cardId),
                 entry: entry,
@@ -156,9 +158,14 @@ struct GroupDetailView: View {
                                              variants: model.variantsByCard[entry.cardId] ?? [],
                                              conditions: model.conditionsByCard[entry.cardId] ?? []))
         }
-        .buttonStyle(.plain)
         .swipeActions {
             Button("Remove", role: .destructive) { deletingEntry = entry }
+        }
+        .swipeActions(edge: .leading) {
+            Button { editingEntry = entry } label: { Label("Edit", systemImage: "pencil") }
+        }
+        .contextMenu {
+            Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
         }
     }
 
