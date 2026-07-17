@@ -32,7 +32,7 @@ struct CollectionEntryRow: View {
 }
 
 /// The list view of the tin — one divider's entries, or the whole collection when `group`
-/// is nil ("Everything": Unfiled on top, then everything behind dividers). Searchable by
+/// is nil ("Everything": No divider on top, then everything behind dividers). Searchable by
 /// card name, so "do I own this?" is answerable from any list.
 struct GroupDetailView: View {
     @Bindable var model: CollectionModel
@@ -57,7 +57,7 @@ struct GroupDetailView: View {
                     entriesSection(model.sortedEntries(in: group.id, byValue: sortByValue),
                                    header: nil, showDivider: false)
                 } else {
-                    entriesSection(sortedAll(model.ungroupedEntries), header: "Unfiled", showDivider: false)
+                    entriesSection(sortedAll(model.ungroupedEntries), header: "No divider", showDivider: false)
                     entriesSection(sortedAll(model.entries.filter { !$0.groupId.isEmpty }),
                                    header: "Behind dividers", showDivider: true)
                 }

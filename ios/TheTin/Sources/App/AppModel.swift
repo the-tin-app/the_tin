@@ -237,7 +237,11 @@ final class AppModel {
         collection.widgetWriter = WidgetSnapshotWriter()
         self.collection = collection
         Task { await collection.start() }
-        self.wants = WantsModel(repo: wantsRepository, uid: uid)
+        let wants = WantsModel(repo: wantsRepository, uid: uid)
+        wants.onWriteError = { [weak collection] message in
+            collection?.writeError = .init(message: message)
+        }
+        self.wants = wants
     }
 
     /// Reopen the live store on the just-installed artifact. Required after any install that

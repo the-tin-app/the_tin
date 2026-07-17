@@ -5,7 +5,9 @@ protocol CollectionRepository {
     func entriesStream() -> AsyncStream<[CollectionEntry]>
     @discardableResult func createGroup(name: String) async throws -> String
     func renameGroup(id: String, name: String) async throws
-    func deleteGroup(id: String) async throws   // cascades to the group's entries
+    /// `keepingEntries` moves the group's entries to "No divider" (groupId "") instead of
+    /// cascading the delete to them. One transaction either way.
+    func deleteGroup(id: String, keepingEntries: Bool) async throws
     func reorderGroups(orderedIds: [String]) async throws   // ids not listed keep their relative tail order
     func addEntry(_ entry: CollectionEntry) async throws
     /// Append many entries in one write + one stream notification (CSV import — avoids an
@@ -71,9 +73,13 @@ final class InMemoryCollectionRepository: CollectionRepository {
         notify()
     }
 
-    func deleteGroup(id: String) async throws {
+    func deleteGroup(id: String, keepingEntries: Bool = false) async throws {
         groups.removeAll { $0.id == id }
-        entries.removeAll { $0.groupId == id }
+        if keepingEntries {
+            for i in entries.indices where entries[i].groupId == id { entries[i].groupId = "" }
+        } else {
+            entries.removeAll { $0.groupId == id }
+        }
         notify()
     }
 

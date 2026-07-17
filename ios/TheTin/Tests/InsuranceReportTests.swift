@@ -35,7 +35,7 @@ final class InsuranceReportTests: XCTestCase {
         XCTAssertEqual(t.costBasis, 405)             // pricePaid is the ENTRY TOTAL — plain sum
     }
 
-    func testSubtotalsPerDividerWithUnfiledLastAndEmptySkipped() {
+    func testSubtotalsPerDividerWithNoDividerLastAndEmptySkipped() {
         let groups = [CardGroup(id: "g1", name: "Binder A", sortOrder: 0, createdAt: .distantPast),
                       CardGroup(id: "g2", name: "Empty", sortOrder: 1, createdAt: .distantPast),
                       CardGroup(id: "g3", name: "Chase", sortOrder: 2, createdAt: .distantPast)]
@@ -46,7 +46,7 @@ final class InsuranceReportTests: XCTestCase {
                                              prices: ["swsh7-215": rayPrice],
                                              variantsByCard: [:], conditionsByCard: [:])
         XCTAssertEqual(subs.map(\.id), ["g1", "g3", ""])          // tin order; empty g2 skipped
-        XCTAssertEqual(subs.map(\.name), ["Binder A", "Chase", "Unfiled"])
+        XCTAssertEqual(subs.map(\.name), ["Binder A", "Chase", "No divider"])
         XCTAssertEqual(subs.map(\.cards), [2, 1, 3])
         XCTAssertEqual(subs[0].value, 185.0)                      // 2 × 92.5
     }

@@ -12,7 +12,7 @@ struct ReportTotals: Equatable {
 
 /// One appendix line: a divider's card count and value.
 struct DividerSubtotal: Identifiable, Equatable {
-    let id: String           // group id; "" = ungrouped ("Unfiled")
+    let id: String           // group id; "" = ungrouped ("No divider")
     let name: String
     let cards: Int           // Σ qty
     let value: Double
@@ -30,7 +30,7 @@ enum InsuranceReport {
                             costBasis: entries.compactMap(\.pricePaid).reduce(0, +))
     }
 
-    /// Per-divider subtotals in tin order; ungrouped cards last as "Unfiled". Empty dividers
+    /// Per-divider subtotals in tin order; ungrouped cards last as "No divider". Empty dividers
     /// are skipped — nothing to insure.
     static func subtotals(entries: [CollectionEntry], groups: [CardGroup],
                           prices: [String: PriceRecord],
@@ -38,7 +38,7 @@ enum InsuranceReport {
                           conditionsByCard: [String: [ConditionPrice]]) -> [DividerSubtotal] {
         var buckets = [(id: String, name: String)]()
         buckets.append(contentsOf: groups.map { ($0.id, $0.name) })
-        buckets.append(("", "Unfiled"))
+        buckets.append(("", "No divider"))
         return buckets.compactMap { id, name in
             let inGroup = entries.filter { $0.groupId == id }
             guard !inGroup.isEmpty else { return nil }

@@ -80,7 +80,7 @@ struct StagingReviewView: View {
     @ViewBuilder
     private var routeDialogActions: some View {
         if let draft = routing {
-            Button("The Tin (no divider)") { Task { await commit(draft, to: .tin) } }
+            Button("No divider") { Task { await commit(draft, to: .tin) } }
             ForEach(collection.groups) { g in
                 Button(g.name) { Task { await commit(draft, to: .group(g.id)) } }
             }

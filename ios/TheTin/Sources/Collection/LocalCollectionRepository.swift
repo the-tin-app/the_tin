@@ -97,10 +97,16 @@ final class LocalCollectionRepository: CollectionRepository {
         }
     }
 
-    func deleteGroup(id: String) async throws {
+    func deleteGroup(id: String, keepingEntries: Bool = false) async throws {
         try mutate { snapshot in
             snapshot.groups.removeAll { $0.id == id }
-            snapshot.entries.removeAll { $0.groupId == id }
+            if keepingEntries {
+                for i in snapshot.entries.indices where snapshot.entries[i].groupId == id {
+                    snapshot.entries[i].groupId = ""
+                }
+            } else {
+                snapshot.entries.removeAll { $0.groupId == id }
+            }
         }
     }
 
