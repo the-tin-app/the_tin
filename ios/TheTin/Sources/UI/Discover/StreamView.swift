@@ -99,7 +99,7 @@ struct StreamView: View {
                         Button {
                             sheetCard = card
                         } label: {
-                            Label("Add to group…", systemImage: "plus.square.on.square")
+                            Label("Save to tin…", systemImage: "plus.square.on.square")
                         }
                     }
                 }

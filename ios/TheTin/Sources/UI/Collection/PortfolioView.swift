@@ -9,7 +9,7 @@ struct PortfolioRoute: Hashable {
 
 /// Value over time for the whole tin, or (when `groupId` is set) one divider: value + cost-basis
 /// chart, stat row, per-divider breakdown (whole-tin view only).
-/// Casual tier ships `price_history` empty → tier upsell (same pattern as card detail).
+/// Casual tier ships `price_history` empty → download-size notice (same pattern as card detail).
 /// Layout follows mockup variant B ("chart-hero"):
 /// headline value+Δ on one line, dominant chart, stats demoted to a 3-up card row below the
 /// chart, then the divider list.
@@ -61,7 +61,7 @@ struct PortfolioView: View {
 
     @ViewBuilder private var content: some View {
         if tier == .casual {
-            upsell
+            historyNotice
         } else if let series {
             if series.totalCards == 0 {
                 Text(groupId == nil ? "Add cards to your tin to see its value over time."
@@ -128,15 +128,15 @@ struct PortfolioView: View {
         }
     }
 
-    /// Variant B's 3-up card row below the chart: cost basis, unrealized P&L, coverage.
+    /// Variant B's 3-up card row below the chart: what you paid, change vs. paid, coverage.
     private func statCardRow(_ series: PortfolioSeries) -> some View {
         let pts = sliced(series.points)
         let now = pts.last?.value ?? 0
         let basis = pts.last?.costBasis ?? 0
         return HStack(spacing: 8) {
             if basis > 0 {
-                statCard(label: "Cost basis", value: basis.formatted(.currency(code: "USD")), tint: .secondary)
-                statCard(label: "Unrealized P&L", value: signed(now - basis),
+                statCard(label: "You paid", value: basis.formatted(.currency(code: "USD")), tint: .secondary)
+                statCard(label: "Change vs. paid", value: signed(now - basis),
                          tint: now - basis >= 0 ? .green : .red)
             }
             statCard(label: "Coverage", value: "\(series.cardsWithHistory) / \(series.totalCards)", tint: .primary)
@@ -192,12 +192,13 @@ struct PortfolioView: View {
         }
     }
 
-    /// Same visual pattern as CardDetailView's casual-tier history nudge.
-    private var upsell: some View {
+    /// Same visual pattern as CardDetailView's history notice. Copy rule: this is a
+    /// download-size fact, never an upsell — say "free" out loud (PRODUCT.md anti-reference).
+    private var historyNotice: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Portfolio history needs the Average tier", systemImage: "chart.line.uptrend.xyaxis")
+            Label("Price history isn't in the Small catalog", systemImage: "chart.line.uptrend.xyaxis")
                 .font(.subheadline.weight(.medium))
-            Text("Switch to Average or Expert in Settings to chart your collection's value over time.")
+            Text("Choose the Standard or Complete catalog in Settings to chart your collection's value over time. Every option is free.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

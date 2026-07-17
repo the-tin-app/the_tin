@@ -20,7 +20,7 @@ struct TinAllCardsView: View {
                 }
             }
             if !groupedEntries.isEmpty {
-                Section("In groups") {
+                Section("Behind dividers") {
                     ForEach(groupedEntries) { entry in row(entry) }
                 }
             }

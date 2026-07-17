@@ -135,7 +135,7 @@ struct SettingsView: View {
             }
         } footer: {
             if onBackupSource {
-                Text("The backup only provides the Casual tier (latest prices, no history). Anything richer you already downloaded stays available on this device.")
+                Text("The backup source only provides the Small catalog (latest prices, no history). Anything richer you already downloaded stays available on this device.")
             }
         }
     }
@@ -199,7 +199,7 @@ struct SettingsView: View {
                 .disabled(app.tierChange == .downloading)
             }
         } header: {
-            Text("Data tier")
+            Text("Catalog download")
         } footer: {
             tierFooter
         }
@@ -208,16 +208,16 @@ struct SettingsView: View {
     @ViewBuilder private var tierFooter: some View {
         switch app.tierChange {
         case .downloading:
-            HStack(spacing: 6) { ProgressView(); Text("Switching tier…") }
+            HStack(spacing: 6) { ProgressView(); Text("Switching catalog…") }
         case .done:
             Text("Downloaded. Restart The Tin to finish switching.")
         case .failed(let msg):
             Text(msg).foregroundStyle(.red)
         case .idle:
             if onBackupSource {
-                Text("On the backup source only Casual can download.\(installedTierNote)")
+                Text("On the backup source only the Small catalog can download.\(installedTierNote)")
             } else {
-                Text("Controls how much price data downloads. Change it anytime.")
+                Text("Just a download-size choice — every option is free. Change it anytime.")
             }
         }
     }

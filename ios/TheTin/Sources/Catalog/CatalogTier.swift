@@ -1,8 +1,10 @@
 import Foundation
 
 /// The three cumulative catalog tiers the self-hosted server publishes. Raw values match the
-/// server manifest keys and `AppConfig.catalogTier`. Carries the Settings picker's display copy so
-/// "what each tier includes" lives in one place. See the 3-tier packaging spec.
+/// server manifest keys and `AppConfig.catalogTier` — wire format, never shown. Display copy
+/// deliberately avoids rank/persona words ("Casual/Expert" read as account tiers, i.e. paywall
+/// grammar; see PRODUCT.md's first anti-reference): user-facing this is a catalog *download
+/// size* choice, and every size is free.
 enum CatalogTier: String, CaseIterable, Identifiable {
     case casual, average, expert
 
@@ -10,13 +12,13 @@ enum CatalogTier: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .casual: return "Casual"
-        case .average: return "Average"
-        case .expert: return "Expert"
+        case .casual: return "Small"
+        case .average: return "Standard"
+        case .expert: return "Complete"
         }
     }
 
-    /// What data the tier includes + how often the app checks for updates.
+    /// What data the download includes + how often the app checks for updates.
     var summary: String {
         switch self {
         case .casual: return "Latest prices only. Smallest download, checks weekly."

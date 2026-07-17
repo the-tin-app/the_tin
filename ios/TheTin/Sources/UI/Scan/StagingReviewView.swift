@@ -59,7 +59,7 @@ struct StagingReviewView: View {
         .confirmationDialog("File this card in…", isPresented: routingIsPresented, titleVisibility: .visible) {
             routeDialogActions
         }
-        .alert("New group", isPresented: newGroupIsPresented) {
+        .alert("New divider", isPresented: newGroupIsPresented) {
             newGroupAlertActions
         }
         .alert("Couldn't file that card", isPresented: $commitError) {
@@ -80,11 +80,11 @@ struct StagingReviewView: View {
     @ViewBuilder
     private var routeDialogActions: some View {
         if let draft = routing {
-            Button("The Tin (no group)") { Task { await commit(draft, to: .tin) } }
+            Button("The Tin (no divider)") { Task { await commit(draft, to: .tin) } }
             ForEach(collection.groups) { g in
                 Button(g.name) { Task { await commit(draft, to: .group(g.id)) } }
             }
-            Button("New group…") { showingNewGroup = draft; routing = nil }
+            Button("New divider…") { showingNewGroup = draft; routing = nil }
             Button("Cancel", role: .cancel) { routing = nil }
         }
     }
