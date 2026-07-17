@@ -160,19 +160,13 @@ private struct UpdateToast: View {
                     .monospacedDigit()
             }
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.white)
             ProgressView(value: progress)
-                .tint(.blue)
                 .animation(.linear(duration: 0.2), value: progress)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .background(Color(uiColor: UIColor { trait in
-            trait.userInterfaceStyle == .dark
-                ? UIColor(white: 0.17, alpha: 0.95)
-                : UIColor(white: 0.11, alpha: 0.92)
-        }), in: RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .black.opacity(0.25), radius: 9, y: 3)
+        // Flat Tin Rule: chrome earns separation from a system material, never a shadow.
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -190,7 +184,7 @@ private struct OfflineBanner: View {
         .font(.caption.bold())
         .padding(.vertical, 6).frame(maxWidth: .infinity)
         .background(.orange.opacity(0.9))
-        .foregroundStyle(.white)
+        .foregroundStyle(.black) // white-on-orange fails contrast; black is ~9.5:1
     }
 }
 

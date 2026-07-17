@@ -50,6 +50,8 @@ private struct CoverageRing: View {
     var body: some View {
         Circle().trim(from: 0, to: value).stroke(.green, lineWidth: 6)
             .frame(width: 44, height: 44).rotationEffect(.degrees(-90))
+            .accessibilityLabel("Scan coverage")
+            .accessibilityValue("\(Int(value * 100)) percent")
     }
 }
 
@@ -115,14 +117,18 @@ private struct StagingTray: View {
             // Thumbnail of the most-recent capture = instant "got the right card?" glance.
             if staging.drafts.first != nil {
                 CardImageView(card: latestCard, quality: "low").frame(width: 34)
+                    .accessibilityHidden(true)
             } else {
                 Image(systemName: "tray.full").imageScale(.large)
+                    .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("^[\(staging.drafts.count) card](inflect: true) staged").font(.subheadline.bold())
                 Text(staging.totalUsd, format: .currency(code: "USD"))
                     .font(.caption).foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(staging.drafts.count) \(staging.drafts.count == 1 ? "card" : "cards") staged, \(staging.totalUsd.formatted(.currency(code: "USD")))")
             Spacer()
             Button("Review") { onReview() }
                 .buttonStyle(.borderedProminent)

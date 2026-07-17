@@ -75,7 +75,7 @@ struct SetsListView: View {
                     ForEach(SetSort.allCases) { Text($0.label).tag($0) }
                 }
             } label: {
-                Image(systemName: "arrow.up.arrow.down")
+                Label("Sort", systemImage: "arrow.up.arrow.down")
             }
         }
         .navigationDestination(for: SetID.self) { setID in
