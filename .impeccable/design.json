@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-17T00:00:00Z",
+  "title": "Design System: The Tin",
+  "extensions": {
+    "colorMeta": {
+      "tin-blue": { "role": "primary", "displayName": "Tin Blue", "canonical": "#3B74C9", "tonalRamp": ["oklch(20% 0.09 260)", "oklch(30% 0.11 260)", "oklch(40% 0.13 260)", "oklch(50% 0.14 260)", "oklch(58% 0.14 260)", "oklch(70% 0.11 260)", "oklch(84% 0.06 260)", "oklch(95% 0.02 260)"] },
+      "tin-lid": { "role": "primary", "displayName": "Tin Lid", "canonical": "#5D90DD" },
+      "tin-shadow": { "role": "primary", "displayName": "Tin Shadow", "canonical": "#16386F", "tonalRamp": ["oklch(15% 0.07 262)", "oklch(24% 0.09 262)", "oklch(33% 0.11 262)", "oklch(43% 0.12 262)", "oklch(53% 0.12 262)", "oklch(66% 0.10 262)", "oklch(80% 0.06 262)", "oklch(94% 0.02 262)"] },
+      "card-gold": { "role": "secondary", "displayName": "Card Gold", "canonical": "#EEBB62", "tonalRamp": ["oklch(25% 0.06 80)", "oklch(38% 0.09 80)", "oklch(50% 0.11 80)", "oklch(62% 0.12 80)", "oklch(72% 0.12 80)", "oklch(82% 0.10 80)", "oklch(90% 0.06 80)", "oklch(96% 0.03 80)"] },
+      "card-gold-deep": { "role": "secondary", "displayName": "Card Gold Deep", "canonical": "#D99F3D" },
+      "cover-manila": { "role": "tertiary", "displayName": "Manila" },
+      "cover-sky": { "role": "tertiary", "displayName": "Sky" },
+      "cover-sage": { "role": "tertiary", "displayName": "Sage" },
+      "cover-clay": { "role": "tertiary", "displayName": "Clay" },
+      "cover-plum": { "role": "tertiary", "displayName": "Plum" },
+      "cover-sand": { "role": "tertiary", "displayName": "Sand" },
+      "cover-teal": { "role": "tertiary", "displayName": "Teal" },
+      "cover-rose": { "role": "tertiary", "displayName": "Rose" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Large Title", "purpose": "Top-level screen titles; Dynamic Type, collapses to inline on scroll." },
+      "label": { "displayName": "Caption Ledger", "purpose": "The data layer: prices, dates, counts. Secondary color, monospaced digits." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "tin-loading-loop", "value": "keyframe loop, 2.8s (lid opens, card rises, settles shut)", "purpose": "The app's one theatrical moment; replaces ProgressView. Reduce Motion → static open pose." },
+      { "name": "snappy", "value": "SwiftUI .snappy", "purpose": "State transitions (funding bar collapse/expand)." }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Card Badge",
+      "kind": "chip",
+      "refersTo": "CardBadges (SwiftUI); web approximation",
+      "description": "Owned/wanted status capsule floating over card art on ultra-thin material.",
+      "html": "<span class=\"ds-badge\"><svg class=\"ds-badge-owned\" width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"currentColor\"><circle cx=\"8\" cy=\"8\" r=\"8\"/><path d=\"M4.5 8.2l2.2 2.2 4.6-4.6\" stroke=\"#fff\" stroke-width=\"1.6\" fill=\"none\"/></svg><svg class=\"ds-badge-wanted\" width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"currentColor\"><path d=\"M8 14S2 10 2 5.8C2 3.7 3.7 2 5.8 2 7 2 8 2.8 8 2.8S9 2 10.2 2C12.3 2 14 3.7 14 5.8 14 10 8 14 8 14z\"/></svg></span>",
+      "css": ".ds-badge { display: inline-flex; gap: 3px; padding: 3px; border-radius: 9999px; background: rgba(255,255,255,0.55); backdrop-filter: blur(12px); } .ds-badge-owned { color: #34c759; } .ds-badge-wanted { color: #ff2d55; }"
+    },
+    {
+      "name": "Support Button",
+      "kind": "button",
+      "refersTo": "FundingBar 'Support' (borderedProminent, small); web approximation",
+      "description": "The one prominent button style: system borderedProminent, small, blue tint.",
+      "html": "<button class=\"ds-btn-support\">Support</button>",
+      "css": ".ds-btn-support { background: #007aff; color: #fff; font: 600 13px/1 -apple-system, system-ui, sans-serif; padding: 6px 12px; border: none; border-radius: 9999px; } .ds-btn-support:hover { background: #0a6ee0; } .ds-btn-support:focus-visible { outline: 2px solid #3B74C9; outline-offset: 2px; }"
+    },
+    {
+      "name": "Price Label",
+      "kind": "custom",
+      "refersTo": "PriceLabel + AsOfLabel; web approximation",
+      "description": "The Caption Ledger: bold monospaced-digit price with quiet provenance stamp.",
+      "html": "<div class=\"ds-price\"><span class=\"ds-price-value\">$41.28</span> <span class=\"ds-price-asof\">as of 2026-07-16</span></div>",
+      "css": ".ds-price { font-family: -apple-system, system-ui, sans-serif; } .ds-price-value { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; } .ds-price-asof { font-size: 11px; color: rgba(60,60,67,0.6); }"
+    },
+    {
+      "name": "Funded Meter",
+      "kind": "custom",
+      "refersTo": "FundedMeter; web approximation",
+      "description": "Plain, non-interactive capsule progress meter in secondary gray — a support ask, never a gate.",
+      "html": "<div class=\"ds-meter\"><div class=\"ds-meter-track\"><div class=\"ds-meter-fill\" style=\"width:62%\"></div></div><span class=\"ds-meter-label\">62% funded</span></div>",
+      "css": ".ds-meter { display: flex; flex-direction: column; gap: 2px; width: 160px; font-family: -apple-system, system-ui, sans-serif; } .ds-meter-track { height: 4px; border-radius: 9999px; background: rgba(120,120,128,0.25); } .ds-meter-fill { height: 100%; border-radius: 9999px; background: rgba(120,120,128,0.9); } .ds-meter-label { font-size: 11px; color: rgba(60,60,67,0.6); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Well-Kept Tin",
+    "overview": "A cared-for container: plain and sturdy on the outside, treasure on the inside. The chrome IS the tin — neutral, system-native, unremarkable by design — and the cards are the treasure it exists to hold. Every screen is built from stock iOS parts so a fluent iPhone user never pauses at an off-spec control; identity is spent in small, deliberate places: the tin glyph and its loading animation, the pastel group covers, the pink wishlist heart. The system is quiet with warm edges: collector-grade density in captions and monospaced digits, warmth at the edges where the collection shows through.",
+    "keyCharacteristics": [
+      "Stock HIG structure everywhere; custom drawing reserved for the tin glyph",
+      "Semantic system colors and system blue tint; brand palette confined to brand moments",
+      "Dynamic Type only — no hard-coded body sizes; dense caption-level data presentation",
+      "Flat surfaces; depth via system materials, never shadows",
+      "Dark Mode and Reduce Motion are first-class, not afterthoughts"
+    ],
+    "rules": [
+      { "name": "The Plain Tin Rule", "body": "Brand color lives in the tin glyph and app icon only. Screen chrome uses semantic system colors plus the single system-blue tint; if a screen looks 'branded', it's wrong.", "section": "colors" },
+      { "name": "The Treasure Rule", "body": "Card art is the color of the app. Around imagery, chrome goes neutral — never compete with a holo.", "section": "colors" },
+      { "name": "The Caption Ledger Rule", "body": "Collection data runs dense and small: caption-level type, secondary color, monospaced digits, always with provenance ('as of [date]'). Precision is stated quietly, never dramatized.", "section": "typography" },
+      { "name": "The Dynamic Type Rule", "body": "System text styles only. A hard-coded point size on text is a defect except in fixed-canvas contexts (print/PDF report pages, the drawn tin glyph).", "section": "typography" },
+      { "name": "The Flat Tin Rule", "body": "No .shadow() modifiers. If a layer needs separation, it earns a system material or a background-level shift, nothing else.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use semantic system colors and system controls everywhere; the chrome is the tin — plain, sturdy, adaptive.",
+      "Do keep data provenance visible: prices carry 'as of [date]' in caption2 secondary, digits monospaced.",
+      "Do confine brand color to the tin glyph and app icon and broad color to the eight group covers.",
+      "Do honor Dynamic Type, VoiceOver labels, and Reduce Motion in every new view — the tin loading view is the reference implementation.",
+      "Do design Dark Mode and Light Mode together; semantic colors make this free — keep it that way."
+    ],
+    "donts": [
+      "Don't ship anything with paywall-tracker vibes: no locked features, 'PRO' badges, upsell banners, or UI that even resembles a meter. The funding bar is a support ask, never a gate.",
+      "Don't drift into finance-app coldness: charts and prices serve the collection; never lead a screen with a chart when the cards can lead.",
+      "Don't build web-app-in-a-wrapper chrome: no custom nav bars, hamburger menus, web-shaped buttons, or reinvented system controls.",
+      "Don't touch kiddie Pokémon kitsch: no Pikachu-yellow, cartoon fonts, or IP cosplay. The cards supply the Pokémon; the app supplies the tin.",
+      "Don't add shadows, hard-code text sizes, or invent a second theatrical animation beyond the tin loading loop."
+    ]
+  }
+}
