@@ -220,7 +220,7 @@ private struct RestoreBackupPrompt: ViewModifier {
                 if let new { offer = new; presented = true }
             }
             .alert(offer?.requiresOverwriteConfirmation == true
-                       ? "Replace current collection?" : "iCloud Backup Found",
+                       ? "Replace everything in your tin?" : "iCloud Backup Found",
                    isPresented: $presented, presenting: offer) { offer in
                 Button("Restore",
                        role: offer.requiresOverwriteConfirmation ? ButtonRole.destructive : nil) {
@@ -229,7 +229,7 @@ private struct RestoreBackupPrompt: ViewModifier {
                 Button("Not Now", role: .cancel) { backup.restoreOffer = nil }
             } message: { offer in
                 Text(offer.requiresOverwriteConfirmation
-                     ? "Your collection is no longer empty. Restoring replaces everything in The Tin with the \(offer.entryCount)-card backup from \(dateText(offer))."
+                     ? "Your tin is no longer empty. Restoring replaces everything in it with the \(offer.entryCount)-card backup from \(dateText(offer))."
                      : "Restore \(offer.entryCount) cards from the iCloud backup made \(dateText(offer))?")
             }
     }
