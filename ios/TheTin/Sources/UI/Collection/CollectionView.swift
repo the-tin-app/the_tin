@@ -409,21 +409,21 @@ struct CollectionView: View {
             Button("Cancel", role: .cancel) {}
         }
         .navigationDestination(for: TinPagerRoute.self) { route in
-            GroupPagerView(model: model, store: store, groupId: route.groupId)
+            GroupPagerView(model: model, store: store, groupId: route.groupId, onGetStarted: onGetStarted)
         }
         .navigationDestination(for: PortfolioRoute.self) { route in
             PortfolioView(model: model, groupId: route.groupId)
         }
         .navigationDestination(for: String.self) { groupId in
             if let group = model.groups.first(where: { $0.id == groupId }) {
-                GroupDetailView(model: model, group: group, store: store)
+                GroupDetailView(model: model, group: group, store: store, onGetStarted: onGetStarted)
             }
         }
         .navigationDestination(for: WantedRoute.self) { _ in
             if let wants { WantedCardsView(store: store, wants: wants, collection: model) }
         }
         .navigationDestination(for: TinAllCardsRoute.self) { _ in
-            GroupDetailView(model: model, group: nil, store: store)
+            GroupDetailView(model: model, group: nil, store: store, onGetStarted: onGetStarted)
         }
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
