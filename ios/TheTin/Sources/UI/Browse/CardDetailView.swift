@@ -255,8 +255,9 @@ struct CardDetailView: View {
     }
 
     /// Price-history area of the detail screen. Loaded → interactive chart. Empty on the casual
-    /// tier → an upgrade nudge (history is intentionally stripped there); empty otherwise →
-    /// "not enough history yet". Unavailable → offline/error.
+    /// tier → a download-size notice (history is intentionally stripped there; copy must never
+    /// read as an upsell — everything is free); empty otherwise → "not enough history yet".
+    /// Unavailable → offline/error.
     @ViewBuilder private var priceHistorySection: some View {
         switch model.historyState {
         case .loading:
@@ -268,9 +269,9 @@ struct CardDetailView: View {
             }
         case .empty where model.tier == .casual:
             VStack(alignment: .leading, spacing: 6) {
-                Label("Price history is off on the Casual tier", systemImage: "chart.line.uptrend.xyaxis")
+                Label("Price history isn't in the Small catalog", systemImage: "chart.line.uptrend.xyaxis")
                     .font(.subheadline.weight(.medium))
-                Text("Switch to Average or Expert in Settings to see the price-history graph.")
+                Text("Choose the Standard or Complete catalog in Settings to see this card's price graph. Every option is free.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

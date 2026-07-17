@@ -20,7 +20,7 @@ struct CardQuickActions: ViewModifier {
                 Button {
                     onAddToGroup()
                 } label: {
-                    Label("Add to group…", systemImage: "folder.badge.plus")
+                    Label("Save to tin…", systemImage: "folder.badge.plus")
                 }
             }
         }

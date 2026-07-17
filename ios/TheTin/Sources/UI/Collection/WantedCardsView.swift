@@ -23,9 +23,9 @@ struct WantedCardsView: View {
             if cards.isEmpty {
                 ContentUnavailableView {
                     Label {
-                        Text("Your tin is empty")
+                        Text("Your wishlist is empty")
                     } icon: {
-                        TinIcon(size: 44).foregroundStyle(.secondary)
+                        Image(systemName: "heart").foregroundStyle(.secondary)
                     }
                 } description: {
                     Text("Tap the heart on any card to start hunting for it here.")

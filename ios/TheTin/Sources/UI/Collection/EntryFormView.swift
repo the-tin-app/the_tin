@@ -42,9 +42,9 @@ struct EntryFormView: View {
         Form {
             Section(card.name) {
                 if groups.isEmpty {
-                    TextField("New group name", text: $newGroupName)
+                    TextField("New divider name", text: $newGroupName)
                 } else {
-                    Picker("Group", selection: $groupId) {
+                    Picker("Divider", selection: $groupId) {
                         ForEach(groups) { Text($0.name).tag($0.id) }
                     }
                 }
