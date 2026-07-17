@@ -103,6 +103,16 @@ private struct MainTabView: View {
             consumeWishlistRoute() // cold launch from a tap: token bumped before we appeared
         }
         .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
+        // Collection writes can fail from any tab (card detail lives under Browse/Search too),
+        // so the failure alert hangs off the TabView, not the Tin stack.
+        .alert("Save failed", isPresented: Binding(
+            get: { collection.writeError != nil },
+            set: { if !$0 { collection.writeError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(collection.writeError?.message ?? "")
+        }
     }
 
     private func consumeWishlistRoute() {

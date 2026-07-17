@@ -48,7 +48,7 @@ struct GroupPagerView: View {
                     EntryFormView(card: card, groups: model.groups, existing: entry,
                                   variants: model.variantsByCard[entry.cardId] ?? [],
                                   conditions: model.conditionsByCard[entry.cardId] ?? []) { updated in
-                        Task { await model.saveEntry(updated) }
+                        await model.saveEntry(updated)
                     }
                 }
             }
@@ -144,6 +144,7 @@ private struct EntryCardPage: View {
     let accent: Color
     let onEdit: (CollectionEntry) -> Void
     @State private var history: [PricePoint] = []
+    @State private var confirmingRemove = false
 
     private var card: CardRecord? { try? store.card(id: entry.cardId) }
     private var value: Double? { model.entryValue(entry) }
@@ -191,6 +192,13 @@ private struct EntryCardPage: View {
             .padding()
         }
         .task(id: entry.cardId) { history = (try? store.priceHistory(cardId: entry.cardId)) ?? [] }
+        .confirmationDialog(
+            "Remove \(card?.name ?? "this card") from your tin?",
+            isPresented: $confirmingRemove, titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) { Task { await model.deleteEntry(id: entry.id) } }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 
     private var chips: some View {
@@ -237,7 +245,7 @@ private struct EntryCardPage: View {
                 Label("Card details", systemImage: "info.circle")
             }
             Divider()
-            Button(role: .destructive) { Task { await model.deleteEntry(id: entry.id) } }
+            Button(role: .destructive) { confirmingRemove = true }
                 label: { Label("Remove from tin", systemImage: "trash") }
         } label: {
             Image(systemName: "ellipsis.circle").font(.title3)

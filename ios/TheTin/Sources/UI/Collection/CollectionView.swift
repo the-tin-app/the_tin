@@ -154,23 +154,53 @@ final class CollectionModel {
                        : list.sorted { $0.addedAt > $1.addedAt }
     }
 
-    @discardableResult
-    func createGroup(name: String) async -> String { (try? await repository.createGroup(name: name)) ?? "" }
-    func renameGroup(id: String, name: String) async { try? await repository.renameGroup(id: id, name: name) }
-    func deleteGroup(id: String) async { try? await repository.deleteGroup(id: id) }
-    func reorderGroups(ids: [String]) async { try? await repository.reorderGroups(orderedIds: ids) }
+    /// Set when a collection write fails (disk full, etc.); MainTabView presents it as an
+    /// alert wherever the user is. The repository rolls failed writes back, so "wasn't saved"
+    /// is literally what the UI now shows.
+    var writeError: WriteError?
+    struct WriteError: Equatable { let message: String }
 
-    func saveEntry(_ entry: CollectionEntry) async {
+    /// Run a repository write; on failure surface an alert phrased around `what`
+    /// ("save the card", "delete the divider") and report false.
+    @discardableResult
+    private func write(_ what: String, _ body: () async throws -> Void) async -> Bool {
+        do { try await body(); return true }
+        catch {
+            writeError = WriteError(message: "Couldn't \(what) — nothing was changed. Check free storage and try again.")
+            return false
+        }
+    }
+
+    @discardableResult
+    func createGroup(name: String) async -> String {
+        var id = ""
+        await write("create the divider") { id = try await repository.createGroup(name: name) }
+        return id
+    }
+    func renameGroup(id: String, name: String) async {
+        await write("rename the divider") { try await repository.renameGroup(id: id, name: name) }
+    }
+    func deleteGroup(id: String) async {
+        await write("delete the divider") { try await repository.deleteGroup(id: id) }
+    }
+    func reorderGroups(ids: [String]) async {
+        await write("reorder the dividers") { try await repository.reorderGroups(orderedIds: ids) }
+    }
+
+    @discardableResult
+    func saveEntry(_ entry: CollectionEntry) async -> Bool {
         if entries.contains(where: { $0.id == entry.id }) {
-            try? await repository.updateEntry(entry)
+            await write("save the card") { try await repository.updateEntry(entry) }
         } else {
-            try? await repository.addEntry(entry)
+            await write("save the card") { try await repository.addEntry(entry) }
         }
     }
 
     /// Batch add (CSV import) — one repository write + one stream notification for the whole
     /// set, instead of N round trips through `saveEntry`.
-    func addEntries(_ entries: [CollectionEntry]) async { try? await repository.addEntries(entries) }
+    func addEntries(_ entries: [CollectionEntry]) async {
+        await write("import the cards") { try await repository.addEntries(entries) }
+    }
 
     func moveEntry(_ entry: CollectionEntry, toGroup groupId: String) async {
         var moved = entry
@@ -178,7 +208,9 @@ final class CollectionModel {
         await saveEntry(moved)
     }
 
-    func deleteEntry(id: String) async { try? await repository.deleteEntry(id: id) }
+    func deleteEntry(id: String) async {
+        await write("remove the card") { try await repository.deleteEntry(id: id) }
+    }
 
     /// Commit a scanned draft into the owned collection. Returns false on write failure so the
     /// caller can keep the draft in staging and let the user retry. `.tin` = ungrouped (groupId "").
@@ -244,6 +276,7 @@ struct CollectionView: View {
     @State private var editMode: EditMode = .inactive
     @State private var printRequest: PrintSheetRequest?
     @State private var showingReport = false
+    @State private var deletingGroup: CardGroup?
 
     /// How many cards a riffle row spreads before collapsing into "+N".
     private static let riffleLimit = 7
@@ -315,6 +348,24 @@ struct CollectionView: View {
                 renameGroupName = ""
             }
         }
+        .confirmationDialog(
+            "Delete “\(deletingGroup?.name ?? "")”?",
+            isPresented: Binding(get: { deletingGroup != nil },
+                                 set: { if !$0 { deletingGroup = nil } }),
+            titleVisibility: .visible,
+            presenting: deletingGroup
+        ) { group in
+            let n = model.entries(in: group.id).cardCount
+            Button(n == 0 ? "Delete divider" : "Delete divider and \(n) \(n == 1 ? "card" : "cards")",
+                   role: .destructive) {
+                Task { await model.deleteGroup(id: group.id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { group in
+            let n = model.entries(in: group.id).cardCount
+            Text(n == 0 ? "This divider is empty."
+                        : "Its \(n) \(n == 1 ? "card" : "cards") will be removed from your tin too. This can't be undone.")
+        }
         .navigationDestination(for: TinPagerRoute.self) { route in
             GroupPagerView(model: model, store: store, groupId: route.groupId)
         }
@@ -384,7 +435,7 @@ struct CollectionView: View {
                 Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
                     label: { Label("Print sheet…", systemImage: "printer") }
                     .disabled(model.entries(in: group.id).isEmpty)
-                Button(role: .destructive) { Task { await model.deleteGroup(id: group.id) } }
+                Button(role: .destructive) { deletingGroup = group }
                     label: { Label("Delete divider", systemImage: "trash") }
             }
     }

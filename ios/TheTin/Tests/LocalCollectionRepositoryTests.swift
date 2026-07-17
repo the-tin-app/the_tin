@@ -71,6 +71,33 @@ final class LocalCollectionRepositoryTests: XCTestCase {
         XCTAssertEqual(entries.first(where: { $0.id == "e2" })?.groupId, "")
     }
 
+    /// A failed disk write must roll the mutation back and throw — in-memory state (and the
+    /// streams) never show an entry that wouldn't survive a relaunch.
+    func testFailedPersistRollsBackAndThrows() async throws {
+        let paths = try tempPaths()
+        let repo = LocalCollectionRepository(paths: paths)
+        try await repo.addEntry(CollectionEntry(id: "kept", cardId: "ex6-58", groupId: "", qty: 1,
+                                                condition: nil, grade: nil, pricePaid: nil,
+                                                acquiredAt: nil, acquiredFrom: nil,
+                                                addedAt: Date(), variant: nil))
+
+        // Make the next persist fail: replace the file with a directory so the atomic write
+        // can't land.
+        try FileManager.default.removeItem(at: paths.fileURL)
+        try FileManager.default.createDirectory(at: paths.fileURL, withIntermediateDirectories: false)
+
+        do {
+            try await repo.addEntry(CollectionEntry(id: "lost", cardId: "ex6-58", groupId: "", qty: 1,
+                                                    condition: nil, grade: nil, pricePaid: nil,
+                                                    acquiredAt: nil, acquiredFrom: nil,
+                                                    addedAt: Date(), variant: nil))
+            XCTFail("expected addEntry to throw when the disk write fails")
+        } catch {}
+
+        let entries = await firstValue(repo.entriesStream()) ?? []
+        XCTAssertEqual(entries.map(\.id), ["kept"]) // rolled back, not silently kept in memory
+    }
+
     /// Batch import must land in ONE notification carrying every entry, not N notifications
     /// (a naive per-entry loop would yield a partial [1-entry] array on this first `next()`).
     func testAddEntriesNotifiesOnce() async throws {

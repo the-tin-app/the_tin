@@ -64,7 +64,7 @@ struct StreamView: View {
                 NavigationStack {
                     EntryFormView(card: card, groups: collection.groups, existing: nil,
                                   onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
-                        Task { await collection.saveEntry(entry) }
+                        await collection.saveEntry(entry)
                     }
                 }
             }

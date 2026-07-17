@@ -15,6 +15,13 @@ final class WantsModel {
     func toggle(_ cardId: String) {
         let next = !wanted.contains(cardId)
         if next { wanted.insert(cardId) } else { wanted.remove(cardId) }   // optimistic
-        Task { try? await repo.setWanted(uid: uid, cardId: cardId, wanted: next) }
+        Task {
+            do { try await repo.setWanted(uid: uid, cardId: cardId, wanted: next) }
+            catch {
+                // Write failed — snap the heart back so the UI never shows a wish that
+                // wasn't saved. (The stream would eventually correct it; this is immediate.)
+                if next { wanted.remove(cardId) } else { wanted.insert(cardId) }
+            }
+        }
     }
 }
