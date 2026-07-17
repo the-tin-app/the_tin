@@ -113,7 +113,7 @@ struct SetDetailView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
+                    Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
                 }
             }
         }

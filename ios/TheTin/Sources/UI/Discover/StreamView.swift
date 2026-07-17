@@ -21,6 +21,7 @@ struct StreamView: View {
     @State private var sheetCard: CardRecord?
     @State private var prefetcher = CardImagePrefetcher()
     @State private var wantBump = 0 // bumped on each double-tap to fire the haptic
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -128,21 +129,34 @@ struct StreamView: View {
         .foregroundStyle(.tertiary)
         .padding(.horizontal, 12)
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
+    /// A real button (not just a double-tap echo): the only VoiceOver-reachable Want control
+    /// on this screen, and the visible affordance for everyone else. Double tap stays as the
+    /// power-user shortcut.
     @ViewBuilder
     private func heart(for card: CardRecord) -> some View {
         if let wants {
-            Image(systemName: wants.isWanted(card.id) ? "heart.fill" : "heart")
-                .font(.title2)
-                .foregroundStyle(wants.isWanted(card.id) ? .red : .secondary)
-                .padding(8)
-                .background(.thinMaterial, in: Circle())
-                .padding(12)
-                .allowsHitTesting(false)
-                // Pops the heart when this card's want-state flips (add or remove).
-                .symbolEffect(.bounce, value: wants.isWanted(card.id))
-                .animation(.snappy, value: wants.isWanted(card.id))
+            Button {
+                wants.toggle(card.id)
+                wantBump += 1
+            } label: {
+                Image(systemName: wants.isWanted(card.id) ? "heart.fill" : "heart")
+                    .font(.title2)
+                    .foregroundStyle(wants.isWanted(card.id) ? .red : .secondary)
+                    .padding(8)
+                    .background(.thinMaterial, in: Circle())
+                    // Pops the heart when this card's want-state flips (add or remove).
+                    // Reduce Motion: value pinned false, so the bounce never triggers.
+                    .symbolEffect(.bounce, value: reduceMotion ? false : wants.isWanted(card.id))
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(12)
+            .animation(reduceMotion ? nil : .snappy, value: wants.isWanted(card.id))
+            .accessibilityLabel(wants.isWanted(card.id) ? "Remove from wishlist" : "Add to wishlist")
         }
     }
 }

@@ -102,7 +102,6 @@ struct SettingsView: View {
                 ForEach(Appearance.allCases, id: \.self) { Text($0.label) }
             }
             LabeledContent("Version", value: Self.appVersion)
-            LabeledContent("Bundle", value: Bundle.main.bundleIdentifier ?? "—")
         }
     }
 

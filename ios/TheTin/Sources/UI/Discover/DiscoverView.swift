@@ -150,9 +150,12 @@ private struct DiscoverTile: View {
                     Image(systemName: wants.isWanted(card.id) ? "heart.fill" : "heart")
                         .padding(6)
                         .background(.thinMaterial, in: Circle())
+                        // Visual stays a small badge; the hit target meets the 44 pt floor.
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
-                .padding(4)
+                .accessibilityLabel(wants.isWanted(card.id) ? "Remove from wishlist" : "Add to wishlist")
             }
         }
     }

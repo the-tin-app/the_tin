@@ -78,11 +78,13 @@ struct CollectionValueView: View {
 }
 
 /// "▲ 4.2%" / "▼ 1.3%", green/red — same glyphs GroupPagerView's delta row uses.
+/// VoiceOver reads the triangle literally ("black up-pointing triangle"), so spell it out.
 struct DeltaText: View {
     let delta: Double
     var body: some View {
         Text("\(delta >= 0 ? "▲" : "▼") \(abs(delta), format: .percent.precision(.fractionLength(1)))")
             .foregroundStyle(delta >= 0 ? .green : .red)
+            .accessibilityLabel("\(delta >= 0 ? "Up" : "Down") \(abs(delta).formatted(.percent.precision(.fractionLength(1)))) this week")
     }
 }
 
@@ -156,6 +158,7 @@ struct RectangularView: View {
                 if let d = snap.delta7d {
                     Text("\(d >= 0 ? "▲" : "▼") \(abs(d), format: .percent.precision(.fractionLength(1)))")
                         .font(.caption2.weight(.semibold))
+                        .accessibilityLabel("\(d >= 0 ? "Up" : "Down") \(abs(d).formatted(.percent.precision(.fractionLength(1)))) this week")
                 }
             }
             .privacySensitive()
