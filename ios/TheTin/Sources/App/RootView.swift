@@ -77,7 +77,10 @@ private struct MainTabView: View {
 
             NavigationStack(path: $tinPath) {
                 CollectionView(model: collection, store: store, wants: wants,
-                               onGetStarted: { selection = $0 == .scan ? .scan : .browse })
+                               onGetStarted: { selection = $0 == .scan ? .scan : .browse },
+                               openAsList: { id in
+                                   if let id { tinPath.append(id) } else { tinPath.append(TinAllCardsRoute()) }
+                               })
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { showingSettings = true } label: {
@@ -162,6 +165,7 @@ private struct FundingBanner: ViewModifier {
 /// downloading — never for the sub-second already-current check, see
 /// `CatalogUpdater.ensureLatest(onProgress:)`. Byte-accurate % against the manifest's sizeBytes.
 private struct UpdateToast: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let progress: Double
 
     var body: some View {
@@ -174,7 +178,7 @@ private struct UpdateToast: View {
             }
             .font(.caption.weight(.semibold))
             ProgressView(value: progress)
-                .animation(.linear(duration: 0.2), value: progress)
+                .animation(reduceMotion ? nil : .linear(duration: 0.2), value: progress)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)

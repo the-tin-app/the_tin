@@ -45,6 +45,13 @@ struct GroupPagerView: View {
                   let i = entries.firstIndex(where: { $0.id == new }) else { return }
             AccessibilityNotification.Announcement("Card \(i + 1) of \(entries.count)").post()
         }
+        // Deleting the visible card leaves pageId on a removed id (capsule vanishes, scroll
+        // landing undefined) — land on the card that slid into its slot, else the last one.
+        .onChange(of: entries.map(\.id)) { old, new in
+            guard let current = pageId, current != "summary", !new.contains(current) else { return }
+            let i = old.firstIndex(of: current) ?? 0
+            pageId = i < new.count ? new[i] : (new.last ?? "summary")
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .bottom) { positionLabel }

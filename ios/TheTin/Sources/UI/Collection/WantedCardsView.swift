@@ -25,7 +25,7 @@ struct WantedCardsView: View {
                     Label {
                         Text("Your wishlist is empty")
                     } icon: {
-                        Image(systemName: "heart").foregroundStyle(.secondary)
+                        Image(systemName: "heart").foregroundStyle(.pink)
                     }
                 } description: {
                     Text("Tap the heart on any card to start hunting for it here.")
