@@ -118,13 +118,18 @@ struct PortfolioView: View {
         let now = pts.last?.value ?? 0
         let start = pts.first?.value ?? 0
         let delta = now - start
-        return HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(now, format: .currency(code: "USD").precision(.fractionLength(now < 1000 ? 2 : 0)))
-                .font(.system(.largeTitle, design: .rounded).weight(.bold))
-                .contentTransition(.numericText())
-            Text(signed(delta) + (start > 0 ? String(format: " (%+.1f%%)", delta / start * 100) : ""))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(delta >= 0 ? .green : .red)
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(now, format: .currency(code: "USD").precision(.fractionLength(now < 1000 ? 2 : 0)))
+                    .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                Text(signed(delta) + (start > 0 ? String(format: " (%+.1f%%)", delta / start * 100) : ""))
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(delta >= 0 ? .green : .red)
+            }
+            if let asOf = model.priceAsOf { AsOfLabel(date: asOf) }
         }
     }
 
@@ -151,7 +156,7 @@ struct PortfolioView: View {
     private func statCard(label: String, value: String, tint: Color) -> some View {
         VStack(spacing: 3) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
-            Text(value).font(.subheadline.weight(.semibold)).foregroundStyle(tint)
+            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(tint)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
@@ -177,8 +182,10 @@ struct PortfolioView: View {
                         Spacer()
                         Text(now, format: .currency(code: "USD").precision(.fractionLength(0)))
                             .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
                         Text(signed(delta))
                             .font(.caption.weight(.medium))
+                            .monospacedDigit()
                             .foregroundStyle(delta >= 0 ? .green : .red)
                             .frame(minWidth: 64, alignment: .trailing)
                         Image(systemName: "chevron.right")

@@ -16,7 +16,7 @@ struct PriceLabel: View {
 
     var body: some View {
         if let value {
-            Text(value, format: .currency(code: "USD")).font(.caption.bold())
+            Text(value, format: .currency(code: "USD")).font(.caption.bold()).monospacedDigit()
         } else {
             Text("no data").font(.caption).foregroundStyle(.secondary)
         }

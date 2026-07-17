@@ -67,6 +67,7 @@ struct GroupPagerView: View {
                         .multilineTextAlignment(.center)
                     Text(stat.total, format: .currency(code: "USD"))
                         .font(.system(.title, design: .rounded).weight(.bold))
+                        .monospacedDigit()
                         .contentTransition(.numericText())
                     Text("\(entries.cardCount) \(entries.cardCount == 1 ? "card" : "cards") · \(stat.pricedEntries) priced")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -168,17 +169,23 @@ private struct EntryCardPage: View {
                     if let value {
                         Text(value, format: .currency(code: "USD"))
                             .font(.system(.title, design: .rounded).weight(.bold))
+                            .monospacedDigit()
                     } else {
                         Text("No price data").font(.title3).foregroundStyle(.secondary)
                     }
                     if let paid = entry.pricePaid {
                         paidDelta(paid: paid)
                     }
+                    if value != nil, let asOf = model.priceAsOf {
+                        AsOfLabel(date: asOf)
+                    }
                 }
 
                 if history.count > 1 {
                     VStack(alignment: .leading, spacing: 4) {
-                        Sparkline(points: history, color: accent)
+                        // Accent blue, not the divider pastel: the raw-market series keeps one
+                        // color everywhere (it's blue in PriceHistoryChart too).
+                        Sparkline(points: history, color: .accentColor)
                             .frame(height: 56)
                         if let first = history.first?.date, let last = history.last?.date {
                             // Date-range caption instead of axis marks — keeps the sparkline bare
@@ -223,11 +230,17 @@ private struct EntryCardPage: View {
                 .foregroundStyle(.secondary)
             if let value {
                 let delta = value - paid
-                Text("\(delta >= 0 ? "▲" : "▼") \(abs(delta), format: .currency(code: "USD"))")
-                    .foregroundStyle(delta >= 0 ? .green : .red)
+                HStack(spacing: 2) {
+                    Image(systemName: delta >= 0 ? "arrow.up" : "arrow.down").font(.caption2.bold())
+                    Text(abs(delta), format: .currency(code: "USD"))
+                }
+                .foregroundStyle(delta >= 0 ? .green : .red)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(delta >= 0 ? "up" : "down") \(abs(delta).formatted(.currency(code: "USD"))) since you bought it")
             }
         }
         .font(.caption.weight(.medium))
+        .monospacedDigit()
     }
 
     private var menu: some View {
@@ -249,7 +262,10 @@ private struct EntryCardPage: View {
                 label: { Label("Remove from tin", systemImage: "trash") }
         } label: {
             Image(systemName: "ellipsis.circle").font(.title3)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
+        .accessibilityLabel("Entry actions")
     }
 }
 

@@ -89,6 +89,9 @@ final class CollectionModel {
                               variantsByCard: variantsByCard, conditionsByCard: conditionsByCard)
     }
 
+    /// The catalog's price date — prices always carry their as-of stamp (Caption Ledger Rule).
+    var priceAsOf: String? { try? store.priceAsOf() }
+
     /// One snapshot per tin-total recompute — the same numbers the Collection header shows,
     /// plus 7-day movement from the portfolio series when history data exists (average/expert
     /// tier; empty history ⇒ value-only snapshot, widget hides the Δ row and sparkline — gated
@@ -279,6 +282,7 @@ struct CollectionView: View {
     @State private var deletingGroup: CardGroup?
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// cardId → name for search filtering (reference type: filled during body evaluation).
     private final class NameCache { var names: [String: String] = [:] }
     @State private var nameCache = NameCache()
@@ -315,14 +319,13 @@ struct CollectionView: View {
         .toolbar {
             if model.groups.count > 1 {
                 Button {
-                    withAnimation { editMode = editMode == .active ? .inactive : .active }
+                    let next: EditMode = editMode == .active ? .inactive : .active
+                    if reduceMotion { editMode = next } else { withAnimation { editMode = next } }
                 } label: {
                     Image(systemName: editMode == .active ? "checkmark" : "arrow.up.arrow.down")
                 }
                 .accessibilityLabel(editMode == .active ? "Done reordering" : "Reorder dividers")
             }
-            Button { showingNewGroup = true } label: { Image(systemName: "plus") }
-                .accessibilityLabel("New divider")
             Menu {
                 Button { showingReport = true }
                     label: { Label("Collection report (PDF)", systemImage: "doc.text") }
@@ -416,6 +419,7 @@ struct CollectionView: View {
             HStack(spacing: 4) {
                 Text(v.total, format: WidgetShared.tinCurrency(v.total))
                     .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                    .monospacedDigit()
                     .contentTransition(.numericText())
                 Image(systemName: "chevron.right")
                     .font(.body.weight(.semibold)).foregroundStyle(.tertiary)
@@ -426,6 +430,9 @@ struct CollectionView: View {
                  ? "Your tin is empty — scan a card or browse a set to add your first."
                  : "\(model.entries.cardCount) cards in your tin · \(v.pricedEntries) of \(v.totalEntries) priced")
                 .font(.footnote).foregroundStyle(.secondary)
+            if !model.entries.isEmpty, let asOf = model.priceAsOf {
+                AsOfLabel(date: asOf)
+            }
         }
         .padding(.bottom, 6)
     }
@@ -569,6 +576,8 @@ struct TinRiffleRow: View {
             tab
             tray
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(name), \(count) \(count == 1 ? "card" : "cards"), \(value.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
     }
 
     private var tab: some View {
@@ -591,6 +600,7 @@ struct TinRiffleRow: View {
                     .font(.caption2).foregroundStyle(.secondary)
                 Text(value, format: .currency(code: "USD").precision(.fractionLength(0)))
                     .font(.system(.subheadline, design: .rounded).weight(.bold))
+                    .monospacedDigit()
             }
             riffle
         }

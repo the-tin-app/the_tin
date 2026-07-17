@@ -32,6 +32,11 @@ struct WantedCardsView: View {
                 }
             } else {
                 ScrollView {
+                    if let asOf = try? store.priceAsOf() {
+                        AsOfLabel(date: asOf)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal).padding(.top, 8)
+                    }
                     LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(cards) { card in
                             NavigationLink(value: CardID(raw: card.id)) {
@@ -39,7 +44,8 @@ struct WantedCardsView: View {
                                     CardImageView(card: card, quality: "low")
                                     Text(card.name).font(.caption).lineLimit(1)
                                     if let usd = prices[card.id]?.rawUsd {
-                                        Text(usd, format: .currency(code: "USD")).font(.caption2)
+                                        Text(usd, format: .currency(code: "USD"))
+                                            .font(.caption2).monospacedDigit()
                                     }
                                 }
                             }

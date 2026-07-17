@@ -11,5 +11,8 @@ struct CardBadges: View {
         .font(.caption2)
         .padding(3)
         .background(.ultraThinMaterial, in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([owned ? "In your tin" : nil, wanted ? "On your wishlist" : nil]
+            .compactMap(\.self).joined(separator: ", "))
     }
 }

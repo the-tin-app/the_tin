@@ -137,14 +137,17 @@ struct CardDetailView: View {
                             if let printing = currentPrinting {
                                 Text(printing.usd, format: .currency(code: "USD"))
                                     .font(.system(.title, design: .rounded).weight(.bold))
+                                    .monospacedDigit()
                                 Text("\(printing.printing) · market").font(.caption).foregroundStyle(.secondary)
                             } else if let raw = price.rawUsd {
                                 Text(raw, format: .currency(code: "USD"))
                                     .font(.system(.title, design: .rounded).weight(.bold))
+                                    .monospacedDigit()
                                 Text("raw market").font(.caption).foregroundStyle(.secondary)
                             } else if let nm = model.conditions.first(where: { $0.condition == .nearMint })?.usd {
                                 Text(nm, format: .currency(code: "USD"))
                                     .font(.system(.title, design: .rounded).weight(.bold))
+                                    .monospacedDigit()
                                 Text("NM · near mint market").font(.caption).foregroundStyle(.secondary)
                             } else {
                                 Text("No raw price").font(.title3).foregroundStyle(.secondary)
@@ -241,11 +244,14 @@ struct CardDetailView: View {
                 Button { wants.toggle(model.card.id) } label: {
                     Image(systemName: wants.isWanted(model.card.id) ? "heart.fill" : "heart")
                 }
+                .accessibilityLabel(wants.isWanted(model.card.id)
+                                    ? "Remove from wishlist" : "Add to wishlist")
             }
         }
         if collection != nil {
             ToolbarItem {
                 Button { showingAddSheet = true } label: { Image(systemName: "plus.square.on.square") }
+                    .accessibilityLabel("Save to collection")
             }
         }
         ToolbarItemGroup(placement: .keyboard) {
@@ -342,7 +348,8 @@ struct CardDetailView: View {
                 HStack {
                     Text("Expected graded value").font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Text(roi.ev, format: .currency(code: "USD")).font(.caption.weight(.semibold))
+                    Text(roi.ev, format: .currency(code: "USD"))
+                        .font(.caption.weight(.semibold)).monospacedDigit()
                 }
                 if let gem = roi.gemRate {
                     HStack {
@@ -429,7 +436,8 @@ private struct PriceTile: View {
         VStack(spacing: 2) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
             if let value {
-                Text(value, format: .currency(code: "USD")).font(.subheadline.weight(.semibold))
+                Text(value, format: .currency(code: "USD"))
+                    .font(.subheadline.weight(.semibold)).monospacedDigit()
             } else {
                 Text("—").font(.subheadline).foregroundStyle(.secondary)
             }

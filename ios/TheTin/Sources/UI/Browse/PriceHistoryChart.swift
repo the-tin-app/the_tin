@@ -117,12 +117,16 @@ struct PriceHistoryChart: View {
             }
         }
         .chartXSelection(value: $selectedDate)
+        // Don't anchor the Y axis at zero: a $400 card wobbling ±$20 charts as a flat line
+        // otherwise (the pager sparkline already clips the same way).
+        .chartYScale(domain: .automatic(includesZero: false))
         .chartYAxis {
             AxisMarks { value in
                 AxisGridLine()
                 AxisValueLabel {
                     if let v = value.as(Double.self) {
                         Text(v, format: .currency(code: "USD").precision(.fractionLength(0)))
+                            .monospacedDigit()
                     }
                 }
             }
@@ -138,6 +142,7 @@ struct PriceHistoryChart: View {
                 HStack(spacing: 4) {
                     if sel.values.count > 1 { Circle().fill(v.color).frame(width: 6, height: 6) }
                     Text(v.value, format: .currency(code: "USD")).font(.caption.weight(.semibold))
+                        .monospacedDigit()
                         .foregroundStyle(.primary)
                 }
             }
