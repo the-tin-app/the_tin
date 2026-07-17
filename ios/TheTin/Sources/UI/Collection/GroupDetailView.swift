@@ -65,10 +65,15 @@ struct GroupDetailView: View {
                 searchResults
             }
         }
-        .searchable(text: $searchText, prompt: group == nil ? "Search your tin" : "Search this divider")
+        .searchable(text: $searchText, prompt: group == nil ? "Search your tin by card name" : "Search this divider")
         .navigationTitle(group?.name ?? "Everything")
         .toolbar {
-            Toggle("Sort by value", isOn: $sortByValue)
+            Menu {
+                Picker("Sort", selection: $sortByValue) {
+                    Text("Newest first").tag(false)
+                    Text("Highest value").tag(true)
+                }
+            } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
             if let group {
                 Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
                     label: { Label("Print sheet…", systemImage: "printer") }
@@ -153,7 +158,7 @@ struct GroupDetailView: View {
         }
         .buttonStyle(.plain)
         .swipeActions {
-            Button("Delete", role: .destructive) { deletingEntry = entry }
+            Button("Remove", role: .destructive) { deletingEntry = entry }
         }
     }
 

@@ -83,7 +83,7 @@ struct EntryFormView: View {
                 TextField("Acquired from (shop, show, trade…)", text: $acquiredFrom)
             }
         }
-        .navigationTitle(existing == nil ? "Save to collection" : "Edit entry")
+        .navigationTitle(existing == nil ? "Save to tin" : "Edit entry")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }

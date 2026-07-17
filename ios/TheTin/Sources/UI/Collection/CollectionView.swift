@@ -320,7 +320,7 @@ struct CollectionView: View {
             }
         }
         .listStyle(.plain)
-        .searchable(text: $searchText, prompt: "Search your tin")
+        .searchable(text: $searchText, prompt: "Search your tin by card name")
         .environment(\.editMode, $editMode)
         .printSheetFlow($printRequest)
         .collectionReportFlow(isActive: $showingReport, collection: model, store: store)
@@ -567,8 +567,9 @@ struct CollectionView: View {
         .buttonStyle(.plain)
     }
 
-    /// Whole-collection search: "do I own this?" answered from the Tin root. Rows carry the
-    /// divider the copy lives behind; tap opens the entry editor.
+    /// Whole-tin search: "do I own this?" answered from the Tin root — a card-shop moment,
+    /// so tap shows the card (art + price); editing is the deliberate second gesture
+    /// (leading swipe / context menu). Rows carry the divider the copy lives behind.
     @ViewBuilder private var searchResults: some View {
         let matches = model.entries
             .filter { cardName($0).localizedCaseInsensitiveContains(searchText) }
@@ -581,7 +582,7 @@ struct CollectionView: View {
             }
         } else {
             ForEach(matches) { entry in
-                Button { editingEntry = entry } label: {
+                NavigationLink(value: CardID(raw: entry.cardId)) {
                     CollectionEntryRow(
                         card: try? store.card(id: entry.cardId),
                         entry: entry,
@@ -590,14 +591,14 @@ struct CollectionView: View {
                                                      variants: model.variantsByCard[entry.cardId] ?? [],
                                                      conditions: model.conditionsByCard[entry.cardId] ?? []))
                 }
-                .buttonStyle(.plain)
                 .swipeActions {
-                    Button("Delete", role: .destructive) { deletingEntry = entry }
+                    Button("Remove", role: .destructive) { deletingEntry = entry }
+                }
+                .swipeActions(edge: .leading) {
+                    Button { editingEntry = entry } label: { Label("Edit", systemImage: "pencil") }
                 }
                 .contextMenu {
-                    NavigationLink(value: CardID(raw: entry.cardId)) {
-                        Label("Card details", systemImage: "info.circle")
-                    }
+                    Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
                 }
             }
         }
