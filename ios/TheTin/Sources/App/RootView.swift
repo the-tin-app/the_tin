@@ -76,7 +76,8 @@ private struct MainTabView: View {
             .tag(Tab.search)
 
             NavigationStack(path: $tinPath) {
-                CollectionView(model: collection, store: store, wants: wants)
+                CollectionView(model: collection, store: store, wants: wants,
+                               onGetStarted: { selection = $0 == .scan ? .scan : .browse })
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { showingSettings = true } label: {
