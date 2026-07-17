@@ -44,11 +44,7 @@ struct GroupDetailView: View {
     @State private var printRequest: PrintSheetRequest?
     @State private var deletingEntry: CollectionEntry?
     var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
-    /// cardId → name, filled lazily while filtering so a search over 800 entries doesn't
-    /// re-query the catalog per keystroke. A reference type so filling it during body
-    /// evaluation isn't a state mutation.
-    private final class NameCache { var names: [String: String] = [:] }
-    @State private var nameCache = NameCache()
+    @State private var searchIndex = CardSearchIndex()
 
     var body: some View {
         List {
@@ -70,7 +66,7 @@ struct GroupDetailView: View {
                 searchResults
             }
         }
-        .searchable(text: $searchText, prompt: group == nil ? "Search your tin by card name" : "Search this divider")
+        .searchable(text: $searchText, prompt: group == nil ? "Search by name, set, or number" : "Search this divider")
         .navigationTitle(group?.name ?? "Everything")
         .toolbar {
             Menu {
@@ -86,7 +82,7 @@ struct GroupDetailView: View {
             }
         }
         .printSheetFlow($printRequest)
-        .onChange(of: model.catalogGeneration) { nameCache.names.removeAll() }
+        .onChange(of: model.catalogGeneration) { searchIndex.clear() }
         .confirmationDialog(
             "Remove \((try? store.card(id: deletingEntry?.cardId ?? ""))?.name ?? "this card") from your tin?",
             isPresented: Binding(get: { deletingEntry != nil },
@@ -160,10 +156,10 @@ struct GroupDetailView: View {
     }
 
     @ViewBuilder private var searchResults: some View {
-        let matches = scope.filter { cardName($0).localizedCaseInsensitiveContains(searchText) }
+        let matches = scope.filter { searchIndex.matches($0, query: searchText, store: store) }
         if matches.isEmpty {
             ContentUnavailableView {
-                Label("No cards named “\(searchText)” here", systemImage: "magnifyingglass")
+                Label("No matches for “\(searchText)” here", systemImage: "magnifyingglass")
             } description: {
                 Text("Your tin only searches cards you own — the Search tab covers the whole catalog.")
             }
@@ -204,9 +200,6 @@ struct GroupDetailView: View {
     }
 
     private func cardName(_ entry: CollectionEntry) -> String {
-        if let cached = nameCache.names[entry.cardId] { return cached }
-        let name = (try? store.card(id: entry.cardId))?.name ?? entry.cardId
-        nameCache.names[entry.cardId] = name
-        return name
+        searchIndex.name(for: entry, store: store)
     }
 }

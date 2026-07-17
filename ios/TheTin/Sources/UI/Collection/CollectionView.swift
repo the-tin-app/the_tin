@@ -244,6 +244,50 @@ final class CollectionModel {
 
 struct TinAllCardsRoute: Hashable {}
 
+/// cardId → searchable text ("name · set name · set id · number"), filled lazily while
+/// filtering so a search over 800 entries doesn't re-query the catalog per keystroke.
+/// A reference type so filling it during body evaluation isn't a state mutation.
+/// Shared by CollectionView and GroupDetailView; cleared on catalog swap.
+final class CardSearchIndex {
+    private var haystacks: [String: String] = [:]
+    private var names: [String: String] = [:]
+
+    func name(for entry: CollectionEntry, store: CatalogStore) -> String {
+        if let cached = names[entry.cardId] { return cached }
+        let name = (try? store.card(id: entry.cardId))?.name ?? entry.cardId
+        names[entry.cardId] = name
+        return name
+    }
+
+    /// Every query token must appear somewhere in the haystack, so "151", "swsh7 215",
+    /// and "brilliant stars charizard" all land.
+    func matches(_ entry: CollectionEntry, query: String, store: CatalogStore) -> Bool {
+        Self.tokenMatch(haystack: haystack(for: entry, store: store), query: query)
+    }
+
+    static func tokenMatch(haystack: String, query: String) -> Bool {
+        query.split(whereSeparator: \.isWhitespace)
+            .allSatisfy { haystack.localizedCaseInsensitiveContains($0) }
+    }
+
+    private func haystack(for entry: CollectionEntry, store: CatalogStore) -> String {
+        if let cached = haystacks[entry.cardId] { return cached }
+        var parts = [entry.cardId]
+        if let card = try? store.card(id: entry.cardId) {
+            parts.append(contentsOf: [card.name, card.setId, card.number])
+            if let set = try? store.set(id: card.setId) { parts.append(set.name) }
+        }
+        let hay = parts.joined(separator: " ")
+        haystacks[entry.cardId] = hay
+        return hay
+    }
+
+    func clear() {
+        haystacks.removeAll()
+        names.removeAll()
+    }
+}
+
 /// Route to a group's swipeable pager. nil groupId = the whole tin ("Everything").
 struct TinPagerRoute: Hashable { let groupId: String? }
 
@@ -297,9 +341,7 @@ struct CollectionView: View {
     @State private var editingEntry: CollectionEntry?
     @State private var deletingEntry: CollectionEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// cardId → name for search filtering (reference type: filled during body evaluation).
-    private final class NameCache { var names: [String: String] = [:] }
-    @State private var nameCache = NameCache()
+    @State private var searchIndex = CardSearchIndex()
 
     /// How many cards a riffle row spreads before collapsing into "+N".
     private static let riffleLimit = 7
@@ -324,7 +366,7 @@ struct CollectionView: View {
             }
         }
         .listStyle(.plain)
-        .searchable(text: $searchText, prompt: "Search your tin by card name")
+        .searchable(text: $searchText, prompt: "Search by name, set, or number")
         .environment(\.editMode, $editMode)
         .printSheetFlow($printRequest)
         .collectionReportFlow(isActive: $showingReport, collection: model, store: store)
@@ -442,7 +484,7 @@ struct CollectionView: View {
                                store: store, collection: model, wants: wants)
             }
         }
-        .onChange(of: model.catalogGeneration) { nameCache.names.removeAll() }
+        .onChange(of: model.catalogGeneration) { searchIndex.clear() }
     }
 
     private var header: some View {
@@ -576,13 +618,13 @@ struct CollectionView: View {
     /// (leading swipe / context menu). Rows carry the divider the copy lives behind.
     @ViewBuilder private var searchResults: some View {
         let matches = model.entries
-            .filter { cardName($0).localizedCaseInsensitiveContains(searchText) }
+            .filter { searchIndex.matches($0, query: searchText, store: store) }
             .sorted { $0.addedAt > $1.addedAt }
         if matches.isEmpty {
             ContentUnavailableView {
-                Label("No cards named “\(searchText)” in your tin", systemImage: "magnifyingglass")
+                Label("No matches for “\(searchText)” in your tin", systemImage: "magnifyingglass")
             } description: {
-                Text("This only searches cards you own — the Search tab covers the whole catalog.")
+                Text("Searches cards you own by name, set, and number — the Search tab covers the whole catalog.")
             }
         } else {
             ForEach(matches) { entry in
@@ -614,10 +656,7 @@ struct CollectionView: View {
     }
 
     private func cardName(_ entry: CollectionEntry) -> String {
-        if let cached = nameCache.names[entry.cardId] { return cached }
-        let name = (try? store.card(id: entry.cardId))?.name ?? entry.cardId
-        nameCache.names[entry.cardId] = name
-        return name
+        searchIndex.name(for: entry, store: store)
     }
 
     private func wishlistLink(_ wants: WantsModel) -> some View {
