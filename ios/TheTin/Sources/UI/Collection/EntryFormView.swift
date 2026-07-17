@@ -58,12 +58,12 @@ struct EntryFormView: View {
                     }
                 }
                 // A graded card's condition IS its grade — the raw-condition picker only
-                // applies (and only shows) when the copy is raw.
+                // applies (and only shows) when the copy is raw. Always all five conditions:
+                // condition is a fact about the user's copy, not the catalog (2026-07-17) —
+                // an unpriced pick just shows "no data" (PR #20 honesty rules).
                 if grade == nil {
                     Picker("Condition", selection: $condition) {
-                        ForEach(Self.validConditions(catalog: conditions, current: existing?.conditionValue)) {
-                            Text(conditionLabel($0)).tag($0)
-                        }
+                        ForEach(CardCondition.allCases) { Text(conditionLabel($0)).tag($0) }
                     }
                 }
                 Picker("Grade", selection: $grade) {
@@ -119,15 +119,6 @@ struct EntryFormView: View {
         let backed = CardVariant.allCases.filter { v in catalog.contains { v.matches(printing: $0.printing) } }
         guard !backed.isEmpty else { return CardVariant.allCases }
         return CardVariant.allCases.filter { backed.contains($0) || $0 == current }
-    }
-
-    /// Same rule for conditions over `price_by_condition` rows; NM is always offered (it's the
-    /// baseline every raw price implies). Empty condition data ⇒ the full list.
-    static func validConditions(catalog: [ConditionPrice], current: CardCondition?) -> [CardCondition] {
-        guard !catalog.isEmpty else { return CardCondition.allCases }
-        return CardCondition.allCases.filter { c in
-            c == .nm || c == current || catalog.contains { $0.condition == c.catalog }
-        }
     }
 
     /// "Reverse Holo · $140" when that printing is priced, else just the finish name.
