@@ -49,9 +49,11 @@ final class CollectionModel {
     /// The catalog artifact was swapped under the live store (daily update installed
     /// mid-session) — recompute everything cached from it.
     func catalogDidChange() {
+        catalogGeneration += 1   // views keying caches (card names) off the catalog watch this
         reloadPrices()
         publishWidgetSnapshot()
     }
+    private(set) var catalogGeneration = 0
 
     private func reloadPrices() {
         let ids = Array(Set(entries.map(\.cardId)))
@@ -276,6 +278,9 @@ struct CollectionView: View {
     let store: CatalogStore
     var wants: WantsModel? = nil
     var onGetStarted: ((GetStartedTab) -> Void)? = nil
+    /// Pushes a divider's list view (nil = the whole tin). VoiceOver's custom-action mirror
+    /// of the context menu's "Open as list" — actions can't tap the invisible NavigationLinks.
+    var openAsList: ((String?) -> Void)? = nil
     @State private var newGroupName = ""
     @State private var showingNewGroup = false
     @State private var renamingGroupId: String?
@@ -419,7 +424,9 @@ struct CollectionView: View {
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
                 NavigationStack {
-                    EntryFormView(card: card, groups: model.groups, existing: entry) { updated in
+                    EntryFormView(card: card, groups: model.groups, existing: entry,
+                                  variants: model.variantsByCard[entry.cardId] ?? [],
+                                  conditions: model.conditionsByCard[entry.cardId] ?? []) { updated in
                         await model.saveEntry(updated)
                     }
                 }
@@ -431,6 +438,7 @@ struct CollectionView: View {
                                store: store, collection: model, wants: wants)
             }
         }
+        .onChange(of: model.catalogGeneration) { nameCache.names.removeAll() }
     }
 
     private var header: some View {
@@ -450,7 +458,8 @@ struct CollectionView: View {
                 }
             }
             .background { if !isEmpty { navLink(PortfolioRoute()) } }
-            .accessibilityLabel(isEmpty ? "Tin value" : "Portfolio value history")
+            .accessibilityLabel("Tin value, \(v.total.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
+            .accessibilityHint(isEmpty ? "" : "Shows portfolio value history")
             if isEmpty {
                 Text("Your tin is empty — add your first card.")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -486,6 +495,7 @@ struct CollectionView: View {
             .contextMenu {
                 NavigationLink(value: TinAllCardsRoute()) { Label("Open as list", systemImage: "list.bullet") }
             }
+            .accessibilityAction(named: "Open as list") { openAsList?(nil) }
     }
 
     private func groupRow(_ group: CardGroup) -> some View {
@@ -516,6 +526,12 @@ struct CollectionView: View {
             // actions need explicit mirrors (activate = open, as sighted tap).
             .accessibilityAction(named: "Rename") {
                 renameGroupName = group.name; renamingGroupId = group.id
+            }
+            .accessibilityAction(named: "Open as list") { openAsList?(group.id) }
+            .accessibilityAction(named: "Print sheet") {
+                if !entries.isEmpty {
+                    printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store)
+                }
             }
             .accessibilityAction(named: "Delete divider") { deletingGroup = group }
     }

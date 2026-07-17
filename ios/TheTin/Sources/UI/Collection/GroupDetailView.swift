@@ -76,6 +76,7 @@ struct GroupDetailView: View {
             }
         }
         .printSheetFlow($printRequest)
+        .onChange(of: model.catalogGeneration) { nameCache.names.removeAll() }
         .confirmationDialog(
             "Remove \((try? store.card(id: deletingEntry?.cardId ?? ""))?.name ?? "this card") from your tin?",
             isPresented: Binding(get: { deletingEntry != nil },
@@ -89,7 +90,9 @@ struct GroupDetailView: View {
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
                 NavigationStack {
-                    EntryFormView(card: card, groups: model.groups, existing: entry) { updated in
+                    EntryFormView(card: card, groups: model.groups, existing: entry,
+                                  variants: model.variantsByCard[entry.cardId] ?? [],
+                                  conditions: model.conditionsByCard[entry.cardId] ?? []) { updated in
                         await model.saveEntry(updated)
                     }
                 }
@@ -105,7 +108,7 @@ struct GroupDetailView: View {
         Section {
             let value = group.map { model.groupValue($0.id) } ?? model.tinValue
             VStack(alignment: .leading, spacing: 4) {
-                Text(value.total, format: .currency(code: "USD")).font(.title2.bold())
+                Text(value.total, format: .currency(code: "USD")).font(.title2.bold()).monospacedDigit()
                 Text("Priced \(value.pricedEntries) of \(value.totalEntries) entries")
                     .font(.caption).foregroundStyle(.secondary)
                 if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
