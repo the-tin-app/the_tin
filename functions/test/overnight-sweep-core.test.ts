@@ -10,13 +10,15 @@ function freshDb() {
   const db = new Database(out);
   db.exec(`
     CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT, number TEXT, name TEXT, tcgplayer_id INTEGER);
-    CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL, psa3 REAL, psa7 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
+    CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL,
+      psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
+      psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
     CREATE TABLE price_history(card_id TEXT, date TEXT, raw_usd REAL NOT NULL, PRIMARY KEY(card_id,date));
   `);
   // NOTE: price_history_cond / price_by_condition intentionally NOT predefined here — the
   // sweep's own IF-NOT-EXISTS DDL must create them.
   db.prepare("INSERT INTO card VALUES ('base-4','base','4','Charizard',111)").run();
-  db.prepare("INSERT INTO price_latest VALUES ('base-4', 100, 90, NULL,NULL,NULL,NULL,'2026-07-01')").run();
+  db.prepare("INSERT INTO price_latest VALUES ('base-4', 100, 90, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'2026-07-01')").run();
   return db;
 }
 function ledger(): OvernightLedger {
@@ -48,7 +50,7 @@ const conditionPriceHistory = {
 const client = {
   getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
     priceHistory: conditionPriceHistory,
-    pricesRaw, gradedLatest: { psa10: 450 }, gradedSeries: [], ebayRaw: {} }]),
+    pricesRaw, gradedLatest: { psa10: 450, psa8: 33, cgc10: 99 }, gradedSeries: [], ebayRaw: {} }]),
   getPopulation: async () => ([{ tcgPlayerId: 111, grader: "PSA", grade: "g10", count: 5, gemRate: 100, totalPopulation: 5 }]),
 };
 const opts = { writeGradedHistory: false, populationEnabled: true, asOf: "2026-07-08" };
@@ -59,8 +61,8 @@ describe("runOvernightSweep", () => {
     const db = freshDb();
     const s = await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
     expect(s.historyRows).toBe(2);
-    const row = db.prepare("SELECT raw_usd, raw_eur, psa10 FROM price_latest WHERE card_id='base-4'").get() as any;
-    expect(row).toEqual({ raw_usd: 100, raw_eur: 90, psa10: 450 }); // raw preserved, graded added
+    const row = db.prepare("SELECT raw_usd, raw_eur, psa8, psa10 FROM price_latest WHERE card_id='base-4'").get() as any;
+    expect(row).toEqual({ raw_usd: 100, raw_eur: 90, psa8: 33, psa10: 450 }); // raw preserved, all PSA grades added (cgc dropped)
     expect(db.prepare("SELECT count FROM population WHERE card_id='base-4' AND grade='g10'").pluck().get()).toBe(5);
     // idempotent re-run of the same set (fresh ledger) does not duplicate history
     await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);

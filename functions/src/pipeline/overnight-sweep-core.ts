@@ -1,6 +1,7 @@
 // functions/src/pipeline/overnight-sweep-core.ts
 import type { Database as Db } from "better-sqlite3";
 import { normalizeNumber } from "./matcher";
+import { PSA_COLUMNS } from "./ppt-export";
 import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant } from "./ppt-history";
 import type { PptEnrichmentCard } from "../upstream/ppt";
 import type { PopulationRow } from "./ppt-population";
@@ -47,9 +48,9 @@ export async function runOvernightSweep(
 ): Promise<OvernightSummary> {
   db.exec(DDL);
   const insHist = db.prepare("INSERT OR REPLACE INTO price_history(card_id, date, raw_usd) VALUES (?,?,?)");
-  const upGraded = db.prepare(`INSERT INTO price_latest(card_id, psa3, psa7, psa9, psa10, as_of)
-    VALUES (@id,@psa3,@psa7,@psa9,@psa10,@as_of)
-    ON CONFLICT(card_id) DO UPDATE SET psa3=@psa3, psa7=@psa7, psa9=@psa9, psa10=@psa10, as_of=@as_of`);
+  const upGraded = db.prepare(`INSERT INTO price_latest(card_id, ${PSA_COLUMNS.join(", ")}, as_of)
+    VALUES (@id,${PSA_COLUMNS.map((c) => `@${c}`).join(",")},@as_of)
+    ON CONFLICT(card_id) DO UPDATE SET ${PSA_COLUMNS.map((c) => `${c}=@${c}`).join(", ")}, as_of=@as_of`);
   const insGh = db.prepare("INSERT OR REPLACE INTO graded_history(card_id, grade, date, usd) VALUES (?,?,?,?)");
   const insPop = db.prepare(`INSERT OR REPLACE INTO population(card_id, grader, grade, count, gem_rate, total_population, as_of)
     VALUES (?,?,?,?,?,?,?)`);
@@ -80,12 +81,13 @@ export async function runOvernightSweep(
         if (!m) continue;
         for (const wp of parseWeeklyHistory(pc.priceHistory)) { insHist.run(m.id, wp.date, wp.rawUsd); sum.historyRows++; }
         const g = pc.gradedLatest;
-        // gradedLatest may carry many grades (cgc/bgs/ace/...), but price_latest only has
-        // psa3/psa7/psa9/psa10 columns — gate on those alone so a card with only non-psa grades
-        // doesn't write an all-null phantom row. (The full grade set still lands in
-        // graded_history via gradedSeries below.)
-        if ([g.psa3, g.psa7, g.psa9, g.psa10].some((v) => v != null)) {
-          upGraded.run({ id: m.id, psa3: g.psa3 ?? null, psa7: g.psa7 ?? null, psa9: g.psa9 ?? null, psa10: g.psa10 ?? null, as_of: opts.asOf });
+        // gradedLatest may carry many grades (cgc/bgs/ace/...), but price_latest only stores
+        // integer PSA grades — gate on those alone so a card with only non-psa grades doesn't
+        // write an all-null phantom row. (The full grade set still lands in graded_history via
+        // gradedSeries below.)
+        const psaVals = Object.fromEntries(PSA_COLUMNS.map((c) => [c, g[c] ?? null]));
+        if (PSA_COLUMNS.some((c) => psaVals[c] != null)) {
+          upGraded.run({ id: m.id, ...psaVals, as_of: opts.asOf });
           sum.gradedRows++;
         }
         if (opts.writeGradedHistory) for (const p of pc.gradedSeries) insGh.run(m.id, p.grade, p.date, p.usd);
