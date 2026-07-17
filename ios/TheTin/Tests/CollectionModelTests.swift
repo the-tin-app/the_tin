@@ -53,7 +53,11 @@ final class CollectionModelTests: XCTestCase {
                 pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
         }
         await waitForStreams()
-        XCTAssertEqual(model.sortedEntries(in: gid, byValue: true).map(\.cardId),
+        // Value sort lives in GroupStats (the view's sort menu calls it directly).
+        XCTAssertEqual(GroupStats.sortedByValueDescending(
+                           entries: model.entries(in: gid), prices: model.prices,
+                           variantsByCard: model.variantsByCard,
+                           conditionsByCard: model.conditionsByCard).map(\.cardId),
                        ["swsh7-215", "sv1-25"])
     }
 

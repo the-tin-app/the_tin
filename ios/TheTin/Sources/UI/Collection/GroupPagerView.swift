@@ -1,14 +1,14 @@
 import SwiftUI
 import Charts
 
-/// Flip through one stack of the tin — page 0 is the divider summary, then one full-width page
-/// per owned card (art, saved printing/condition/grade, value, paid→now delta, price trend).
+/// Flip through one stack of the tin — one full-width page per owned card (art, saved
+/// printing/condition/grade, value, paid→now delta, price trend). A pure deck: the divider's
+/// summary/stats live on its list-first landing (`GroupDetailView`, 2026-07-17 UX pass).
 /// Lazy paging (`LazyHStack` + `.paging`) so a 300-card tin doesn't load 300 images up front.
 struct GroupPagerView: View {
     @Bindable var model: CollectionModel
     let store: CatalogStore
     let groupId: String?   // nil = the whole tin ("Everything")
-    var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
     @State private var editingEntry: CollectionEntry?
     @State private var pageId: String?
 
@@ -18,16 +18,9 @@ struct GroupPagerView: View {
     private var entries: [CollectionEntry] {
         groupId.map { model.entries(in: $0).sorted { $0.addedAt > $1.addedAt } } ?? model.allOwnedEntries
     }
-    private var stat: (total: Double, pricedCards: Int, totalCards: Int) {
-        groupId.map { model.groupValue($0) } ?? model.tinValue
-    }
-
     var body: some View {
         ScrollView(.horizontal) {
             LazyHStack(spacing: 0) {
-                summaryPage
-                    .containerRelativeFrame(.horizontal)
-                    .id("summary")
                 ForEach(entries) { entry in
                     EntryCardPage(model: model, store: store, entry: entry, accent: color,
                                   onEdit: { editingEntry = $0 })
@@ -42,20 +35,25 @@ struct GroupPagerView: View {
         .scrollIndicators(.hidden)
         // The bottom "3 of 12" capsule is visual-only; tell VoiceOver where the swipe landed.
         .onChange(of: pageId) { _, new in
-            guard let new, new != "summary",
-                  let i = entries.firstIndex(where: { $0.id == new }) else { return }
+            guard let new, let i = entries.firstIndex(where: { $0.id == new }) else { return }
             AccessibilityNotification.Announcement("Card \(i + 1) of \(entries.count)").post()
         }
         // Deleting the visible card leaves pageId on a removed id (capsule vanishes, scroll
         // landing undefined) — land on the card that slid into its slot, else the last one.
         .onChange(of: entries.map(\.id)) { old, new in
-            guard let current = pageId, current != "summary", !new.contains(current) else { return }
+            guard let current = pageId, !new.contains(current) else { return }
             let i = old.firstIndex(of: current) ?? 0
-            pageId = i < new.count ? new[i] : (new.last ?? "summary")
+            pageId = i < new.count ? new[i] : new.last
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .bottom) { positionLabel }
+        .overlay {
+            if entries.isEmpty {
+                Text("Nothing behind this divider yet.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
                 NavigationStack {
@@ -69,89 +67,8 @@ struct GroupPagerView: View {
         }
     }
 
-    // MARK: summary page
-
-    private var summaryPage: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                // The divider tab, blown up into the group's title plaque.
-                VStack(spacing: 6) {
-                    Text(title)
-                        .font(.system(.largeTitle, design: .serif).italic().weight(.semibold))
-                        .multilineTextAlignment(.center)
-                    Text(stat.total, format: .currency(code: "USD"))
-                        .font(.system(.title, design: .rounded).weight(.bold))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                    Text("\(stat.totalCards) \(stat.totalCards == 1 ? "card" : "cards") · \(stat.pricedCards) priced")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 28).padding(.horizontal)
-                .background(color.opacity(0.3), in: UnevenRoundedRectangle(
-                    topLeadingRadius: 18, bottomLeadingRadius: 6,
-                    bottomTrailingRadius: 6, topTrailingRadius: 18))
-
-                if !topEntries.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Top cards").font(.headline)
-                        ForEach(topEntries, id: \.id) { entry in
-                            HStack(spacing: 10) {
-                                CardImageView(card: try? store.card(id: entry.cardId), quality: "low")
-                                    .frame(width: 36)
-                                Text((try? store.card(id: entry.cardId))?.name ?? entry.cardId)
-                                    .lineLimit(1)
-                                Spacer()
-                                PriceLabel(value: model.entryValue(entry))
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let groupId {
-                    NavigationLink(value: groupId) { Label("Open as list", systemImage: "list.bullet") }
-                        .font(.subheadline)
-                } else {
-                    NavigationLink(value: TinAllCardsRoute()) { Label("Open as list", systemImage: "list.bullet") }
-                        .font(.subheadline)
-                }
-
-                if entries.isEmpty {
-                    Text("Nothing behind this divider yet.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    HStack(spacing: 8) {
-                        Button { onGetStarted?(.scan) } label: {
-                            Label("Scan a card", systemImage: "camera.viewfinder")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        Button { onGetStarted?(.browse) } label: {
-                            Label("Browse sets", systemImage: "square.grid.2x2")
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .controlSize(.small)
-                } else {
-                    Label("Swipe to flip through your cards", systemImage: "hand.draw")
-                        .font(.caption).foregroundStyle(.tertiary)
-                }
-            }
-            .padding()
-        }
-    }
-
-    private var topEntries: [CollectionEntry] {
-        Array(GroupStats.sortedByValueDescending(entries: entries, prices: model.prices,
-                                                 variantsByCard: model.variantsByCard,
-                                                 conditionsByCard: model.conditionsByCard)
-            .prefix(3))
-            .filter { model.entryValue($0) != nil }
-    }
-
     @ViewBuilder private var positionLabel: some View {
-        if let pageId, pageId != "summary", let i = entries.firstIndex(where: { $0.id == pageId }) {
+        if let pageId, let i = entries.firstIndex(where: { $0.id == pageId }) {
             Text("\(i + 1) of \(entries.count)")
                 .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 .padding(.horizontal, 10).padding(.vertical, 4)
@@ -291,25 +208,5 @@ private struct EntryCardPage: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("Entry actions")
-    }
-}
-
-/// Bare-axes price trend line with a soft area fill — a glanceable shape, not a chart to read.
-private struct Sparkline: View {
-    let points: [PricePoint]
-    var color: Color
-
-    var body: some View {
-        Chart(points) { p in
-            AreaMark(x: .value("Date", p.date), y: .value("USD", p.value))
-                .foregroundStyle(.linearGradient(colors: [color.opacity(0.3), .clear],
-                                                 startPoint: .top, endPoint: .bottom))
-            LineMark(x: .value("Date", p.date), y: .value("USD", p.value))
-                .foregroundStyle(color)
-                .interpolationMethod(.monotone)
-        }
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
-        .chartYScale(domain: .automatic(includesZero: false))
     }
 }

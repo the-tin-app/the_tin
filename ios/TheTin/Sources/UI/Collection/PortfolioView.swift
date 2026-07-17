@@ -2,13 +2,14 @@ import SwiftUI
 
 /// Navigation target for the tin header's total → Portfolio screen. `groupId` nil = whole tin
 /// (matches `TinPagerRoute`/`GroupPagerView`'s convention); non-nil (incl. "") = one divider's
-/// own trendline, tapped from `breakdown` below.
+/// own trendline, tapped from that divider's landing chart (`GroupDetailView`).
 struct PortfolioRoute: Hashable {
     var groupId: String? = nil
 }
 
 /// Value over time for the whole tin, or (when `groupId` is set) one divider: value + cost-basis
-/// chart, stat row, per-divider breakdown (whole-tin view only).
+/// chart and stat row. The whole-tin view shows only the whole tin — per-divider performance
+/// lives with each divider (2026-07-17 UX pass).
 /// Casual tier ships `price_history` empty → download-size notice (same pattern as card detail).
 /// Layout follows mockup variant B ("chart-hero"):
 /// headline value+Δ on one line, dominant chart, stats demoted to a 3-up card row below the
@@ -84,8 +85,6 @@ struct PortfolioView: View {
                     Text("Based on \(series.cardsWithHistory) of \(series.totalCards) cards with price history.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                // Divider-within-a-divider doesn't make sense — only the whole-tin view breaks down.
-                if groupId == nil { breakdown }
             }
         } else {
             ProgressView("Building portfolio history…").frame(maxWidth: .infinity)
@@ -161,43 +160,6 @@ struct PortfolioView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    /// Per-divider breakdown: name · value now · Δ over the selected range, sorted by value.
-    /// Each row opens that divider's own trendline (`PortfolioRoute(groupId:)`).
-    private var breakdown: some View {
-        let names = Dictionary(uniqueKeysWithValues: model.groups.map { ($0.id, $0.name) })
-        let rows = model.portfolio.groupSeries
-            .map { (id: $0.key, name: $0.key == "" ? "No divider" : (names[$0.key] ?? "No divider"),
-                    pts: sliced($0.value.points)) }
-            .sorted { ($0.pts.last?.value ?? 0) > ($1.pts.last?.value ?? 0) }
-        return VStack(alignment: .leading, spacing: 4) {
-            Text("Dividers").font(.headline).padding(.bottom, 4)
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                NavigationLink(value: PortfolioRoute(groupId: row.id)) {
-                    let now = row.pts.last?.value ?? 0
-                    let delta = now - (row.pts.first?.value ?? 0)
-                    HStack {
-                        Text(row.name).lineLimit(1).foregroundStyle(.primary)
-                        Spacer()
-                        Text(now, format: .currency(code: "USD").precision(.fractionLength(0)))
-                            .font(.subheadline.weight(.semibold))
-                            .monospacedDigit()
-                        Text(signed(delta))
-                            .font(.caption.weight(.medium))
-                            .monospacedDigit()
-                            .foregroundStyle(delta >= 0 ? .green : .red)
-                            .frame(minWidth: 64, alignment: .trailing)
-                            .accessibilityLabel("\(delta >= 0 ? "up" : "down") \(abs(delta).formatted(.currency(code: "USD").precision(.fractionLength(0))))")
-                        Image(systemName: "chevron.right")
-                            .font(.caption2).foregroundStyle(.tertiary)
-                    }
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
     }
 
     /// Same visual pattern as CardDetailView's history notice. Copy rule: this is a
