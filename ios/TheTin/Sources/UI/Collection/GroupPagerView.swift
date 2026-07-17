@@ -8,6 +8,7 @@ struct GroupPagerView: View {
     @Bindable var model: CollectionModel
     let store: CatalogStore
     let groupId: String?   // nil = the whole tin ("Everything")
+    var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
     @State private var editingEntry: CollectionEntry?
     @State private var pageId: String?
 
@@ -118,9 +119,20 @@ struct GroupPagerView: View {
                 }
 
                 if entries.isEmpty {
-                    Text("Nothing behind this divider yet — scan or browse to add cards.")
+                    Text("Nothing behind this divider yet.")
                         .font(.footnote).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                    HStack(spacing: 8) {
+                        Button { onGetStarted?(.scan) } label: {
+                            Label("Scan a card", systemImage: "camera.viewfinder")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Button { onGetStarted?(.browse) } label: {
+                            Label("Browse sets", systemImage: "square.grid.2x2")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .controlSize(.small)
                 } else {
                     Label("Swipe to flip through your cards", systemImage: "hand.draw")
                         .font(.caption).foregroundStyle(.tertiary)

@@ -43,6 +43,7 @@ struct GroupDetailView: View {
     @State private var editingEntry: CollectionEntry?
     @State private var printRequest: PrintSheetRequest?
     @State private var deletingEntry: CollectionEntry?
+    var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
     /// cardId → name, filled lazily while filtering so a search over 800 entries doesn't
     /// re-query the catalog per keystroke. A reference type so filling it during body
     /// evaluation isn't a state mutation.
@@ -52,6 +53,9 @@ struct GroupDetailView: View {
     var body: some View {
         List {
             if searchText.isEmpty {
+                if scope.isEmpty {
+                    emptyState   // instead of a "$0.00 · Priced 0 of 0" ledger for nothing
+                } else {
                 statsSection
                 if let group {
                     entriesSection(model.sortedEntries(in: group.id, byValue: sortByValue),
@@ -60,6 +64,7 @@ struct GroupDetailView: View {
                     entriesSection(sortedAll(model.ungroupedEntries), header: "No divider", showDivider: false)
                     entriesSection(sortedAll(model.entries.filter { !$0.groupId.isEmpty }),
                                    header: "Behind dividers", showDivider: true)
+                }
                 }
             } else {
                 searchResults
@@ -107,6 +112,28 @@ struct GroupDetailView: View {
 
     private var scope: [CollectionEntry] {
         group.map { model.entries(in: $0.id) } ?? model.entries
+    }
+
+    private var emptyState: some View {
+        Section {
+            VStack(spacing: 8) {
+                Text(group.map { "Nothing behind “\($0.name)” yet." } ?? "Your tin is empty.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Button { onGetStarted?(.scan) } label: {
+                        Label("Scan a card", systemImage: "camera.viewfinder")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button { onGetStarted?(.browse) } label: {
+                        Label("Browse sets", systemImage: "square.grid.2x2")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .controlSize(.small)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+        }
     }
 
     private var statsSection: some View {
