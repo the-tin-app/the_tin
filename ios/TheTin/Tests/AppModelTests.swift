@@ -36,7 +36,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(model.store)
         XCTAssertNotNil(model.collection)
         XCTAssertEqual(model.catalogState?.version, 1)
-        XCTAssertEqual(try model.store?.cardCount(), 6)
+        XCTAssertEqual(try model.store?.cardCount(), 7)
     }
 
     func testFailedManifestOnFirstRunIsRetryable() async throws {
@@ -70,7 +70,7 @@ final class AppModelTests: XCTestCase {
                                skipFirebase: true)
         await offline.start()
         XCTAssertEqual(offline.phase, .ready) // offline-first: installed catalog is enough
-        XCTAssertEqual(try offline.store?.cardCount(), 6)
+        XCTAssertEqual(try offline.store?.cardCount(), 7)
     }
 
     /// A new version published while the app runs (nightly pipeline) installs mid-session via
@@ -95,7 +95,7 @@ final class AppModelTests: XCTestCase {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         XCTAssertEqual(model.catalogState?.version, 2)
-        XCTAssertEqual(try model.store?.cardCount(), 6) // throws "disk I/O error" without the reopen
+        XCTAssertEqual(try model.store?.cardCount(), 7) // throws "disk I/O error" without the reopen
         XCTAssertFalse(try XCTUnwrap(model.store).sets().isEmpty)
     }
 
@@ -120,7 +120,7 @@ final class AppModelTests: XCTestCase {
         }
         XCTAssertEqual(model.catalogState?.version, 2)
         XCTAssertTrue(model.store === storeAtLaunch, "reopen must reuse the instance views hold")
-        XCTAssertEqual(try storeAtLaunch.cardCount(), 6) // the held instance serves the new artifact
+        XCTAssertEqual(try storeAtLaunch.cardCount(), 7) // the held instance serves the new artifact
     }
 
     /// The daily catalog usually publishes while the app sits suspended. Foregrounding calls
@@ -147,7 +147,7 @@ final class AppModelTests: XCTestCase {
         await model.refreshIfStale()
         XCTAssertEqual(model.catalogState?.version, 2)
         XCTAssertTrue(model.store === storeAtLaunch)
-        XCTAssertEqual(try storeAtLaunch.cardCount(), 6)
+        XCTAssertEqual(try storeAtLaunch.cardCount(), 7)
 
         // v3 appears, but the next foreground is within the hour — throttled, no fetch.
         let v3 = try stubRemoteWithFixture(version: 3)

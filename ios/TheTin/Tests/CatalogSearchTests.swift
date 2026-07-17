@@ -32,7 +32,8 @@ final class CatalogSearchTests: XCTestCase {
     }
 
     func testNamePlusHP() throws {
-        XCTAssertEqual(try store.search(SearchQuery.parse("pikachu hp:60")).map(\.id), ["sv1-25"])
+        // Both Pikachus (sv1-25 and the svp-025 promo) are hp 60.
+        XCTAssertEqual(Set(try store.search(SearchQuery.parse("pikachu hp:60")).map(\.id)), ["sv1-25", "svp-025"])
         XCTAssertEqual(try store.search(SearchQuery.parse("pikachu hp:300")).count, 0)
     }
 

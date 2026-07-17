@@ -11,6 +11,8 @@ const sets: TcgdexSet[] = [
   { id: "swsh7", name: "Evolving Skies", releaseDate: "2021-08-27", cardCountTotal: 237, printedTotal: 203, serie: "Sword & Shield" },
   // printed_total == total here: the same-value case (no divergence to tiebreak on).
   { id: "sv1", name: "Scarlet & Violet", releaseDate: "2023-03-31", cardCountTotal: 198, printedTotal: 198, serie: "Scarlet & Violet" },
+  // Promo set: numerator-only zero-padded numbers, no printed denominator.
+  { id: "svp", name: "SV Black Star Promos", releaseDate: "2023-03-31", cardCountTotal: 100, printedTotal: null, serie: "Scarlet & Violet" },
 ];
 
 const card = (p: Partial<TcgdexCard> & Pick<TcgdexCard, "id" | "localId" | "name">): TcgdexCard => ({
@@ -35,13 +37,18 @@ const cardsBySet = new Map<string, TcgdexCard[]>([
     card({ id: "sv1-1", localId: "1", name: "Sprigatito", hp: 70, types: ["Grass"], rawUsd: 0.2, rawEur: 0.18 }),
     card({ id: "sv1-25", localId: "25", name: "Pikachu", hp: 60, types: ["Lightning"], rawUsd: 0.4, rawEur: 0.35 }),
   ]],
+  ["svp", [
+    // Zero-padded promo number — exercises normalized number search ("25" must find it).
+    card({ id: "svp-025", localId: "025", name: "Pikachu", hp: 60, types: ["Lightning"], rawUsd: 3.5 }),
+  ]],
 ]);
 
 const price = (tcgPlayerId: number, cardNumber: string, name: string, graded: Record<string, number> = {}): PptPrice =>
   ({ tcgPlayerId, setName: "fixture", cardNumber, name, raw: 0, graded });
 
 const prices = new Map<string, PptPrice>([
-  ["swsh7-215", price(1, "215", "Rayquaza VMAX", { psa9: 180, psa10: 505 })],
+  // psa8 intentionally absent while 7/9/10 are present — the Grade It interpolation gap case.
+  ["swsh7-215", price(1, "215", "Rayquaza VMAX", { psa7: 90, psa9: 180, psa10: 505 })],
   ["swsh7-94", price(2, "94", "Umbreon V")],
   ["sv1-1", price(3, "1", "Sprigatito")],
   ["sv1-25", price(4, "25", "Pikachu", { psa10: 15 })],
@@ -49,7 +56,7 @@ const prices = new Map<string, PptPrice>([
 
 const scenes = [{ sceneId: "es-ray", title: "Rayquaza sky", cardIds: ["swsh7-215", "swsh7-94"] }];
 
-const outDir = join(__dirname, "../../ios/TCGApp/Tests/Fixtures");
+const outDir = join(__dirname, "../../ios/TheTin/Tests/Fixtures");
 mkdirSync(outDir, { recursive: true });
 const out = join(outDir, "catalog-fixture.sqlite");
 for (const f of [out, `${out}-wal`, `${out}-shm`]) if (existsSync(f)) rmSync(f);
