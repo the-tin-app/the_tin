@@ -9,6 +9,7 @@ struct CardImageView: View {
     let card: CardRecord?
     let quality: String // "low" for grids, "high" for detail
     @State private var image: Image?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -38,7 +39,11 @@ struct CardImageView: View {
               let data = await ImageCache.shared.image(for: url) else { return }
         let decoded = await Task.detached(priority: .utility) { UIImage(data: data) }.value
         guard let decoded, !Task.isCancelled else { return }
-        withAnimation(.easeOut(duration: 0.25)) { image = Image(uiImage: decoded) }
+        if reduceMotion {
+            image = Image(uiImage: decoded)
+        } else {
+            withAnimation(.easeOut(duration: 0.25)) { image = Image(uiImage: decoded) }
+        }
     }
 
     private func placeholder(for card: CardRecord?) -> some View {

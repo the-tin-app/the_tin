@@ -41,10 +41,13 @@ struct EntryFormView: View {
     var body: some View {
         Form {
             Section(card.name) {
-                if groups.isEmpty {
-                    TextField("New divider name", text: $newGroupName)
-                } else {
+                if groups.isEmpty, onCreateGroup != nil {
+                    // First card, no dividers yet: filing is optional — leave blank and it
+                    // lands in the tin, same as a scan.
+                    TextField("New divider name (optional)", text: $newGroupName)
+                } else if !groups.isEmpty {
                     Picker("Divider", selection: $groupId) {
+                        Text("The Tin (no divider)").tag("")
                         ForEach(groups) { Text($0.name).tag($0.id) }
                     }
                 }
@@ -52,8 +55,12 @@ struct EntryFormView: View {
                 Picker("Printing", selection: $variant) {
                     ForEach(CardVariant.allCases) { Text(variantLabel($0)).tag($0) }
                 }
-                Picker("Condition", selection: $condition) {
-                    ForEach(CardCondition.allCases) { Text(conditionLabel($0)).tag($0) }
+                // A graded card's condition IS its grade — the raw-condition picker only
+                // applies (and only shows) when the copy is raw.
+                if grade == nil {
+                    Picker("Condition", selection: $condition) {
+                        ForEach(CardCondition.allCases) { Text(conditionLabel($0)).tag($0) }
+                    }
                 }
                 Picker("Grade", selection: $grade) {
                     Text("Raw").tag(Grade?.none)
@@ -64,9 +71,11 @@ struct EntryFormView: View {
                 TextField("Price paid — total (USD)", text: $pricePaidText)
                     .keyboardType(.decimalPad)
                     .focused($amountFieldFocused)
-                TextField("Grading fee paid", text: $gradingFeeText)
-                    .keyboardType(.decimalPad)
-                    .focused($amountFieldFocused)
+                if grade != nil {
+                    TextField("Grading fee paid", text: $gradingFeeText)
+                        .keyboardType(.decimalPad)
+                        .focused($amountFieldFocused)
+                }
                 Toggle("Acquired on", isOn: $hasAcquiredDate)
                 if hasAcquiredDate {
                     DatePicker("Date", selection: $acquiredAt, displayedComponents: .date)
@@ -78,8 +87,6 @@ struct EntryFormView: View {
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }
-                    .disabled(groups.isEmpty ? newGroupName.trimmingCharacters(in: .whitespaces).isEmpty
-                                             : groupId.isEmpty)
             }
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
@@ -129,7 +136,9 @@ struct EntryFormView: View {
             acquiredAt = existing.acquiredAt ?? Date()
             acquiredFrom = existing.acquiredFrom ?? ""
         } else {
-            groupId = groups.first?.id ?? ""
+            // New entries default to the tin itself, matching the scanner — filing behind a
+            // divider is a choice, never a requirement.
+            groupId = ""
             variant = .defaultFor(rarity: card.rarity)
         }
         baseline = snapshot
@@ -138,9 +147,9 @@ struct EntryFormView: View {
     private func save() {
         Task {
             var resolvedGroupId = groupId
-            if resolvedGroupId.isEmpty, let onCreateGroup {
-                resolvedGroupId = await onCreateGroup(
-                    newGroupName.trimmingCharacters(in: .whitespaces))
+            let newName = newGroupName.trimmingCharacters(in: .whitespaces)
+            if groups.isEmpty, !newName.isEmpty, let onCreateGroup {
+                resolvedGroupId = await onCreateGroup(newName)
                 // Group creation failed (already alerted); keep the form open so nothing typed
                 // is lost and Save can be retried.
                 guard !resolvedGroupId.isEmpty else { return }

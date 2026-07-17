@@ -11,6 +11,11 @@ struct FundingBar: View {
     // Collapsed by default: an always-on ask that stays out of the way (it previously ate the
     // top safe area and hid the search bar). Tap to expand; the choice persists per device.
     @AppStorage("fundingBarCollapsed") private var collapsed = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private func setCollapsed(_ value: Bool) {
+        if reduceMotion { collapsed = value } else { withAnimation(.snappy) { collapsed = value } }
+    }
 
     private var fundedPctText: String { "\(Int((min(max(funding.fundedPct, 0), 1) * 100).rounded()))% funded" }
 
@@ -22,7 +27,7 @@ struct FundingBar: View {
     }
 
     private var collapsedStrip: some View {
-        Button { withAnimation(.snappy) { collapsed = false } } label: {
+        Button { setCollapsed(false) } label: {
             HStack(spacing: 8) {
                 Image(systemName: "heart.fill").foregroundStyle(.pink).font(.caption)
                 Text("Support the project — \(fundedPctText)")
@@ -49,10 +54,13 @@ struct FundingBar: View {
                 .font(.caption.bold())
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-            Button { withAnimation(.snappy) { collapsed = true } } label: {
+            Button { setCollapsed(true) } label: {
                 Image(systemName: "chevron.up")
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(.secondary)
+            .accessibilityLabel("Collapse support bar")
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
