@@ -39,8 +39,8 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(model.entries(in: group.id).count, 2)
         let value = model.groupValue(group.id)
         XCTAssertEqual(value.total, 1010)        // 2 × psa10 505; Metapod unpriced
-        XCTAssertEqual(value.pricedEntries, 1)
-        XCTAssertEqual(value.totalEntries, 2)
+        XCTAssertEqual(value.pricedCards, 2)     // physical cards (qty 2), not entry rows
+        XCTAssertEqual(value.totalCards, 3)
     }
 
     func testSortByValue() async throws {

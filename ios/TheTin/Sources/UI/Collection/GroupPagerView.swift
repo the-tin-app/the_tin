@@ -18,7 +18,7 @@ struct GroupPagerView: View {
     private var entries: [CollectionEntry] {
         groupId.map { model.entries(in: $0).sorted { $0.addedAt > $1.addedAt } } ?? model.allOwnedEntries
     }
-    private var stat: (total: Double, pricedEntries: Int, totalEntries: Int) {
+    private var stat: (total: Double, pricedCards: Int, totalCards: Int) {
         groupId.map { model.groupValue($0) } ?? model.tinValue
     }
 
@@ -83,7 +83,7 @@ struct GroupPagerView: View {
                         .font(.system(.title, design: .rounded).weight(.bold))
                         .monospacedDigit()
                         .contentTransition(.numericText())
-                    Text("\(entries.cardCount) \(entries.cardCount == 1 ? "card" : "cards") · \(stat.pricedEntries) priced")
+                    Text("\(stat.totalCards) \(stat.totalCards == 1 ? "card" : "cards") · \(stat.pricedCards) priced")
                         .font(.footnote).foregroundStyle(.secondary)
                     if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
                 }

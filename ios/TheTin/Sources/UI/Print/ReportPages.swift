@@ -63,7 +63,7 @@ struct ReportCoverBody: View {
             VStack(alignment: .center, spacing: 6) {
                 Text("\(totals.totalCards) cards · \(totals.totalEntries) entries")
                 // Coverage note — an insurance document must not silently pretend coverage.
-                Text("Valued: \(totals.pricedEntries) of \(totals.totalEntries) entries")
+                Text("Valued: \(totals.pricedCards) of \(totals.totalCards) cards")
                 Text("Cost basis: \(totals.costBasis.formatted(.currency(code: "USD")))")
             }
             .font(.system(size: 12))

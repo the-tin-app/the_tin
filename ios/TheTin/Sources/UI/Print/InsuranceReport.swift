@@ -4,7 +4,7 @@ import Foundation
 /// report never invents a price the app wouldn't show.
 struct ReportTotals: Equatable {
     let totalValue: Double
-    let pricedEntries: Int   // cover coverage note: "Valued: X of Y entries"
+    let pricedCards: Int     // cover coverage note: "Valued: X of Y cards" (Σ qty, exact-priced)
     let totalEntries: Int
     let totalCards: Int      // Σ qty
     let costBasis: Double    // Σ pricePaid (pricePaid is the entry TOTAL — spec-locked)
@@ -25,8 +25,8 @@ enum InsuranceReport {
         let v = GroupStats.totalValue(entries: entries, prices: prices,
                                       variantsByCard: variantsByCard,
                                       conditionsByCard: conditionsByCard)
-        return ReportTotals(totalValue: v.total, pricedEntries: v.pricedEntries,
-                            totalEntries: v.totalEntries, totalCards: entries.cardCount,
+        return ReportTotals(totalValue: v.total, pricedCards: v.pricedCards,
+                            totalEntries: entries.count, totalCards: v.totalCards,
                             costBasis: entries.compactMap(\.pricePaid).reduce(0, +))
     }
 
