@@ -188,6 +188,7 @@ struct PortfolioView: View {
                             .monospacedDigit()
                             .foregroundStyle(delta >= 0 ? .green : .red)
                             .frame(minWidth: 64, alignment: .trailing)
+                            .accessibilityLabel("\(delta >= 0 ? "up" : "down") \(abs(delta).formatted(.currency(code: "USD").precision(.fractionLength(0))))")
                         Image(systemName: "chevron.right")
                             .font(.caption2).foregroundStyle(.tertiary)
                     }

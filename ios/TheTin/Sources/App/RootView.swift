@@ -129,20 +129,32 @@ private struct MainTabView: View {
 /// draw over it (it was covering the Discover section headers).
 private extension View {
     func fundingBanner(model: AppModel, store: CatalogStore) -> some View {
-        safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                if model.network.isOffline {
-                    OfflineBanner(asOf: model.catalogState?.priceAsOf ?? (try? store.priceAsOf()) ?? nil)
+        modifier(FundingBanner(model: model, store: store))
+    }
+}
+
+private struct FundingBanner: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let model: AppModel
+    let store: CatalogStore
+
+    func body(content: Content) -> some View {
+        content
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    if model.network.isOffline {
+                        OfflineBanner(asOf: model.catalogState?.priceAsOf ?? (try? store.priceAsOf()) ?? nil)
+                    }
+                    FundingBar(funding: model.funding)
                 }
-                FundingBar(funding: model.funding)
             }
-        }
-        .overlay(alignment: .bottom) {
-            if let progress = model.catalogDownloadProgress {
-                UpdateToast(progress: progress)
+            .overlay(alignment: .bottom) {
+                if let progress = model.catalogDownloadProgress {
+                    UpdateToast(progress: progress)
+                }
             }
-        }
-        .animation(.easeInOut(duration: 0.25), value: model.catalogDownloadProgress == nil)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25),
+                       value: model.catalogDownloadProgress == nil)
     }
 }
 
