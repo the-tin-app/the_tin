@@ -8,7 +8,11 @@ final class CollectionModel {
     /// Portfolio-history model, app-lifetime so its series cache survives screen pushes.
     let portfolio: PortfolioModel
     private(set) var groups: [CardGroup] = []
-    private(set) var entries: [CollectionEntry] = []
+    private(set) var entries: [CollectionEntry] = [] {
+        // Launch-tab signal: MainTabView reads this synchronously at init (the entries stream
+        // hasn't delivered yet there) to open on The Tin once a collection exists.
+        didSet { UserDefaults.standard.set(!entries.isEmpty, forKey: "hasCards") }
+    }
     private(set) var prices: [String: PriceRecord] = [:]
     private(set) var variantsByCard: [String: [VariantPrice]] = [:]
     private(set) var conditionsByCard: [String: [ConditionPrice]] = [:]

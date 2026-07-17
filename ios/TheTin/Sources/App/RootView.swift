@@ -41,7 +41,10 @@ private struct MainTabView: View {
     @State private var searchModel: SearchModel?
     @State private var showingSettings = false
     private enum Tab: Hashable { case discover, browse, search, tin, scan }
-    @State private var selection: Tab = .discover
+    // The tin is the product's home ("daily check-ins"), so launch there once it has cards;
+    // an empty tin (first run) opens on Discover so there's something to see.
+    @State private var selection: Tab =
+        UserDefaults.standard.bool(forKey: "hasCards") ? .tin : .discover
     /// Path for the Tin tab's stack, so a notification tap can push WantedRoute programmatically.
     @State private var tinPath = NavigationPath()
     @State private var consumedRouteToken = 0
