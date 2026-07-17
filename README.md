@@ -122,6 +122,28 @@ Bug reports, card data corrections, and small focused PRs are all welcome — se
 [CONTRIBUTING.md](CONTRIBUTING.md). Changes land through pull requests only;
 please open an issue before starting anything large.
 
+## Branching & releases
+
+The repo follows a three-tier branch doctrine:
+
+```
+feature/* ──PR──▶ staging ──promotion──▶ main
+```
+
+- **`main` — major versions only (`1.X.X`).** While The Tin is in beta, a main
+  version is cut to TestFlight; once we leave beta, main versions are the App
+  Store releases. Each release is tagged `vX.Y.Z` on the exact commit that was
+  archived.
+- **`staging` — TestFlight builds.** The long-lived integration branch that
+  internal testers run. Every TestFlight upload is archived from `staging` and
+  tagged with its release and TestFlight build number (`vX.Y.Z-buildN`), so any
+  commit can be traced to the build testers are holding.
+- **`feature/*` — feature branches.** All work happens here and rolls into
+  `staging` through pull requests — never directly into `main`.
+
+**Promotion:** when a TestFlight build starts serving more than internal testers
+(open beta), that build's commit is promoted to `main` and tagged as a release.
+
 ## License
 
 Code is licensed under [AGPL-3.0](LICENSE). The name "The Tin", the app icon,
