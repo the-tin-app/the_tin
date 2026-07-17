@@ -6,6 +6,9 @@ final class WantsModel {
     private(set) var wanted: Set<String> = []
     private let repo: WantsRepository
     private let uid: String
+    /// Routes write failures into the same alert sink as collection writes
+    /// (CollectionModel.writeError, presented by RootView). Set by AppModel.
+    var onWriteError: ((String) -> Void)?
 
     init(repo: WantsRepository, uid: String) {
         self.repo = repo; self.uid = uid
@@ -21,6 +24,7 @@ final class WantsModel {
                 // Write failed — snap the heart back so the UI never shows a wish that
                 // wasn't saved. (The stream would eventually correct it; this is immediate.)
                 if next { wanted.remove(cardId) } else { wanted.insert(cardId) }
+                onWriteError?("Couldn't update the wishlist — nothing was changed. Check free storage and try again.")
             }
         }
     }

@@ -34,6 +34,25 @@ final class LocalCollectionRepositoryTests: XCTestCase {
         XCTAssertTrue(entries.isEmpty)
     }
 
+    func testDeleteGroupKeepingEntriesMovesThemToNoDivider() async throws {
+        let paths = try tempPaths()
+        let repo = LocalCollectionRepository(paths: paths)
+        let gid = try await repo.createGroup(name: "Binder")
+        try await repo.addEntry(CollectionEntry(id: "e1", cardId: "ex6-58", groupId: gid, qty: 1,
+                                                condition: nil, grade: nil, pricePaid: nil,
+                                                acquiredAt: nil, acquiredFrom: nil,
+                                                addedAt: Date(), variant: nil))
+
+        try await repo.deleteGroup(id: gid, keepingEntries: true)
+        let groups = await firstValue(repo.groupsStream()) ?? []
+        XCTAssertTrue(groups.isEmpty)
+
+        // Entry survives, ungrouped — and it persisted that way.
+        let entries = await firstValue(LocalCollectionRepository(paths: paths).entriesStream()) ?? []
+        XCTAssertEqual(entries.map(\.id), ["e1"])
+        XCTAssertEqual(entries.first?.groupId, "")
+    }
+
     func testReorderGroupsPersistsAndSorts() async throws {
         let paths = try tempPaths()
         let repo = LocalCollectionRepository(paths: paths)

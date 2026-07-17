@@ -183,8 +183,8 @@ final class CollectionModel {
     func renameGroup(id: String, name: String) async {
         await write("rename the divider") { try await repository.renameGroup(id: id, name: name) }
     }
-    func deleteGroup(id: String) async {
-        await write("delete the divider") { try await repository.deleteGroup(id: id) }
+    func deleteGroup(id: String, keepingEntries: Bool = false) async {
+        await write("delete the divider") { try await repository.deleteGroup(id: id, keepingEntries: keepingEntries) }
     }
     func reorderGroups(ids: [String]) async {
         await write("reorder the dividers") { try await repository.reorderGroups(orderedIds: ids) }
@@ -373,6 +373,11 @@ struct CollectionView: View {
             presenting: deletingGroup
         ) { group in
             let n = model.entries(in: group.id).cardCount
+            if n > 0 {
+                Button("Delete divider, keep \(n == 1 ? "its card" : "its \(n) cards")") {
+                    Task { await model.deleteGroup(id: group.id, keepingEntries: true) }
+                }
+            }
             Button(n == 0 ? "Delete divider" : "Delete divider and \(n) \(n == 1 ? "card" : "cards")",
                    role: .destructive) {
                 Task { await model.deleteGroup(id: group.id) }
@@ -381,7 +386,7 @@ struct CollectionView: View {
         } message: { group in
             let n = model.entries(in: group.id).cardCount
             Text(n == 0 ? "This divider is empty."
-                        : "Its \(n) \(n == 1 ? "card" : "cards") will be removed from your tin too. This can't be undone.")
+                        : "Kept \(n == 1 ? "card moves" : "cards move") to No divider. Deleting \(n == 1 ? "it" : "them") too can't be undone.")
         }
         .navigationDestination(for: TinPagerRoute.self) { route in
             GroupPagerView(model: model, store: store, groupId: route.groupId)
@@ -558,8 +563,8 @@ struct CollectionView: View {
     }
 
     private func dividerName(_ entry: CollectionEntry) -> String {
-        entry.groupId.isEmpty ? "Unfiled"
-            : (model.groups.first { $0.id == entry.groupId }?.name ?? "Unfiled")
+        entry.groupId.isEmpty ? "No divider"
+            : (model.groups.first { $0.id == entry.groupId }?.name ?? "No divider")
     }
 
     private func cardName(_ entry: CollectionEntry) -> String {

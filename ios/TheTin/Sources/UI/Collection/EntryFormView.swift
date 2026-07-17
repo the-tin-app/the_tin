@@ -47,7 +47,7 @@ struct EntryFormView: View {
                     TextField("New divider name (optional)", text: $newGroupName)
                 } else if !groups.isEmpty {
                     Picker("Divider", selection: $groupId) {
-                        Text("The Tin (no divider)").tag("")
+                        Text("No divider").tag("")
                         ForEach(groups) { Text($0.name).tag($0.id) }
                     }
                 }

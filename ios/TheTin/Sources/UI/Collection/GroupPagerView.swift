@@ -248,7 +248,7 @@ private struct EntryCardPage: View {
             Button { onEdit(entry) } label: { Label("Edit entry", systemImage: "pencil") }
             Menu {
                 if entry.groupId != "" {
-                    Button("Everything (no divider)") { Task { await model.moveEntry(entry, toGroup: "") } }
+                    Button("No divider") { Task { await model.moveEntry(entry, toGroup: "") } }
                 }
                 ForEach(model.groups.filter { $0.id != entry.groupId }) { g in
                     Button(g.name) { Task { await model.moveEntry(entry, toGroup: g.id) } }
