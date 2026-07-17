@@ -161,13 +161,22 @@ struct EntryFormView: View {
                 qty: qty,
                 condition: condition.rawValue,
                 grade: grade?.rawValue,
-                pricePaid: Double(pricePaidText.replacingOccurrences(of: ",", with: ".")),
-                gradingFeeUsd: Double(gradingFeeText.replacingOccurrences(of: ",", with: ".")),
+                pricePaid: Self.parseAmount(pricePaidText),
+                gradingFeeUsd: Self.parseAmount(gradingFeeText),
                 acquiredAt: hasAcquiredDate ? acquiredAt : nil,
                 acquiredFrom: acquiredFrom.isEmpty ? nil : acquiredFrom,
                 addedAt: existing?.addedAt ?? Date(),
                 variant: variant.rawValue)
             if await onSave(entry) { dismiss() }
         }
+    }
+
+    /// Locale-aware amount parse: "1,234.56" (en) and "1.234,56" (de) both land instead of
+    /// being silently dropped — a bare Double() init chokes on any grouping separator.
+    static func parseAmount(_ text: String) -> Double? {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return nil }
+        return (try? Double(t, format: .number))
+            ?? Double(t.replacingOccurrences(of: ",", with: "."))
     }
 }

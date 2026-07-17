@@ -286,6 +286,7 @@ struct CollectionView: View {
     @State private var deletingGroup: CardGroup?
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
+    @State private var deletingEntry: CollectionEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// cardId → name for search filtering (reference type: filled during body evaluation).
     private final class NameCache { var names: [String: String] = [:] }
@@ -387,6 +388,16 @@ struct CollectionView: View {
             let n = model.entries(in: group.id).cardCount
             Text(n == 0 ? "This divider is empty."
                         : "Kept \(n == 1 ? "card moves" : "cards move") to No divider. Deleting \(n == 1 ? "it" : "them") too can't be undone.")
+        }
+        .confirmationDialog(
+            "Remove \((try? store.card(id: deletingEntry?.cardId ?? ""))?.name ?? "this card") from your tin?",
+            isPresented: Binding(get: { deletingEntry != nil },
+                                 set: { if !$0 { deletingEntry = nil } }),
+            titleVisibility: .visible,
+            presenting: deletingEntry
+        ) { entry in
+            Button("Remove", role: .destructive) { Task { await model.deleteEntry(id: entry.id) } }
+            Button("Cancel", role: .cancel) {}
         }
         .navigationDestination(for: TinPagerRoute.self) { route in
             GroupPagerView(model: model, store: store, groupId: route.groupId)
@@ -501,6 +512,12 @@ struct CollectionView: View {
                 Button { renameGroupName = group.name; renamingGroupId = group.id }
                     label: { Label("Rename", systemImage: "pencil") }
             }
+            // The riffle row is one flattened VoiceOver element, so the context-menu/swipe
+            // actions need explicit mirrors (activate = open, as sighted tap).
+            .accessibilityAction(named: "Rename") {
+                renameGroupName = group.name; renamingGroupId = group.id
+            }
+            .accessibilityAction(named: "Delete divider") { deletingGroup = group }
     }
 
     /// Invisible NavigationLink behind a custom row — keeps the tap-to-push without List's
@@ -558,6 +575,14 @@ struct CollectionView: View {
                                                      conditions: model.conditionsByCard[entry.cardId] ?? []))
                 }
                 .buttonStyle(.plain)
+                .swipeActions {
+                    Button("Delete", role: .destructive) { deletingEntry = entry }
+                }
+                .contextMenu {
+                    NavigationLink(value: CardID(raw: entry.cardId)) {
+                        Label("Card details", systemImage: "info.circle")
+                    }
+                }
             }
         }
     }
@@ -615,6 +640,7 @@ struct TinRiffleRow: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(name), \(count) \(count == 1 ? "card" : "cards"), \(value.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
+        .accessibilityAddTraits(.isButton)
     }
 
     private var tab: some View {

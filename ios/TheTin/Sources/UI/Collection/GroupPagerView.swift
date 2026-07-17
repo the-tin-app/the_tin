@@ -39,6 +39,12 @@ struct GroupPagerView: View {
         .scrollTargetBehavior(.paging)
         .scrollPosition(id: $pageId)
         .scrollIndicators(.hidden)
+        // The bottom "3 of 12" capsule is visual-only; tell VoiceOver where the swipe landed.
+        .onChange(of: pageId) { _, new in
+            guard let new, new != "summary",
+                  let i = entries.firstIndex(where: { $0.id == new }) else { return }
+            AccessibilityNotification.Announcement("Card \(i + 1) of \(entries.count)").post()
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .bottom) { positionLabel }
