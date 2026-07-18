@@ -98,9 +98,12 @@ final class AppModel {
     ) async throws -> CatalogUpdateOutcome {
         let outcome = try await updateFromPrimaryOrFallback(onProgress: onProgress)
         if case .installed(let version) = outcome {
-            // Wishlist price alerts: diff + snapshot after EVERY successful install — this
-            // wrapper is the single funnel for foreground start, tier switch, background
-            // refresh, and the BG tasks (spec: "hook into the updater's completion").
+            // The install swap deleted the open connection's WAL sidecars. Reopen HERE — in the
+            // same funnel that installed — so no call path (foreground start, tier switch,
+            // background refresh, BG tasks) can forget and serve a dead handle for the session.
+            reopenStore()
+            // Wishlist price alerts: diff + snapshot after EVERY successful install (spec:
+            // "hook into the updater's completion").
             await priceAlerts.runAfterInstall(version: version, dbPath: paths.databaseURL.path)
         }
         return outcome
@@ -109,27 +112,58 @@ final class AppModel {
     private func updateFromPrimaryOrFallback(
         onProgress: (@MainActor @Sendable (Double) -> Void)? = nil
     ) async throws -> CatalogUpdateOutcome {
-        let primaryKind = String(describing: type(of: remote))
+        let primaryName = remote is SelfHostedCatalogRemote ? "self-hosted" : "backup"
         do {
             let outcome = try await CatalogUpdater(remote: remote, paths: paths)
                 .ensureLatest(onProgress: onProgress)
             // A successful primary fetch means its manifest (and, for self-host, the App Attest
             // session token) round-tripped — this line is how we confirm the NAS path is live.
             activeSource = remote is SelfHostedCatalogRemote ? .selfHosted : .firebase
-            Self.catalogLog.notice("catalog: primary \(primaryKind, privacy: .public) served \(String(describing: outcome), privacy: .public)")
+            Self.catalogLog.notice("catalog: primary \(primaryName, privacy: .public) served \(String(describing: outcome), privacy: .public)")
+            if case .installed = outcome { CatalogActivity.record("\(primaryName): \(describe(outcome))") }
             return outcome
         } catch {
             guard let fallbackRemote else {
-                Self.catalogLog.error("catalog: primary \(primaryKind, privacy: .public) failed, no fallback — \(String(describing: error), privacy: .public)")
+                Self.catalogLog.error("catalog: primary \(primaryName, privacy: .public) failed, no fallback — \(String(describing: error), privacy: .public)")
+                CatalogActivity.record("\(primaryName) failed (\(shortError(error))), no backup configured")
                 throw error
             }
-            Self.catalogLog.notice("catalog: primary \(primaryKind, privacy: .public) failed (\(String(describing: error), privacy: .public)) — falling back to Firebase")
-            let outcome = try await CatalogUpdater(remote: fallbackRemote, paths: paths)
-                .ensureLatest(onProgress: onProgress)
-            activeSource = .firebase
-            Self.catalogLog.notice("catalog: fallback Firebase served \(String(describing: outcome), privacy: .public)")
-            return outcome
+            Self.catalogLog.notice("catalog: primary \(primaryName, privacy: .public) failed (\(String(describing: error), privacy: .public)) — falling back to Firebase")
+            do {
+                let outcome = try await CatalogUpdater(remote: fallbackRemote, paths: paths)
+                    .ensureLatest(onProgress: onProgress)
+                activeSource = .firebase
+                Self.catalogLog.notice("catalog: fallback Firebase served \(String(describing: outcome), privacy: .public)")
+                CatalogActivity.record("self-hosted failed (\(shortError(error))) → backup: \(describe(outcome))")
+                return outcome
+            } catch let fallbackError {
+                CatalogActivity.record("self-hosted failed (\(shortError(error))) → backup failed (\(shortError(fallbackError)))")
+                throw fallbackError
+            }
         }
+    }
+
+    private func describe(_ outcome: CatalogUpdateOutcome) -> String {
+        let tier = updater.installedState()?.tier.map { " \($0)" } ?? ""
+        switch outcome {
+        case .installed(let v): return "installed v\(v)\(tier)"
+        case .alreadyCurrent(let v): return "already current, v\(v)\(tier)"
+        }
+    }
+
+    private func shortError(_ error: Error) -> String {
+        String(String(describing: error).prefix(80))
+    }
+
+    /// True when the installed catalog is a poorer tier than the one the user chose — e.g. the
+    /// casual-only Firebase backup bootstrapped the install while the NAS was unreachable. Drives
+    /// the "backup card data" banner so missing history/grades read as a state, not a bug.
+    var reducedData: Bool {
+        guard let installed = CatalogTier(rawValue: catalogState?.tier ?? ""),
+              let chosen = CatalogTier(rawValue: currentTier),
+              let i = CatalogTier.allCases.firstIndex(of: installed),
+              let c = CatalogTier.allCases.firstIndex(of: chosen) else { return false }
+        return i < c
     }
 
     /// Display-only funding progress, recomputed from the last-known `catalogState` (survives
@@ -213,8 +247,7 @@ final class AppModel {
         if let fresh = Self.selfHostedRemote() { remote = fresh }
         tierChange = .downloading
         do {
-            _ = try await ensureLatestWithFailover()
-            reopenStore() // sets catalogState; the swap poisoned the old handle (see backgroundRefresh)
+            _ = try await ensureLatestWithFailover() // installs + reopens the live store in one funnel
             // The Firebase fallback only serves casual — a "successful" update there can install a
             // different tier than the one just picked. Say so instead of claiming success.
             if let installed = catalogState?.tier, installed != tier.rawValue {
@@ -249,8 +282,19 @@ final class AppModel {
     /// poisons every subsequent read. IN PLACE on the same CatalogStore instance — views and
     /// models (DiscoverModel, SearchModel…) capture it at creation and are never rebuilt
     /// mid-session, so a replacement instance leaves them querying a closed handle.
+    /// Called from the ensureLatestWithFailover funnel after every install; no-ops pre-openStore.
     private func reopenStore() {
-        try? store?.reopen()
+        guard let store else { return }
+        do {
+            try store.reopen()
+        } catch {
+            // A failed reopen means every later read errors out as "empty data" — retry once,
+            // then say so loudly instead of degrading silently.
+            do { try store.reopen() } catch {
+                Self.catalogLog.fault("catalog: reopen after install FAILED — \(String(describing: error), privacy: .public)")
+                CatalogActivity.record("reopen after install FAILED (\(shortError(error))) — restart the app")
+            }
+        }
         catalogState = updater.installedState()
         collection?.catalogDidChange()
     }
@@ -282,12 +326,7 @@ final class AppModel {
             let current = self.catalogDownloadProgress ?? -0.01
             if Int(fraction * 100) > Int(current * 100) { self.catalogDownloadProgress = fraction }
         }
-        if let outcome = try? await ensureLatestWithFailover(onProgress: onProgress),
-           case .installed = outcome {
-            // The swap invalidated the open store's WAL connection — reopen on the new artifact
-            // (sets catalogState) so this session serves data instead of a dead handle.
-            reopenStore()
-        }
+        _ = try? await ensureLatestWithFailover(onProgress: onProgress)
         guard let store else { return }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
@@ -312,12 +351,8 @@ final class AppModel {
     }
 
     /// BGProcessingTask entry point: the normal tiered download + install, which fires the
-    /// price-alerts diff via ensureLatestWithFailover. When a live store is open (task fired
-    /// while suspended rather than background-launched), reopen it — the install swap deletes
-    /// the open connection's WAL sidecars (see reopenStore).
+    /// price-alerts diff and (when a live store is open) the reopen via ensureLatestWithFailover.
     func backgroundCatalogUpdate() async -> Bool {
-        guard let outcome = try? await ensureLatestWithFailover() else { return false }
-        if case .installed = outcome { reopenStore() }
-        return true
+        (try? await ensureLatestWithFailover()) != nil
     }
 }

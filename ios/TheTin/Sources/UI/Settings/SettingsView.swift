@@ -28,6 +28,7 @@ struct SettingsView: View {
                 appSection
                 connectionSection
                 tierSection
+                activitySection
                 alertsSection
                 supportSection
                 dataSection
@@ -225,6 +226,29 @@ struct SettingsView: View {
     private var installedTierNote: String {
         guard let installed = app.catalogState?.tier, installed != app.currentTier else { return "" }
         return " Currently installed: \(CatalogTier(rawValue: installed)?.title ?? installed)."
+    }
+
+    // MARK: Catalog activity
+
+    /// Breadcrumb trail of recent catalog operations (source, outcome, failures) — the on-device
+    /// answer to "why does my data look wrong", collapsed behind a DisclosureGroup.
+    private var activitySection: some View {
+        Section {
+            DisclosureGroup("Catalog activity") {
+                let lines = CatalogActivity.read()
+                if lines.isEmpty {
+                    Text("No catalog updates recorded yet.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(lines.prefix(20), id: \.self) { line in
+                        Text(line)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(line.contains("failed") || line.contains("FAILED")
+                                             ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    }
+                }
+            }
+        }
     }
 
     // MARK: Wishlist price alerts
