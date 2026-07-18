@@ -62,7 +62,7 @@ final class CatalogUpdaterTests: XCTestCase {
         XCTAssertEqual(outcome, .installed(version: 1))
         XCTAssertEqual(updater.installedState(), CatalogState(version: 1, priceAsOf: nil))
         let store = try CatalogStore(path: paths.databaseURL.path)
-        XCTAssertEqual(try store.cardCount(), 6)
+        XCTAssertEqual(try store.cardCount(), 7)
         try store.close()
     }
 

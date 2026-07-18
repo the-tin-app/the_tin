@@ -24,6 +24,14 @@ describe("catalog schema", () => {
     expect(db.prepare("SELECT count INTEGER FROM population").pluck().get()).toBe(2500);
   });
 
+  it("price_latest has a column for every integer PSA grade", () => {
+    const out = join(tmpdir(), `cat-${process.pid}-${Math.round(performance.now())}.sqlite`);
+    buildCatalog(emptyInput(), out);
+    const db = new Database(out);
+    const cols = db.prepare("SELECT name FROM pragma_table_info('price_latest')").all().map((r: any) => r.name);
+    for (let g = 1; g <= 10; g++) expect(cols).toContain(`psa${g}`);
+  });
+
   it("includes price_history_cond and price_by_condition tables (all ungraded conditions)", () => {
     const out = join(tmpdir(), `cat-${process.pid}-${Math.round(performance.now())}.sqlite`);
     buildCatalog(emptyInput(), out);

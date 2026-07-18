@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import type { TcgdexCard, TcgdexSet } from "../upstream/tcgdex";
 import type { PptPrice } from "../upstream/ppt";
 import type { ArtScene } from "./connectedArt";
+import { PSA_COLUMNS } from "./ppt-export";
 
 export interface CatalogInput {
   sets: TcgdexSet[];
@@ -20,7 +21,8 @@ CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT NOT NULL REFERENCES set_info(
   name TEXT NOT NULL, hp INTEGER, types TEXT, rarity TEXT, artist TEXT, image_base TEXT, image_url TEXT, tcgplayer_id INTEGER);
 CREATE VIRTUAL TABLE card_text USING fts5(card_id UNINDEXED, name, body);
 CREATE TABLE price_latest(card_id TEXT PRIMARY KEY REFERENCES card(id), raw_usd REAL, raw_eur REAL,
-  psa3 REAL, psa7 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
+  psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
+  psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
 CREATE TABLE connected_art(scene_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'combined', title TEXT NOT NULL, card_id TEXT NOT NULL, position INTEGER NOT NULL,
   PRIMARY KEY(scene_id, card_id));
 CREATE TABLE pokemon(dex_id INTEGER PRIMARY KEY, name TEXT NOT NULL, rep_card_id TEXT);
@@ -83,7 +85,7 @@ export function buildCatalog(input: CatalogInput, outPath: string): void {
   const insSet = db.prepare("INSERT INTO set_info VALUES (?,?,?,?,?,?,?)");
   const insCard = db.prepare("INSERT INTO card VALUES (?,?,?,?,?,?,?,?,?,?,?)");
   const insText = db.prepare("INSERT INTO card_text (card_id, name, body) VALUES (?,?,?)");
-  const insPrice = db.prepare("INSERT INTO price_latest VALUES (?,?,?,?,?,?,?,?)");
+  const insPrice = db.prepare(`INSERT INTO price_latest VALUES (?,?,?,${PSA_COLUMNS.map(() => "?").join(",")},?)`);
   const insArt = db.prepare("INSERT INTO connected_art VALUES (?,?,?,?,?)");
   const insPokemon = db.prepare("INSERT INTO pokemon VALUES (?,?,?)");
   const insCardDex = db.prepare("INSERT INTO card_dex VALUES (?,?)");
@@ -104,7 +106,7 @@ export function buildCatalog(input: CatalogInput, outPath: string): void {
       for (const c of cards) {
         const g = input.prices.get(c.id)?.graded;
         const priced = c.rawUsd != null || c.rawEur != null ||
-          g?.psa3 != null || g?.psa7 != null || g?.psa9 != null || g?.psa10 != null;
+          (g != null && PSA_COLUMNS.some((col) => g[col] != null));
         priceLookup.set(c.id, { rawUsd: c.rawUsd, rawEur: c.rawEur, priced });
         cardLookup.set(c.id, { number: c.localId, imageBase: c.imageBase });
         (cardIdsBySet.get(setId) ?? cardIdsBySet.set(setId, []).get(setId)!).push(c.id);
@@ -122,12 +124,11 @@ export function buildCatalog(input: CatalogInput, outPath: string): void {
       for (const c of cards) {
         allCardIds.add(c.id);
         const p = input.prices.get(c.id);
-        const psa3 = p?.graded.psa3 ?? null, psa7 = p?.graded.psa7 ?? null,
-              psa9 = p?.graded.psa9 ?? null, psa10 = p?.graded.psa10 ?? null;
-        const hasPrice = c.rawUsd != null || c.rawEur != null || psa3 != null || psa7 != null || psa9 != null || psa10 != null;
+        const psaVals = PSA_COLUMNS.map((col) => p?.graded[col] ?? null);
+        const hasPrice = c.rawUsd != null || c.rawEur != null || psaVals.some((v) => v != null);
         insCard.run(c.id, setId, c.localId, c.name, c.hp, c.types.join(","), c.rarity, c.artist, c.imageBase, c.imageUrl ?? null, p?.tcgPlayerId ?? null);
         insText.run(c.id, c.name, c.text);
-        if (hasPrice) insPrice.run(c.id, c.rawUsd, c.rawEur, psa3, psa7, psa9, psa10, input.asOf);
+        if (hasPrice) insPrice.run(c.id, c.rawUsd, c.rawEur, ...psaVals, input.asOf);
         for (const dex of input.dexByCard.get(c.id) ?? []) insCardDex.run(c.id, dex);
       }
     }
