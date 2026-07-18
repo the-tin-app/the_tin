@@ -70,6 +70,13 @@ struct CardDetailView: View {
     @State private var selectedPrinting: String?
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
     @FocusState private var gradingFeeFocused: Bool
+    @State private var marketplaceURL: MarketplaceURL?
+
+    /// Identifiable wrapper so `.sheet(item:)` can present a plain URL.
+    private struct MarketplaceURL: Identifiable {
+        let url: URL
+        var id: String { url.absoluteString }
+    }
 
     private static let priceColumns = [GridItem(.adaptive(minimum: 88), spacing: 8)]
 
@@ -216,6 +223,8 @@ struct CardDetailView: View {
                     }
                     .tint(.secondary)
                 }
+
+                marketplaceSection
             }
             .padding()
         }
@@ -223,6 +232,7 @@ struct CardDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.loadHistory() }
         .toolbar { detailToolbar }
+        .sheet(item: $marketplaceURL) { SafariSheet(url: $0.url) }
         .sheet(isPresented: $showingAddSheet) {
             if let collection {
                 NavigationStack {
@@ -339,6 +349,53 @@ struct CardDetailView: View {
         let v = tail.reduce(0) { $0 + $1.probability * $1.price }
         return head.map(row) + [GradeRow(label: "PSA ≤5", probability: p, price: p > 0 ? v / p : 0,
                                          value: v, isEstimate: tail.contains(where: \.isEstimate))]
+    }
+
+    /// Marketplace links (approved mockup variant A): disclosure rows below PSA Population,
+    /// each opening an in-app Safari sheet. Plain URLs — no affiliate params.
+    private var marketplaceSection: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 0) {
+                marketplaceRow("eBay — current listings", systemImage: "cart",
+                               url: MarketplaceLinks.ebayCurrent(name: model.card.name,
+                                                                setName: model.setName,
+                                                                number: model.card.number))
+                Divider()
+                marketplaceRow("eBay — sold listings", systemImage: "checkmark.seal",
+                               url: MarketplaceLinks.ebaySold(name: model.card.name,
+                                                             setName: model.setName,
+                                                             number: model.card.number))
+                Divider()
+                marketplaceRow("TCGPlayer — card page", systemImage: "tag",
+                               url: MarketplaceLinks.tcgplayer(tcgplayerId: model.card.tcgplayerId,
+                                                              name: model.card.name,
+                                                              number: model.card.number))
+                Text("Opens in-app. Searches use card name, set, and number.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .padding(.top, 6)
+            }
+            .padding(.top, 6)
+        } label: {
+            Text("Shop & sold prices").font(.headline)
+        }
+        .tint(.secondary)
+    }
+
+    private func marketplaceRow(_ title: String, systemImage: String, url: URL) -> some View {
+        Button { marketplaceURL = MarketplaceURL(url: url) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.subheadline)
+                    .frame(width: 26, height: 26)
+                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 7))
+                Text(title).font(.subheadline)
+                Spacer()
+                Image(systemName: "arrow.up.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func verdictHeadline(_ roi: GradingROI) -> String {
