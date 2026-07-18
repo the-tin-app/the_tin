@@ -48,6 +48,12 @@ struct FundingDisplay: Equatable {
 }
 
 enum FundingModel {
+    /// Compile-time switch for the support UI. `false` ships the "coming soon" variant (no
+    /// meter, no donate link) because no funding platform has accepted the project yet.
+    /// Flip to `true` in the build that ships real funding — and verify `AppConfig.supportURL`
+    /// points at whichever platform (Open Collective / GitHub Sponsors) actually approved us.
+    static let isLive = false
+
     /// Fallback goal shown before the manifest's funding block has loaded ($150/mo).
     static let defaultGoalCents = 15_000
 

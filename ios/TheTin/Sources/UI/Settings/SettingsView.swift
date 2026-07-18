@@ -350,12 +350,19 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("The Tin is free and works offline. Chip in to help cover the price-data and hosting costs — nothing is locked either way.")
                     .font(.footnote).foregroundStyle(.secondary)
-                FundedMeter(fundedPct: funding.fundedPct)
-                Text("\(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents)) per month")
-                    .font(.caption).foregroundStyle(.secondary)
+                if FundingModel.isLive {
+                    FundedMeter(fundedPct: funding.fundedPct)
+                    Text("\(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents)) per month")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Community funding is almost ready — coming soon!")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .padding(.vertical, 2)
-            Link("Support on Open Collective", destination: AppConfig.supportURL)
+            if FundingModel.isLive {
+                Link("Support on Open Collective", destination: AppConfig.supportURL)
+            }
         }
     }
 
