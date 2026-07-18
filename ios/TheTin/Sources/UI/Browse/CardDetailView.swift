@@ -315,6 +315,32 @@ struct CardDetailView: View {
                                   fee: gradingFee, ownedCondition: ownedRawEntry?.conditionValue)
     }
 
+    /// One display row of the Grade It math. Grades ≤5 collapse into a single "PSA ≤5" row
+    /// (their combined odds are usually tiny); `price` for the tail is the mass-weighted mean
+    /// so probability × price still equals the summed EV contribution.
+    private struct GradeRow: Identifiable {
+        let label: String
+        let probability: Double
+        let price: Double
+        let value: Double
+        let isEstimate: Bool
+        var id: String { label }
+    }
+
+    private static func gradeRows(_ roi: GradingROI) -> [GradeRow] {
+        func row(_ b: GradingROI.Bucket) -> GradeRow {
+            GradeRow(label: b.grade.label, probability: b.probability, price: b.price,
+                     value: b.probability * b.price, isEstimate: b.isEstimate)
+        }
+        let head = roi.buckets.filter { $0.grade.numeric > 5 }
+        let tail = roi.buckets.filter { $0.grade.numeric <= 5 }
+        guard tail.count >= 2 else { return (head + tail).map(row) }
+        let p = tail.reduce(0) { $0 + $1.probability }
+        let v = tail.reduce(0) { $0 + $1.probability * $1.price }
+        return head.map(row) + [GradeRow(label: "PSA ≤5", probability: p, price: p > 0 ? v / p : 0,
+                                         value: v, isEstimate: tail.contains(where: \.isEstimate))]
+    }
+
     private func verdictHeadline(_ roi: GradingROI) -> String {
         let amount = abs(roi.evNet).formatted(.currency(code: "USD").precision(.fractionLength(0)))
         switch roi.verdict {
@@ -332,24 +358,31 @@ struct CardDetailView: View {
                     .foregroundStyle(roi.verdict == .grade ? AnyShapeStyle(.green)
                                                            : AnyShapeStyle(.primary))
                     .padding(.top, 6)
-                // Expected-value math: per-grade odds × PSA price.
-                ForEach(roi.buckets) { b in
+                // Expected-value math: per-grade odds × PSA price. "≈" marks interpolated
+                // prices (mockup variant A: tilde + single amber footnote; grades ≤5 collapse
+                // into one tail row so thin low-grade pop doesn't become six noise rows).
+                ForEach(Self.gradeRows(roi)) { row in
                     HStack {
-                        Text(b.grade.label)
+                        Text(row.label)
                             .font(.subheadline.monospacedDigit())
                             .frame(width: 68, alignment: .leading)
-                        Text("\(b.probability, format: .percent.precision(.fractionLength(0))) × \(b.price, format: .currency(code: "USD"))")
+                        Text("\(row.probability, format: .percent.precision(.fractionLength(0))) × \(row.isEstimate ? "≈" : "")\(row.price, format: .currency(code: "USD"))")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         Spacer()
-                        Text(b.probability * b.price, format: .currency(code: "USD"))
+                        Text("\(row.isEstimate ? "≈" : "")\(row.value, format: .currency(code: "USD"))")
                             .font(.caption.monospacedDigit())
+                            .foregroundStyle(row.isEstimate ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
                     }
                 }
                 HStack {
                     Text("Expected graded value").font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Text(roi.ev, format: .currency(code: "USD"))
+                    Text("\(roi.hasEstimates ? "≈" : "")\(roi.ev, format: .currency(code: "USD"))")
                         .font(.caption.weight(.semibold)).monospacedDigit()
+                }
+                if roi.hasEstimates {
+                    Text("≈ estimated from nearby grades — no recorded sales at that grade.")
+                        .font(.caption2).foregroundStyle(.orange)
                 }
                 if let gem = roi.gemRate {
                     HStack {
@@ -384,7 +417,7 @@ struct CardDetailView: View {
                 }
                 Text("Estimate only — not what this specific copy will cost. Once you grade it, record the actual fee on the entry for accurate cost-basis and insurance reports.")
                     .font(.caption2).foregroundStyle(.tertiary)
-                Text("Population reflects copies people chose to grade — your card's odds depend on its condition.")
+                Text("Odds use the full PSA population (\(roi.totalPopulation) graded) — copies people chose to grade; your card's odds depend on its condition.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         } label: {
