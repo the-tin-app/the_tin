@@ -33,7 +33,9 @@ extension CatalogStore {
         var numberSQL = ""
         var numberArgs: [DatabaseValueConvertible] = []
         if let number = query.number {
-            numberSQL = " AND card.number = ?"
+            // Normalized equality on both sides (uppercase + leading-zero strip, mirroring the
+            // pipeline's normalizeNumber): "#25" matches "025" promos, "#tg20" matches "TG20".
+            numberSQL = " AND UPPER(LTRIM(card.number, '0')) = ?"
             numberArgs = [number.local]
             if let total = number.total {
                 // The printed denominator lands in either `total` or `printed_total` depending on
@@ -44,21 +46,36 @@ extension CatalogStore {
         }
 
         return try dbQueue.read { db in
+            var results: [CardRecord]
             if matchParts.isEmpty {
                 // HP/number-only query: plain column scan, no FTS involved.
                 let sql = "SELECT * FROM card WHERE 1=1\(hpSQL)\(numberSQL) ORDER BY name LIMIT ?"
-                return try Row.fetchAll(db, sql: sql, arguments: StatementArguments(hpArgs + numberArgs + [limit]))
+                results = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(hpArgs + numberArgs + [limit]))
+                    .map(CatalogStore.cardRecord)
+            } else {
+                let sql = """
+                    SELECT card.* FROM card_text
+                    JOIN card ON card.id = card_text.card_id
+                    WHERE card_text MATCH ?\(hpSQL)\(numberSQL)
+                    ORDER BY bm25(card_text) LIMIT ?
+                    """
+                let args: [DatabaseValueConvertible] = [matchParts.joined(separator: " AND ")] + hpArgs + numberArgs + [limit]
+                results = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
                     .map(CatalogStore.cardRecord)
             }
-            let sql = """
-                SELECT card.* FROM card_text
-                JOIN card ON card.id = card_text.card_id
-                WHERE card_text MATCH ?\(hpSQL)\(numberSQL)
-                ORDER BY bm25(card_text) LIMIT ?
-                """
-            let args: [DatabaseValueConvertible] = [matchParts.joined(separator: " AND ")] + hpArgs + numberArgs + [limit]
-            return try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
-                .map(CatalogStore.cardRecord)
+            // A bare numeric-ish token ("25", "swsh123") also matches card numbers — promos have
+            // numerator-only numbers the FTS index can't see. FTS relevance first, number matches
+            // appended after (deduped); other filters (hp) still apply.
+            if let candidate = query.numberCandidate, results.count < limit {
+                let extra = try Row.fetchAll(db, sql: """
+                    SELECT * FROM card WHERE UPPER(LTRIM(number, '0')) = ?\(hpSQL)
+                    ORDER BY set_id, number LIMIT ?
+                    """, arguments: StatementArguments([candidate] + hpArgs + [limit - results.count]))
+                    .map(CatalogStore.cardRecord)
+                let seen = Set(results.map(\.id))
+                results += extra.filter { !seen.contains($0.id) }
+            }
+            return results
         }
     }
 
