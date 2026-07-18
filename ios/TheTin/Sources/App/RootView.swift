@@ -149,6 +149,9 @@ private struct FundingBanner: ViewModifier {
                     if model.network.isOffline {
                         OfflineBanner(asOf: model.catalogState?.priceAsOf ?? (try? store.priceAsOf()) ?? nil)
                     }
+                    if model.reducedData {
+                        ReducedDataBanner()
+                    }
                     FundingBar(funding: model.funding)
                 }
             }
@@ -188,6 +191,21 @@ private struct UpdateToast: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// Shown while the installed catalog is a poorer tier than the one the user picked (the
+/// casual-only backup source bootstrapped it) — otherwise missing history/grades read as a bug.
+private struct ReducedDataBanner: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "externaldrive.badge.icloud")
+            Text("Backup card data — price history unavailable")
+        }
+        .font(.caption.bold())
+        .padding(.vertical, 6).frame(maxWidth: .infinity)
+        .background(.yellow.opacity(0.9))
+        .foregroundStyle(.black)
     }
 }
 
