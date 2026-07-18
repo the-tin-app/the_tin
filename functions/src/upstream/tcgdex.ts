@@ -4,12 +4,27 @@ export interface TcgdexSet {
   id: string; name: string; releaseDate: string | null;
   cardCountTotal: number; printedTotal: number | null; serie: string | null;
 }
+export interface TcgdexAttack { name: string; damage: string | null; cost: string[] }
+
 export interface TcgdexCard {
   id: string; localId: string; name: string; hp: number | null;
   types: string[]; rarity: string | null; artist: string | null;
   text: string; imageBase: string | null;
   imageUrl?: string | null;
   rawUsd: number | null; rawEur: number | null;
+  attacks?: TcgdexAttack[];
+}
+
+/** Attack list for the no-image placeholder (name + damage + energy cost, no effect text). */
+export function pickAttacks(raw: { attacks?: { name?: unknown; damage?: unknown; cost?: unknown }[] }): TcgdexAttack[] {
+  return (raw.attacks ?? []).flatMap((a) => {
+    if (typeof a?.name !== "string" || !a.name) return [];
+    return [{
+      name: a.name,
+      damage: a.damage != null ? String(a.damage) : null,
+      cost: Array.isArray(a.cost) ? a.cost.filter((c): c is string => typeof c === "string") : [],
+    }];
+  });
 }
 
 const BASE = "https://api.tcgdex.net/v2/en";
@@ -74,6 +89,7 @@ export class TcgdexClient {
         rarity: c.rarity ?? null,
         artist: c.illustrator ?? null,
         text: buildCardText(c),
+        attacks: pickAttacks(c),
         imageBase: c.image ?? null,
         rawUsd: pickTcgplayerMarket(c.pricing?.tcgplayer),
         rawEur: typeof c.pricing?.cardmarket?.trend === "number" ? c.pricing.cardmarket.trend : null,

@@ -51,12 +51,48 @@ struct CardImageView: View {
             .fill(.quaternary)
             .overlay {
                 if let card {
-                    VStack(spacing: 2) {
-                        Text(card.setId.uppercased()).font(.caption2.bold())
-                        Text("#\(card.number)").font(.caption2)
+                    if quality == "high" {
+                        matchInfo(card)
+                    } else {
+                        VStack(spacing: 2) {
+                            Text(card.setId.uppercased()).font(.caption2.bold())
+                            Text("#\(card.number)").font(.caption2)
+                        }
+                        .foregroundStyle(.secondary)
                     }
-                    .foregroundStyle(.secondary)
                 }
             }
+    }
+
+    /// Detail-size fallback when no art exists: the card's printed facts (name, HP, types,
+    /// moves + damage, rarity/artist) so the user can match the physical card in hand.
+    private func matchInfo(_ card: CardRecord) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(card.name).font(.subheadline.bold()).lineLimit(2)
+                Spacer(minLength: 4)
+                if let hp = card.hp { Text("HP \(hp)").font(.caption.bold()) }
+            }
+            if !card.types.isEmpty {
+                Text(card.types.joined(separator: " · ")).font(.caption2)
+            }
+            ForEach(Array(card.attacks.enumerated()), id: \.offset) { _, attack in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(attack.name).font(.caption).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if let damage = attack.damage { Text(damage).font(.caption.bold()) }
+                }
+            }
+            Spacer(minLength: 0)
+            let credits = [card.rarity, card.artist].compactMap { $0 }
+            if !credits.isEmpty {
+                Text(credits.joined(separator: " · ")).font(.caption2).lineLimit(1)
+            }
+            Text("\(card.setId.uppercased()) #\(card.number)").font(.caption2.bold())
+        }
+        .foregroundStyle(.secondary)
+        .padding(10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .minimumScaleFactor(0.7)
     }
 }

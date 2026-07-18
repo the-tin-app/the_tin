@@ -1,5 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { effectText } from "../scripts/flatten-cards-db";
+import { attacksOf, effectText } from "../scripts/flatten-cards-db";
+
+describe("attacksOf", () => {
+  it("keeps name, stringifies numeric damage, defaults cost", () => {
+    expect(attacksOf({
+      attacks: [
+        { name: { en: "Razor Leaf" }, damage: 30, cost: ["Grass", "Colorless"] },
+        { name: { en: "Solar Beam" }, damage: "60+" },
+        { name: { fr: "Sans anglais" }, damage: 10 }, // no english name → dropped
+      ],
+    })).toEqual([
+      { name: "Razor Leaf", damage: "30", cost: ["Grass", "Colorless"] },
+      { name: "Solar Beam", damage: "60+", cost: [] },
+    ]);
+  });
+
+  it("returns empty for a card with no attacks", () => {
+    expect(attacksOf({})).toEqual([]);
+  });
+});
 
 describe("effectText", () => {
   it("includes attack/ability names alongside their effects", () => {
