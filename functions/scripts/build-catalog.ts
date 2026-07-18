@@ -213,6 +213,7 @@ async function main() {
     const card: TcgdexCard = {
       id: c.id, localId: c.localId, name: c.name, hp: c.hp,
       types: c.types, rarity: c.rarity, artist: c.artist, text: c.text,
+      attacks: c.attacks ?? [], // pre-attacks metadata JSON lacks the field
       imageBase, rawUsd, rawEur,
     };
     if (!cardsBySet.has(c.setId)) cardsBySet.set(c.setId, []);

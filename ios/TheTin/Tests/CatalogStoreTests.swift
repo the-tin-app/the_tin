@@ -30,6 +30,8 @@ final class CatalogStoreTests: XCTestCase {
         XCTAssertEqual(ray.hp, 320)
         XCTAssertEqual(ray.types, ["Dragon"])
         XCTAssertEqual(ray.imageBase, "https://assets.tcgdex.net/en/swsh/swsh7/215")
+        XCTAssertEqual(ray.attacks, [Attack(name: "Max Burst", damage: "320", cost: ["Fire", "Lightning"])])
+        XCTAssertEqual(cards[2].attacks, []) // NULL attacks column → empty, never a decode crash
     }
 
     func testPriceLookupAndGradeFallback() throws {

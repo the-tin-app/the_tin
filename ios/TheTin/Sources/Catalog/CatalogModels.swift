@@ -16,6 +16,14 @@ struct PokemonRecord: Identifiable, Equatable {
     var id: Int { dexId }
 }
 
+/// One attack from the catalog `card.attacks` JSON column (name + damage + energy cost).
+/// Shown on the no-image placeholder so users can match a physical card without art.
+struct Attack: Equatable, Codable {
+    let name: String
+    let damage: String? // printed damage, e.g. "30", "60+", "20×" — text, not numeric
+    let cost: [String]  // energy type names, e.g. ["Grass", "Colorless"]
+}
+
 struct CardRecord: Identifiable, Equatable {
     let id: String
     let setId: String
@@ -28,6 +36,9 @@ struct CardRecord: Identifiable, Equatable {
     let imageBase: String?
     let imageUrl: String?
     let tcgplayerId: Int?
+    // Default keeps the memberwise init source-compatible; catalogs older than the
+    // attacks column (or non-Pokémon cards) simply have none.
+    var attacks: [Attack] = []
 
     /// Prefer the TCGdex asset base (+ webp variant, e.g. "/high.webp"); otherwise fall back to
     /// the full mirrored image URL (a TCGplayer-CDN JPEG re-hosted in our bucket); else nil.

@@ -536,12 +536,16 @@ final class CatalogStore {
 
     static func cardRecord(_ r: Row) -> CardRecord {
         let types: String? = r["types"]
+        // Missing column (pre-attacks catalogs) or bad JSON reads as no attacks.
+        let attacksJSON: String? = r["attacks"]
+        let attacks = attacksJSON.flatMap { try? JSONDecoder().decode([Attack].self, from: Data($0.utf8)) } ?? []
         return CardRecord(id: r["id"], setId: r["set_id"], number: r["number"], name: r["name"],
                           hp: r["hp"],
                           types: (types ?? "").split(separator: ",").map(String.init),
                           rarity: r["rarity"], artist: r["artist"], imageBase: r["image_base"],
                           imageUrl: r["image_url"],
-                          tcgplayerId: r["tcgplayer_id"])
+                          tcgplayerId: r["tcgplayer_id"],
+                          attacks: attacks)
     }
 
     private static func priceRecord(_ r: Row) -> PriceRecord {
