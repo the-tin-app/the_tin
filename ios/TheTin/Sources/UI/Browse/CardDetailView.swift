@@ -21,6 +21,10 @@ final class CardDetailModel {
     private(set) var historyState: HistoryState = .loading
     /// The active catalog tier — drives how much price history the chart shows and its empty copy.
     let tier: CatalogTier
+    /// Expert-tier chart overlays: which condition / PSA grade to chart alongside raw. `nil` = off.
+    /// The view re-runs `loadHistory()` when either changes (`.task(id:)`).
+    var overlayCondition: Condition? = .nearMint
+    var overlayGrade: Grade? = .psa10
     private let store: CatalogStore
     private let history: PriceHistoryProviding
 
@@ -44,14 +48,16 @@ final class CardDetailModel {
             let raw = try await history.rawHistory(cardId: card.id)
             guard !raw.isEmpty else { historyState = .empty; return }
             var series = [PriceSeries(name: "Raw", points: raw)]
-            // Expert tier only: overlay NM-condition and PSA 10 history. Those tables are dropped
-            // below expert, so the queries only run here — never on casual/average.
+            // Expert tier only: overlay the selected condition / PSA grade history. Those tables
+            // are dropped below expert, so the queries only run here — never on casual/average.
             if tier == .expert {
-                if let nm = try? store.conditionHistory(cardId: card.id, condition: .nearMint), !nm.isEmpty {
-                    series.append(PriceSeries(name: "NM", points: nm))
+                if let cond = overlayCondition,
+                   let pts = try? store.conditionHistory(cardId: card.id, condition: cond), !pts.isEmpty {
+                    series.append(PriceSeries(name: cond.label, points: pts))
                 }
-                if let psa10 = try? store.gradedHistory(cardId: card.id, grade: "10"), !psa10.isEmpty {
-                    series.append(PriceSeries(name: "PSA 10", points: psa10))
+                if let grade = overlayGrade,
+                   let pts = try? store.gradedHistory(cardId: card.id, grade: String(grade.numeric)), !pts.isEmpty {
+                    series.append(PriceSeries(name: grade.label, points: pts))
                 }
             }
             historyState = .loaded(series)
@@ -62,7 +68,7 @@ final class CardDetailModel {
 }
 
 struct CardDetailView: View {
-    let model: CardDetailModel
+    @Bindable var model: CardDetailModel
     let store: CatalogStore
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
@@ -230,7 +236,9 @@ struct CardDetailView: View {
         }
         .navigationTitle(model.card.name)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.loadHistory() }
+        .task(id: "\(model.overlayCondition?.rawValue ?? "-")|\(model.overlayGrade?.rawValue ?? "-")") {
+            await model.loadHistory()
+        }
         .toolbar { detailToolbar }
         .sheet(item: $marketplaceURL) { SafariSheet(url: $0.url) }
         .sheet(isPresented: $showingAddSheet) {
@@ -280,7 +288,11 @@ struct CardDetailView: View {
             ProgressView("Loading price history…")
         case .loaded(let series):
             VStack(alignment: .leading, spacing: 8) {
-                Text("Price history").font(.headline)
+                HStack {
+                    Text("Price history").font(.headline)
+                    Spacer()
+                    if model.tier == .expert { overlayPickers }
+                }
                 PriceHistoryChart(series: series)
             }
         case .empty where model.tier == .casual:
@@ -300,6 +312,42 @@ struct CardDetailView: View {
             Label("No price history yet", systemImage: "chart.line.uptrend.xyaxis")
                 .font(.footnote).foregroundStyle(.secondary)
         }
+    }
+
+    /// Expert-tier overlay selectors: one condition + one PSA grade (each can be off). Chips
+    /// mirror the printing menu; dot color matches the chart line for that overlay.
+    private var overlayPickers: some View {
+        HStack(spacing: 6) {
+            Menu {
+                Picker("Condition", selection: $model.overlayCondition) {
+                    Text("Off").tag(Condition?.none)
+                    ForEach(Condition.allCases) { Text($0.label).tag(Condition?.some($0)) }
+                }
+            } label: {
+                overlayChip(model.overlayCondition?.label ?? "Condition",
+                            dot: model.overlayCondition != nil ? .teal : nil)
+            }
+            Menu {
+                Picker("PSA grade", selection: $model.overlayGrade) {
+                    Text("Off").tag(Grade?.none)
+                    ForEach(Grade.allCases.reversed()) { Text($0.label).tag(Grade?.some($0)) }
+                }
+            } label: {
+                overlayChip(model.overlayGrade?.label ?? "PSA",
+                            dot: model.overlayGrade != nil ? .orange : nil)
+            }
+        }
+        .tint(.primary)
+    }
+
+    private func overlayChip(_ title: String, dot: Color?) -> some View {
+        HStack(spacing: 4) {
+            if let dot { Circle().fill(dot).frame(width: 6, height: 6) }
+            Text(title).font(.caption.weight(.semibold))
+            Image(systemName: "chevron.up.chevron.down").font(.caption2)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(.quaternary.opacity(0.4), in: Capsule())
     }
 
     /// The user's first raw (ungraded) copy of this card. Its condition drives the baseline and

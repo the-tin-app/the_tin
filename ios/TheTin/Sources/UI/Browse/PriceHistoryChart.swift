@@ -25,13 +25,13 @@ struct PriceHistoryChart: View {
         }
     }
 
-    // Colors keyed by series name so plot and legend agree.
+    // Colors keyed by series name so plot and legend agree: condition overlays teal, any
+    // "PSA N" grade overlay orange, primary series accent.
     private func color(_ name: String) -> Color {
         switch name {
-        case "NM": return .teal
-        case "PSA 10": return .orange
+        case "NM", "LP", "MP", "HP", "DMG": return .teal
         case "Cost basis": return .gray
-        default: return .accentColor
+        default: return name.hasPrefix("PSA") ? .orange : .accentColor
         }
     }
 
