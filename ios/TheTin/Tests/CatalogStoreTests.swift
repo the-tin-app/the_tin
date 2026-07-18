@@ -43,6 +43,17 @@ final class CatalogStoreTests: XCTestCase {
         XCTAssertNil(try store.price(cardId: "swsh7-12")) // coverage rule: no row
     }
 
+    func testPriceRecordReadsAllPsaColumns() throws {
+        // Fixture: Rayquaza has psa7/psa9/psa10 but no psa8 (the interpolation gap card).
+        let p = try XCTUnwrap(try store.price(cardId: "swsh7-215"))
+        XCTAssertEqual(p.psa7, 90)
+        XCTAssertNil(p.psa8)
+        XCTAssertEqual(p.psa9, 180)
+        XCTAssertEqual(p.gradedOnly(.psa8), nil)
+        XCTAssertEqual(p.gradedOnly(.psa9), 180)
+        XCTAssertEqual(p.value(for: .psa8), 92.5)  // raw fallback for a nil grade column
+    }
+
     func testBatchPricesAndSetRawTotal() throws {
         let prices = try store.prices(cardIds: ["swsh7-215", "swsh7-94", "swsh7-12"])
         XCTAssertEqual(prices.count, 2)

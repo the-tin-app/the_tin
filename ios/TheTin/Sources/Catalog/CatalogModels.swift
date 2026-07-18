@@ -39,9 +39,12 @@ struct CardRecord: Identifiable, Equatable {
 }
 
 enum Grade: String, CaseIterable, Identifiable {
-    case psa3, psa7, psa9, psa10
+    // Declared ascending — code relies on allCases order for "lowest grade first" scans.
+    case psa1, psa2, psa3, psa4, psa5, psa6, psa7, psa8, psa9, psa10
     var id: String { rawValue }
     var label: String { "PSA \(rawValue.dropFirst(3))" }
+    var numeric: Int { Int(rawValue.dropFirst(3))! }
+    init?(numeric: Int) { self.init(rawValue: "psa\(numeric)") }
 }
 
 /// Ungraded market price by card condition, from `price_by_condition` (raw PPT/marketplace
@@ -122,30 +125,47 @@ struct PriceRecord: Equatable {
     let cardId: String
     let rawUsd: Double?
     let rawEur: Double?
+    let psa1: Double?
+    let psa2: Double?
     let psa3: Double?
+    let psa4: Double?
+    let psa5: Double?
+    let psa6: Double?
     let psa7: Double?
+    let psa8: Double?
     let psa9: Double?
     let psa10: Double?
     let asOf: String
 
+    /// Grades default to nil so call sites name only the columns they care about. Labels must
+    /// appear in ascending declaration order (Swift rule), matching how existing callers read.
+    init(cardId: String, rawUsd: Double?, rawEur: Double?,
+         psa1: Double? = nil, psa2: Double? = nil, psa3: Double? = nil, psa4: Double? = nil,
+         psa5: Double? = nil, psa6: Double? = nil, psa7: Double? = nil, psa8: Double? = nil,
+         psa9: Double? = nil, psa10: Double? = nil, asOf: String) {
+        self.cardId = cardId; self.rawUsd = rawUsd; self.rawEur = rawEur
+        self.psa1 = psa1; self.psa2 = psa2; self.psa3 = psa3; self.psa4 = psa4
+        self.psa5 = psa5; self.psa6 = psa6; self.psa7 = psa7; self.psa8 = psa8
+        self.psa9 = psa9; self.psa10 = psa10; self.asOf = asOf
+    }
+
     /// Default display currency is USD; a set grade falls back to raw_usd when that column is null.
     func value(for grade: Grade?) -> Double? {
-        let graded: Double?
-        switch grade {
-        case .none: return rawUsd
-        case .psa3: graded = psa3
-        case .psa7: graded = psa7
-        case .psa9: graded = psa9
-        case .psa10: graded = psa10
-        }
-        return graded ?? rawUsd
+        guard let grade else { return rawUsd }
+        return gradedOnly(grade) ?? rawUsd
     }
 
     /// The graded column only — no raw fallback. For display with explicit gaps (spec §6).
     func gradedOnly(_ grade: Grade) -> Double? {
         switch grade {
+        case .psa1: return psa1
+        case .psa2: return psa2
         case .psa3: return psa3
+        case .psa4: return psa4
+        case .psa5: return psa5
+        case .psa6: return psa6
         case .psa7: return psa7
+        case .psa8: return psa8
         case .psa9: return psa9
         case .psa10: return psa10
         }

@@ -545,8 +545,11 @@ final class CatalogStore {
     }
 
     private static func priceRecord(_ r: Row) -> PriceRecord {
+        // Missing columns (pre-all-grades catalogs) read as nil — the record stays correct.
         PriceRecord(cardId: r["card_id"], rawUsd: r["raw_usd"], rawEur: r["raw_eur"],
-                    psa3: r["psa3"], psa7: r["psa7"], psa9: r["psa9"], psa10: r["psa10"], asOf: r["as_of"])
+                    psa1: r["psa1"], psa2: r["psa2"], psa3: r["psa3"], psa4: r["psa4"],
+                    psa5: r["psa5"], psa6: r["psa6"], psa7: r["psa7"], psa8: r["psa8"],
+                    psa9: r["psa9"], psa10: r["psa10"], asOf: r["as_of"])
     }
 }
 
@@ -555,10 +558,25 @@ struct PriceDelta: Codable, Equatable {
         let cardId: String
         let rawUsd: Double?
         let rawEur: Double?
-        let psa3: Double?
-        let psa7: Double?
-        let psa9: Double?
-        let psa10: Double?
+        var psa1: Double? = nil
+        var psa2: Double? = nil
+        var psa3: Double? = nil
+        var psa4: Double? = nil
+        var psa5: Double? = nil
+        var psa6: Double? = nil
+        var psa7: Double? = nil
+        var psa8: Double? = nil
+        var psa9: Double? = nil
+        var psa10: Double? = nil
+
+        func value(for grade: Grade) -> Double? {
+            switch grade {
+            case .psa1: return psa1; case .psa2: return psa2; case .psa3: return psa3
+            case .psa4: return psa4; case .psa5: return psa5; case .psa6: return psa6
+            case .psa7: return psa7; case .psa8: return psa8; case .psa9: return psa9
+            case .psa10: return psa10
+            }
+        }
     }
     let asOf: String
     let rows: [Row]
@@ -566,17 +584,24 @@ struct PriceDelta: Codable, Equatable {
 
 extension CatalogStore {
     /// Upsert daily price rows (handoff §3.1). Rows for cards not in the catalog are skipped.
+    /// Writes only the psa columns the installed catalog actually has, so a new app applying a
+    /// delta to a pre-all-grades catalog neither errors nor (via OR REPLACE) nulls columns out.
     @discardableResult
     func applyPriceDelta(_ delta: PriceDelta) throws -> Int {
         try dbQueue.write { db in
+            let cols = try db.columns(in: "price_latest").map(\.name)
+            let psaCols = Grade.allCases.filter { cols.contains($0.rawValue) }
+            let colList = psaCols.map(\.rawValue).joined(separator: ", ")
+            let placeholders = psaCols.map { _ in "?" }.joined(separator: ", ")
             var applied = 0
             for row in delta.rows {
+                let psaValues: [DatabaseValueConvertible?] = psaCols.map { row.value(for: $0) }
                 try db.execute(sql: """
-                    INSERT OR REPLACE INTO price_latest (card_id, raw_usd, raw_eur, psa3, psa7, psa9, psa10, as_of)
-                    SELECT ?, ?, ?, ?, ?, ?, ?, ?
+                    INSERT OR REPLACE INTO price_latest (card_id, raw_usd, raw_eur, \(colList), as_of)
+                    SELECT ?, ?, ?, \(placeholders), ?
                     WHERE EXISTS (SELECT 1 FROM card WHERE id = ?)
-                    """, arguments: [row.cardId, row.rawUsd, row.rawEur, row.psa3, row.psa7, row.psa9, row.psa10,
-                                     delta.asOf, row.cardId])
+                    """, arguments: StatementArguments([row.cardId, row.rawUsd, row.rawEur] + psaValues
+                                                       + [delta.asOf, row.cardId]))
                 applied += db.changesCount
             }
             return applied
