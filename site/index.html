@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Tin — free, open-source Pokémon TCG collection tracker</title>
+<meta name="description" content="Scan your Pokémon cards, track prices and value, and estimate PSA grades. Free forever — no ads, no paywall, no account. Open source, for iPhone and iPad.">
+<link rel="canonical" href="https://thetinapp.com/">
+<meta property="og:title" content="The Tin — your collection, kept.">
+<meta property="og:description" content="A free, open-source Pokémon TCG tracker. No ads, no paywall, no account — your collection never leaves your phone.">
+<meta property="og:url" content="https://thetinapp.com/">
+<meta property="og:image" content="https://thetinapp.com/assets/icon-512.png">
+<meta name="theme-color" content="#12213f">
+<link rel="icon" href="/assets/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="container">
+    <a class="wordmark on-enamel" href="/">
+      <svg width="22" height="18" viewBox="0 0 20 16" aria-hidden="true" fill="currentColor">
+        <rect x="0" y="0" width="20" height="4" rx="2"/>
+        <rect x="2" y="5.6" width="16" height="10.4" rx="3.2"/>
+      </svg>
+      The Tin
+    </a>
+    <nav class="site-nav on-enamel" aria-label="Site">
+      <a href="/support/">Support</a>
+      <a href="/privacy/">Privacy</a>
+      <a href="https://github.com/the-tin-app/the_tin">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="container">
+      <div class="tin-stage" role="img" aria-label="The Tin logo: a blue tin opening, a gold card rising out">
+        <svg class="tin-svg" viewBox="0 0 110 96" fill="none">
+          <defs>
+            <linearGradient id="g-card" x1="0" y1="26" x2="0" y2="72" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#eebb62"/><stop offset="1" stop-color="#d99f3d"/>
+            </linearGradient>
+            <linearGradient id="g-body" x1="0" y1="37" x2="0" y2="81" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#3b74c9"/><stop offset="1" stop-color="#16386f"/>
+            </linearGradient>
+            <linearGradient id="g-lid" x1="0" y1="24" x2="0" y2="38" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#5d90dd"/><stop offset="1" stop-color="#3b74c9"/>
+            </linearGradient>
+          </defs>
+          <g class="tin-card-anim">
+            <rect x="38" y="26" width="34" height="46" rx="5" fill="url(#g-card)"/>
+          </g>
+          <rect x="13" y="37" width="84" height="44" rx="9" fill="url(#g-body)"/>
+          <g class="tin-lid-anim">
+            <rect x="9" y="24" width="92" height="14" rx="5" fill="url(#g-lid)"/>
+          </g>
+        </svg>
+      </div>
+
+      <h1>Your collection, <em>kept.</em></h1>
+
+      <p class="lead">The Tin is a free, open-source Pokémon TCG tracker for iPhone and iPad.
+      Scan cards, follow prices, and know what your collection is worth —
+      no ads, no paywall, no account.</p>
+
+      <div class="hero-ctas">
+        <span class="soon-chip">
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M11.1 1.5c.1 1-.3 1.9-.9 2.6-.6.7-1.6 1.2-2.5 1.2-.1-.9.4-1.9 1-2.5.6-.7 1.6-1.2 2.4-1.3ZM13.9 12c-.4.9-.6 1.3-1.1 2-.7 1.1-1.7 2.4-3 2.4-1.1 0-1.4-.7-2.9-.7s-1.9.7-3 .7c-1.2 0-2.2-1.2-2.9-2.2C-.9 11.3-1.1 8 .1 6.2c.8-1.2 2.1-2 3.3-2 1.2 0 2 .7 3 .7 1 0 1.6-.7 3-.7 1.1 0 2.2.6 3 1.6-2.6 1.4-2.2 5.1 1.5 6.2Z" transform="translate(1 -1)"/></svg>
+          Coming to the App&nbsp;Store
+        </span>
+        <a class="btn btn-light" href="https://github.com/the-tin-app/the_tin">
+          <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+
+      <p class="ledger" aria-label="What The Tin costs">
+        <span><strong>$0</strong>&nbsp;forever</span>
+        <span><strong>0</strong>&nbsp;ads</span>
+        <span><strong>0</strong>&nbsp;paywalls</span>
+        <span><strong>AGPL</strong>&nbsp;open&nbsp;source</span>
+      </p>
+    </div>
+  </section>
+
+  <section class="interior">
+    <div class="container">
+
+      <article class="feature reveal" style="--tab-color: var(--cover-sky); --sleeve-color: var(--cover-sky);">
+        <div>
+          <p class="divider-tab">Scan</p>
+          <h2>Point, scan, filed.</h2>
+          <p>Hold a card up to the camera and it lands in your collection in seconds —
+          set, number, printing, and condition. Recognition runs entirely on your
+          device; the camera never uploads a frame.</p>
+          <p class="fine">Scans through sleeves and cases, even in bad light. Works offline once the catalog is downloaded.</p>
+        </div>
+        <div class="feature-media">
+          <div class="device"><div class="device-screen">
+            <img class="shot" src="/assets/shot-scan.jpg?v=3" width="828" height="1799" loading="lazy"
+              alt="The scanner mid-scan on a Southern Islands Mew inside a one-touch case in dim light, with 25 cards staged worth $1,256.76 and a Review button">
+          </div></div>
+        </div>
+      </article>
+
+      <article class="feature reveal" style="--tab-color: var(--cover-manila); --sleeve-color: var(--cover-manila);">
+        <div>
+          <p class="divider-tab">The Tin</p>
+          <h2>Know what you own — and what it&rsquo;s worth.</h2>
+          <p>Every card, every printing, every condition, grouped the way you actually
+          collect. Your tin&rsquo;s total value sits at the top, and the whole
+          collection imports and exports as CSV. No lock-in, ever.</p>
+          <p class="fine">Conditions, variants, wishlists, and sealed product included.</p>
+        </div>
+        <div class="feature-media">
+          <div class="device"><div class="device-screen">
+            <img class="shot" src="/assets/shot-tin.jpg?v=3" width="828" height="1799" loading="lazy"
+              alt="The Tin's collection screen: a $2,290 tin of 27 cards organized into Everything, Hard case, and Binder A dividers with riffled card art previews">
+          </div></div>
+        </div>
+      </article>
+
+      <article class="feature reveal" style="--tab-color: var(--cover-teal); --sleeve-color: var(--cover-teal);">
+        <div>
+          <p class="divider-tab">Prices</p>
+          <h2>Two years of history on every card.</h2>
+          <p>Market prices in USD and EUR, refreshed nightly, with condition and
+          variant pricing and a two-year sparkline on every card. Every price
+          carries its &ldquo;as of&rdquo; date — data that tells you its age is data
+          you can trust.</p>
+          <p class="fine">TCGplayer and Cardmarket sources. No premium tier — everyone gets everything.</p>
+        </div>
+        <div class="feature-media">
+          <div class="device"><div class="device-screen">
+            <img class="shot" src="/assets/shot-prices.jpg?v=3" width="828" height="1799" loading="lazy"
+              alt="A card detail screen for the 2001 Southern Islands Mew showing its holo art and a $453.03 raw market price, priced as of 2026-07-17">
+          </div></div>
+        </div>
+      </article>
+
+      <article class="feature reveal" style="--tab-color: var(--cover-plum); --sleeve-color: var(--cover-plum);">
+        <div>
+          <p class="divider-tab">Grade It</p>
+          <h2>Worth grading? Know before you ship.</h2>
+          <p>Population data and graded-market prices for PSA grades 1&ndash;10,
+          turned into a plain answer: what your card is likely worth at each grade,
+          and whether the grading fee is worth the gamble.</p>
+          <p class="fine">Estimates are estimates — The Tin shows you the population math behind every one.</p>
+        </div>
+        <div class="feature-media">
+          <div class="device"><div class="device-screen">
+            <img class="shot" src="/assets/shot-grade.jpg?v=3" width="828" height="1799" loading="lazy"
+              alt="A two-year price history chart rising from $150 to $450, above a Grade It table listing odds and values for each PSA grade with the verdict: worth grading, expected +$1,456 after fees">
+          </div></div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="container">
+      <h2>Nothing to sell you. <em>Nothing to take.</em></h2>
+      <p class="lead-p">Most collection apps are free until they aren&rsquo;t. The Tin has no
+      business model pointed at you: no ads to show, no analytics to feed, no
+      &ldquo;Pro&rdquo; tier waiting behind your fiftieth card.</p>
+      <ul class="truths">
+        <li>
+          <h3>No account</h3>
+          <p>Nothing to sign up for. The app works anonymously from first launch.</p>
+        </li>
+        <li>
+          <h3>No tracking</h3>
+          <p>No analytics, no crash harvesting, no third-party trackers. Zero.</p>
+        </li>
+        <li>
+          <h3>Yours, on your device</h3>
+          <p>Your collection is stored on your phone — not on our servers, not anyone&rsquo;s.</p>
+        </li>
+        <li>
+          <h3>Verifiable</h3>
+          <p>Every claim above is checkable — <a href="https://github.com/the-tin-app/the_tin">the code is public</a>.
+          Details in the <a href="/privacy/">privacy policy</a>.</p>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="open-source">
+    <div class="container">
+      <div>
+        <p class="divider-tab" style="--tab-color: var(--cover-sage);">Open source</p>
+        <h2>Built in the open, funded by collectors.</h2>
+        <p>The Tin is AGPL-3.0 — the app, the card-data pipeline, and the
+        self-hosted servers that feed it. Card data rebuilds nightly from public
+        market sources and ships to the app as a single database your phone owns.</p>
+        <p>There&rsquo;s nothing to buy, so if The Tin earns a place in your pocket,
+        the ways to give back are the ones that matter: star the repo, file the bug
+        you found, or chip in toward hosting.</p>
+      </div>
+      <a class="repo-card" href="https://github.com/the-tin-app/the_tin">
+        <span class="repo-name">
+          <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          the-tin-app/the_tin
+        </span>
+        <p>A free, open source Pokémon TCG collection tracker for iOS — clean, capable, quiet.</p>
+        <span class="repo-meta">
+          <span>AGPL-3.0</span><span>Swift</span><span>Self-hosted backend</span>
+        </span>
+      </a>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-row">
+      <a class="wordmark" href="/">
+        <svg width="20" height="16" viewBox="0 0 20 16" aria-hidden="true" fill="currentColor">
+          <rect x="0" y="0" width="20" height="4" rx="2"/>
+          <rect x="2" y="5.6" width="16" height="10.4" rx="3.2"/>
+        </svg>
+        The Tin
+      </a>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="/support/">Support</a>
+        <a href="/privacy/">Privacy</a>
+        <a href="https://github.com/the-tin-app/the_tin">GitHub</a>
+        <a href="mailto:support@thetinapp.com">support@thetinapp.com</a>
+      </nav>
+    </div>
+    <p class="legal">The Tin is not affiliated with, endorsed by, or sponsored by Nintendo,
+    Creatures, Game Freak, or The Pokémon Company International. Pokémon and all card names
+    and images are trademarks of their respective owners, referenced for identification
+    purposes only. Market prices are informational and carry no guarantee.</p>
+    <p class="legal">© 2026 Tomas Reyes · Free forever, open source under AGPL-3.0.</p>
+  </div>
+</footer>
+
+<script>
+  if ('IntersectionObserver' in window && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.documentElement.classList.add('reveal-ready');
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+    }, { rootMargin: '0px 0px -8% 0px' });
+    document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+  }
+</script>
+
+</body>
+</html>
