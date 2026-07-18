@@ -37,6 +37,41 @@ final class CatalogSearchTests: XCTestCase {
         XCTAssertEqual(try store.search(SearchQuery.parse("pikachu hp:300")).count, 0)
     }
 
+    // MARK: number search (promo / zero-padded numerators)
+
+    func testBareNumeratorIsBothNameTokenAndNumberCandidate() {
+        let q = SearchQuery.parse("25")
+        XCTAssertEqual(q.nameTokens, ["25"])
+        XCTAssertEqual(q.numberCandidate, "25")
+        XCTAssertEqual(SearchQuery.parse("swsh123").numberCandidate, "SWSH123")
+        XCTAssertNil(SearchQuery.parse("pikachu").numberCandidate)      // no digit
+        XCTAssertEqual(SearchQuery.parse("025").numberCandidate, "25")  // zero-strip
+    }
+
+    func testHashAcceptsAlphanumericAndNormalizes() {
+        XCTAssertEqual(SearchQuery.parse("#025").number?.local, "25")
+        XCTAssertEqual(SearchQuery.parse("#tg20").number?.local, "TG20")
+    }
+
+    func testBareNumeratorFindsPromoAndRegularNumbers() throws {
+        let ids = Set(try store.search(SearchQuery.parse("25")).map(\.id))
+        XCTAssertTrue(ids.contains("sv1-25"))     // regular number
+        XCTAssertTrue(ids.contains("svp-025"))    // zero-padded promo
+    }
+
+    func testAlphanumericPromoNumberSearch() throws {
+        XCTAssertTrue(try store.search(SearchQuery.parse("tg20")).map(\.id).contains("swsh7-TG20"))
+    }
+
+    func testHashNormalizedMatch() throws {
+        XCTAssertEqual(Set(try store.search(SearchQuery.parse("#025")).map(\.id)), ["sv1-25", "svp-025"])
+    }
+
+    func testNumeratorDenominatorStillScopedToSet() throws {
+        XCTAssertEqual(try store.search(SearchQuery.parse("25/198")).map(\.id), ["sv1-25"])
+        XCTAssertEqual(try store.search(SearchQuery.parse("94/203")).map(\.id), ["swsh7-94"])
+    }
+
     func testQuoteInjectionIsSafe() throws {
         // must not throw an FTS5 syntax error
         XCTAssertNoThrow(try store.search(SearchQuery.parse(#"ray" OR "x"#)))
@@ -64,8 +99,9 @@ final class CatalogSearchTests: XCTestCase {
     }
 
     func testNumberHashFilterNoDenominator() throws {
-        XCTAssertEqual(try store.search(SearchQuery.parse("#\(FixtureCatalog.knownNumber)")).map(\.id),
-                       [FixtureCatalog.knownCardId])
+        // Normalized match: "#25" now surfaces the zero-padded svp promo alongside sv1-25.
+        XCTAssertEqual(Set(try store.search(SearchQuery.parse("#\(FixtureCatalog.knownNumber)")).map(\.id)),
+                       [FixtureCatalog.knownCardId, "svp-025"])
     }
 
     func testNumberPlusNameNarrows() throws {

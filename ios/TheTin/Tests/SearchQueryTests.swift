@@ -42,8 +42,10 @@ final class SearchQueryTests: XCTestCase {
         XCTAssertEqual(SearchQuery.parse("#58").number, CardNumberFilter(local: "58", total: nil))
     }
 
-    func testNumberPreservesZeroPadding() {
-        XCTAssertEqual(SearchQuery.parse("008/102").number, CardNumberFilter(local: "008", total: 102))
+    func testNumberNormalizesZeroPadding() {
+        // local is stored normalized (zero-stripped, uppercased); the search side normalizes the
+        // column identically, so "008", "8", and "#08" all match a card numbered "008".
+        XCTAssertEqual(SearchQuery.parse("008/102").number, CardNumberFilter(local: "8", total: 102))
     }
 
     func testBareDigitsAreNotANumberFilter() {
