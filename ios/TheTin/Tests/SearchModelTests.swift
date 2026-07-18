@@ -27,6 +27,7 @@ final class SearchModelTests: XCTestCase {
 
     func testHPFilterQuery() {
         model.text = "hp:60"
-        XCTAssertEqual(model.results.map(\.id), ["sv1-25"])
+        // Both hp-60 Pikachus: the sv1 print and the svp-025 promo.
+        XCTAssertEqual(Set(model.results.map(\.id)), ["sv1-25", "svp-025"])
     }
 }

@@ -14,10 +14,11 @@ final class CatalogStoreTests: XCTestCase {
 
     func testSetsOrderedNewestFirst() throws {
         let sets = try store.sets()
-        XCTAssertEqual(sets.map(\.id), ["sv1", "swsh7"])
-        XCTAssertEqual(sets[1].name, "Evolving Skies")
-        XCTAssertEqual(sets[1].total, 237)
-        XCTAssertEqual(sets[1].era, "Sword & Shield")
+        // sv1 and svp share a release date; id breaks the tie. swsh7 (older) comes last.
+        XCTAssertEqual(sets.map(\.id), ["sv1", "svp", "swsh7"])
+        XCTAssertEqual(sets[2].name, "Evolving Skies")
+        XCTAssertEqual(sets[2].total, 237)
+        XCTAssertEqual(sets[2].era, "Sword & Shield")
     }
 
     func testCardsInSetOrderedByNumber() throws {
@@ -47,7 +48,7 @@ final class CatalogStoreTests: XCTestCase {
         XCTAssertEqual(prices.count, 2)
         XCTAssertEqual(try store.setRawTotal(setId: "swsh7"), 122.6, accuracy: 0.001) // raw_usd 92.5 + 30.1
         XCTAssertEqual(try store.priceAsOf(), "2026-07-04")
-        XCTAssertEqual(try store.cardCount(), 6)
+        XCTAssertEqual(try store.cardCount(), 7)   // includes the sv1-025p promo fixture card
     }
 
     func testCardsByIds() throws {
