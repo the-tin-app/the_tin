@@ -18,6 +18,8 @@ const EBAY_CSV =
   "tcgPlayerId,grade,salesCount,averagePrice,medianPrice,smartMarketPrice,smartMarketConfidence,marketPrice7Day,marketTrend,salesVelocityWeekly\n" +
   "200,psa10,40,1200,1150,1180.50,0.9,1175,up,3\n" +
   "200,psa9,30,600,590,585,0.9,580,flat,2\n" +
+  "200,psa8,20,320,300,310,0.9,305,flat,2\n" +
+  "200,psa9.5,4,800,780,790,0.7,785,flat,1\n" + // half grade → ignored for columns
   "200,cgc9,5,700,690,695,0.8,700,flat,1\n"; // non-PSA → ignored for columns
 
 const SEALED_CSV =
@@ -33,7 +35,8 @@ function makeDb(): Database.Database {
   db.exec(`
     CREATE TABLE card(id TEXT PRIMARY KEY, tcgplayer_id INTEGER);
     CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL,
-      psa3 REAL, psa7 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
+      psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
+      psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
     CREATE TABLE sealed_product(tcgplayer_id INTEGER PRIMARY KEY, name TEXT NOT NULL, set_id TEXT,
       product_type TEXT, market_usd REAL, low_usd REAL, as_of TEXT);
     CREATE TABLE population(card_id TEXT NOT NULL, grader TEXT NOT NULL, grade TEXT NOT NULL,
@@ -72,20 +75,22 @@ describe("per-dataset parsers", () => {
   });
   it("parses sealed + ebay rows", () => {
     expect(parseSealedExport(SEALED_CSV)[0].productType).toBe("Booster Box");
-    expect(parseEbayExport(EBAY_CSV).map((r) => r.grade)).toEqual(["psa10", "psa9", "cgc9"]);
+    expect(parseEbayExport(EBAY_CSV).map((r) => r.grade)).toEqual(["psa10", "psa9", "psa8", "psa9.5", "cgc9"]);
   });
 });
 
 describe("ebayGradeToPsaColumn", () => {
-  it("maps PSA grades we have columns for (real lowercase form + tolerant of spaced)", () => {
-    expect(ebayGradeToPsaColumn("psa10")).toBe("psa10");
-    expect(ebayGradeToPsaColumn("psa9")).toBe("psa9");
+  it("maps every integer PSA grade 1-10 (real lowercase form + tolerant of spaced)", () => {
+    for (let g = 1; g <= 10; g++) expect(ebayGradeToPsaColumn(`psa${g}`)).toBe(`psa${g}`);
     expect(ebayGradeToPsaColumn("PSA 10")).toBe("psa10");
   });
-  it("ignores grades with no column (psa8, psa9.5) and other graders (cgc/bgs)", () => {
-    expect(ebayGradeToPsaColumn("psa8")).toBeNull();
+  it("ignores half grades and other graders (cgc/bgs)", () => {
+    expect(ebayGradeToPsaColumn("psa9.5")).toBeNull();
+    expect(ebayGradeToPsaColumn("psa8_5")).toBeNull();
     expect(ebayGradeToPsaColumn("cgc6")).toBeNull();
     expect(ebayGradeToPsaColumn("bgs9.5")).toBeNull();
+    expect(ebayGradeToPsaColumn("psa0")).toBeNull();
+    expect(ebayGradeToPsaColumn("psa11")).toBeNull();
   });
 });
 
@@ -107,6 +112,8 @@ describe("applyExport", () => {
     expect(char.raw_usd).toBe(350);
     expect(char.psa10).toBe(1150); // medianPrice, not smartMarketPrice (1180.5)
     expect(char.psa9).toBe(590);
+    expect(char.psa8).toBe(300);   // psa8 has its own column now (was dropped pre-all-grades)
+    expect(char.psa7).toBeNull();  // no psa7 row in the feed; half grades (psa9.5) don't land
 
     const box = db.prepare("SELECT * FROM sealed_product WHERE tcgplayer_id=9001").get() as any;
     expect(box.market_usd).toBe(7999.99);
