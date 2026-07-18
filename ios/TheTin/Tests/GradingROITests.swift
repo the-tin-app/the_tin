@@ -14,45 +14,83 @@ final class GradingROITests: XCTestCase {
                     psa9: psa9, psa10: psa10, asOf: "2026-07-14")
     }
 
-    // Spec: half grades map to the nearest priced grade at or below (10→psa10, 9/9.5→psa9,
-    // 7–8.5→psa7, ≤6.5→psa3); PSA rows only; unpriced buckets dropped and the rest renormalized.
-    func testDistributionMapsHalfGradesAndRenormalizesUnpricedBuckets() {
-        // "g10" and "9_5" exercise displayGrade normalization (REST vs bulk-export ingest forms).
-        let rows = [pop("10", 300), pop("g10", 100),          // psa10: 400
-                    pop("9_5", 100), pop("9", 200),           // psa9:  300
-                    pop("8.5", 100), pop("7", 100),           // psa7:  200
-                    pop("6.5", 50), pop("1", 50),             // psa3:  100
-                    pop("10", 9999, grader: "CGC")]           // ignored: PSA only
-        let roi = GradingROI.compute(population: rows, price: price(), baseline: 30, fee: 20)!
+    // THE bug-report case: pop has more PSA 8 than PSA 7 but no psa8 price column. PSA 8 must
+    // keep its own (larger) probability, priced by log-linear interpolation between 9 and 7 —
+    // not fold into the 7 bucket, and not be renormalized away.
+    func testPsa8MassStaysAtPsa8WithInterpolatedPrice() {
+        let rows = [pop("10", 100), pop("9", 300), pop("8", 400), pop("7", 200)]
+        let roi = GradingROI.compute(population: rows, price: price(psa3: nil),
+                                     baseline: 30, fee: 20)!
         XCTAssertEqual(roi.totalPopulation, 1000)
-        XCTAssertEqual(roi.buckets.map(\.grade), [.psa10, .psa9, .psa7, .psa3])
-        XCTAssertEqual(roi.buckets.map(\.probability), [400.0/1000, 300.0/1000, 200.0/1000, 100.0/1000])
+        let p8 = roi.buckets.first { $0.grade == .psa8 }!
+        XCTAssertEqual(p8.probability, 0.4)
+        XCTAssertEqual(p8.price, (50.0 * 20.0).squareRoot(), accuracy: 0.001) // log-linear midpoint
+        XCTAssertEqual(p8.source, .estimated(.high))                          // anchors adjacent (gap 2)
+        XCTAssertTrue(roi.hasEstimates)
+        XCTAssertEqual(roi.buckets.first { $0.grade == .psa9 }!.source, .actual)
+        XCTAssertEqual(roi.buckets.map(\.probability).reduce(0, +), 1.0, accuracy: 1e-9)
+        XCTAssertEqual(roi.buckets.map(\.grade), [.psa10, .psa9, .psa8, .psa7]) // descending display order
+    }
 
-        // psa3 price null → its bucket is dropped and the rest renormalize over 900.
-        let renorm = GradingROI.compute(population: rows, price: price(psa3: nil), baseline: 30, fee: 20)!
-        XCTAssertEqual(renorm.buckets.map(\.grade), [.psa10, .psa9, .psa7])
-        XCTAssertEqual(renorm.buckets.map(\.probability), [400.0/900, 300.0/900, 200.0/900])
+    func testHalfGradesFloorAndPseudoRowsExcluded() {
+        // "g10" / "9_5" exercise displayGrade normalization (REST vs bulk-export forms);
+        // auth/qualifiers are pseudo-rows, never part of the distribution.
+        let rows = [pop("g10", 10), pop("9_5", 5), pop("8.5", 7),
+                    pop("auth", 99), pop("qualifiers", 3)]
+        let roi = GradingROI.compute(population: rows, price: price(), baseline: 30, fee: 20)!
+        XCTAssertEqual(roi.totalPopulation, 22)   // 10 + 5(→9) + 7(→8)
+        XCTAssertEqual(roi.buckets.first { $0.grade == .psa9 }!.probability, 5.0 / 22, accuracy: 1e-9)
+    }
 
-        // Degenerate renormalizations hide the panel: all graded prices null, or no PSA rows.
+    func testHoldFlatOutsideAnchorsIsLowConfidence() {
+        // Below the lowest anchor (psa7 when psa3 is nil) prices hold flat, marked rough.
+        let rows = [pop("10", 60), pop("2", 40)]
+        let roi = GradingROI.compute(population: rows, price: price(psa3: nil),
+                                     baseline: 5, fee: 20)!
+        let p2 = roi.buckets.first { $0.grade == .psa2 }!
+        XCTAssertEqual(p2.price, 20)                 // flat at lowest anchor (psa7 $20)
+        XCTAssertEqual(p2.source, .estimated(.low))
+        // Above the highest anchor: psa10 count with only psa9-and-below priced.
+        let roiTop = GradingROI.compute(population: [pop("10", 50), pop("9", 50)],
+                                        price: price(psa10: nil), baseline: 5, fee: 20)!
+        let p10 = roiTop.buckets.first { $0.grade == .psa10 }!
+        XCTAssertEqual(p10.price, 50)                // flat at highest anchor (psa9 $50)
+        XCTAssertEqual(p10.source, .estimated(.low))
+    }
+
+    func testDistantAnchorsLowerConfidence() {
+        // psa5 between anchors 3 and 7 (gap 4) → medium; wider than 4 → low.
+        let rows = [pop("5", 100)]
+        let roi = GradingROI.compute(population: rows, price: price(), baseline: 5, fee: 20)!
+        XCTAssertEqual(roi.buckets.first { $0.grade == .psa5 }!.source, .estimated(.medium))
+        let wide = GradingROI.compute(population: [pop("5", 100)],
+                                      price: price(psa3: nil, psa7: nil), baseline: 5, fee: 20)!
+        // anchors 9,10 only → psa5 below lowest → hold flat, low.
+        XCTAssertEqual(wide.buckets.first { $0.grade == .psa5 }!.source, .estimated(.low))
+    }
+
+    func testExpectedValueOverFullDistribution() {
+        let rows = [pop("10", 400), pop("9", 300), pop("7", 200), pop("3", 100)]
+        let roi = GradingROI.compute(population: rows, price: price(), baseline: 30, fee: 20)!
+        // EV = .4×100 + .3×50 + .2×20 + .1×5 = 59.5; evNet = EV − fee − baseline.
+        XCTAssertEqual(roi.ev, 59.5, accuracy: 1e-9)
+        XCTAssertEqual(roi.evNet, 9.5, accuracy: 1e-9)
+        XCTAssertFalse(roi.hasEstimates)   // every populated grade has a real price
+    }
+
+    func testHidesPanelWithoutAnyActualPriceOrPsaRowsOrBaseline() {
+        let rows = [pop("10", 500), pop("9", 400)]
         XCTAssertNil(GradingROI.compute(population: rows,
                                         price: price(psa3: nil, psa7: nil, psa9: nil, psa10: nil),
                                         baseline: 30, fee: 20))
         XCTAssertNil(GradingROI.compute(population: [pop("10", 500, grader: "CGC")],
                                         price: price(), baseline: 30, fee: 20))
-    }
-
-    func testExpectedValue() {
-        let rows = [pop("10", 400), pop("9", 300), pop("8", 200), pop("7", 50),
-                    pop("6", 30), pop("1", 20)]   // psa10 .4, psa9 .3, psa7 .25, psa3 .05
-        let roi = GradingROI.compute(population: rows, price: price(), baseline: 30, fee: 20)!
-        // EV = .4×100 + .3×50 + .25×20 + .05×5 = 60.25; evNet = EV − fee − baseline.
-        XCTAssertEqual(roi.ev, 60.25, accuracy: 1e-9)
-        XCTAssertEqual(roi.evNet, 10.25, accuracy: 1e-9)
+        XCTAssertNil(GradingROI.compute(population: rows, price: price(), baseline: nil, fee: 20))
     }
 
     func testBreakevenGrade() {
         let rows = [pop("10", 500), pop("9", 500)]
-        // Breakeven = LOWEST priced grade where price − fee > baseline (strict).
+        // Breakeven = LOWEST populated grade whose bucket price − fee > baseline (strict).
         // baseline 30, fee 20 → needs price > 50: psa9 ($50 − 20 = 30, not >) misses; psa10 clears.
         XCTAssertEqual(GradingROI.compute(population: rows, price: price(),
                                           baseline: 30, fee: 20)!.breakevenGrade, .psa10)
@@ -65,16 +103,15 @@ final class GradingROITests: XCTestCase {
     }
 
     func testVerdictThresholds() {
-        let rows = [pop("10", 400), pop("9", 300), pop("8", 200), pop("7", 50),
-                    pop("6", 30), pop("1", 20)]   // EV = 60.25 (see testExpectedValue)
+        let rows = [pop("10", 400), pop("9", 300), pop("7", 200), pop("3", 100)]  // EV = 59.5
         // baseline 30 → borderline band is |evNet| < 6 (20% of baseline).
         func verdict(fee: Double) -> GradingVerdict {
             GradingROI.compute(population: rows, price: price(), baseline: 30, fee: fee)!.verdict
         }
-        XCTAssertEqual(verdict(fee: 20), .grade)        // evNet = +10.25
-        XCTAssertEqual(verdict(fee: 26), .borderline)   // evNet = +4.25, inside the band
-        XCTAssertEqual(verdict(fee: 33), .borderline)   // evNet = −2.75, band is symmetric
-        XCTAssertEqual(verdict(fee: 45), .keep)         // evNet = −14.75
+        XCTAssertEqual(verdict(fee: 20), .grade)        // evNet = +9.5
+        XCTAssertEqual(verdict(fee: 25), .borderline)   // evNet = +4.5, inside the band
+        XCTAssertEqual(verdict(fee: 33), .borderline)   // evNet = −3.5, band is symmetric
+        XCTAssertEqual(verdict(fee: 45), .keep)         // evNet = −15.5
     }
 
     func testConfidenceGate() {
@@ -84,6 +121,12 @@ final class GradingROITests: XCTestCase {
         let enough = [pop("10", 30), pop("9", 20)]   // exactly 50 → confident (spec says "< 50")
         XCTAssertFalse(GradingROI.compute(population: enough, price: price(),
                                           baseline: 30, fee: 20)!.lowConfidence)
+    }
+
+    func testGemRateFallbackCountsTens() {
+        let rows = [pop("10", 250), pop("9", 750)]
+        let roi = GradingROI.compute(population: rows, price: price(), baseline: 30, fee: 20)!
+        XCTAssertEqual(roi.gemRate!, 0.25, accuracy: 1e-9)   // no feed gemRate → count-based
     }
 
     func testPlayedConditionWarningTrigger() {
