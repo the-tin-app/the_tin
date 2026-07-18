@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — The Tin</title>
+<meta name="description" content="The Tin's privacy policy: no account, no analytics, no tracking. Your collection is stored on your device.">
+<link rel="canonical" href="https://thetinapp.com/privacy/">
+<meta name="theme-color" content="#12213f">
+<link rel="icon" href="/assets/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="site-header doc-header">
+  <div class="container">
+    <a class="wordmark" href="/">
+      <svg width="22" height="18" viewBox="0 0 20 16" aria-hidden="true" fill="currentColor">
+        <rect x="0" y="0" width="20" height="4" rx="2"/>
+        <rect x="2" y="5.6" width="16" height="10.4" rx="3.2"/>
+      </svg>
+      The Tin
+    </a>
+    <nav class="site-nav" aria-label="Site">
+      <a href="/support/">Support</a>
+      <a href="/privacy/" aria-current="page">Privacy</a>
+      <a href="https://github.com/the-tin-app/the_tin">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc">
+  <div class="container">
+    <h1>Privacy Policy</h1>
+    <p class="doc-date">Effective July 17, 2026 · Applies to The Tin for iOS</p>
+
+    <div class="callout">
+      <p><strong>The short version:</strong> The Tin has no account, no analytics, and no
+      tracking. Your collection is stored on your device and never uploaded. The only
+      thing our servers ever see is an anonymous identifier used to deliver card data.
+      The app is open source, so all of this is verifiable, not just promised.</p>
+    </div>
+
+    <h2>What we collect</h2>
+    <p>Three things, all of them technical necessities:</p>
+    <ul>
+      <li><strong>An anonymous identifier.</strong> On first launch the app signs in
+      anonymously with Firebase (a Google service) so it can download card data from a
+      backup source. This identifier is a random string; it is not connected to your
+      name, email, phone number, or anything else — no such information exists in
+      The Tin, because there is nothing to sign up for.</li>
+      <li><strong>Device integrity attestation.</strong> The app uses Apple's App Attest
+      to prove to our card-data server that requests come from a genuine copy of
+      The Tin. Attestation tokens describe the app's integrity, not you.</li>
+      <li><strong>Transient server logs.</strong> Like effectively every server on the
+      internet, our card-data server and its content delivery network (Cloudflare) see
+      the IP address of incoming requests in routine operational logs. These logs are
+      used only to keep the service running and are not used to identify or profile
+      anyone.</li>
+    </ul>
+
+    <h2>What we don't collect</h2>
+    <ul>
+      <li>No name, email address, or account of any kind.</li>
+      <li>No analytics, usage statistics, or behavioral data.</li>
+      <li>No advertising identifiers — there are no ads.</li>
+      <li>No crash-reporting service harvesting your device details.</li>
+      <li><strong>No collection data.</strong> The cards you own, want, scan, or value
+      are stored in a database on your device. They are never transmitted to us or to
+      anyone else. Camera frames used by the scanner are processed on-device and never
+      uploaded.</li>
+    </ul>
+
+    <h2>Third-party services</h2>
+    <p>The Tin relies on a small set of infrastructure providers, each of which
+    processes only the technical data described above:</p>
+    <ul>
+      <li><strong>Google Firebase</strong> (anonymous authentication, backup content
+      delivery, app integrity) — <a href="https://firebase.google.com/support/privacy">Firebase privacy documentation</a></li>
+      <li><strong>Cloudflare</strong> (content delivery for card data) —
+      <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare privacy policy</a></li>
+      <li><strong>Apple</strong> (App Attest device integrity) —
+      <a href="https://www.apple.com/legal/privacy/">Apple privacy policy</a></li>
+    </ul>
+    <p>If you open a card's marketplace listing (eBay, TCGplayer), that page loads in an
+    in-app Safari view and those sites' own privacy policies apply from that point.</p>
+
+    <h2>Data deletion</h2>
+    <p>Deleting the app deletes your collection, because your device is the only place
+    it ever existed. The anonymous identifier becomes permanently orphaned — it points
+    to nothing and can't be connected to you. If you have any questions or a deletion
+    request, contact us and we'll help.</p>
+
+    <h2>Children</h2>
+    <p>The Tin is not directed at children under 13, and it collects no personal
+    information from anyone — which is the strongest protection we can offer any
+    user, of any age.</p>
+
+    <h2>Changes to this policy</h2>
+    <p>If this policy changes, the new version will be posted here with a new effective
+    date. Because the site and app are open source, the
+    <a href="https://github.com/the-tin-app/the_tin">full history of every change</a> is
+    public.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about privacy: <a href="mailto:support@thetinapp.com">support@thetinapp.com</a></p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <p class="legal">The Tin is not affiliated with, endorsed by, or sponsored by Nintendo,
+    Creatures, Game Freak, or The Pokémon Company International.</p>
+    <p class="legal">© 2026 Tomas Reyes · <a href="/">thetinapp.com</a></p>
+  </div>
+</footer>
+
+</body>
+</html>

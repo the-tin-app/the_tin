@@ -1,0 +1,591 @@
+/* The Tin — thetinapp.com
+   Voice: the app's own — system faces, quiet chrome, brand color spent on the tin. */
+
+:root {
+  /* Brand (from DESIGN.md — committed identity, do not drift) */
+  --tin-blue: #3b74c9;
+  --tin-lid: #5d90dd;
+  --tin-shadow: #16386f;
+  --gold: #eebb62;
+  --gold-deep: #d99f3d;
+  --cover-manila: #e8d6a3;
+  --cover-sky: #a8c7e0;
+  --cover-sage: #b5c9a8;
+  --cover-clay: #d9a699;
+  --cover-plum: #baa3c9;
+  --cover-teal: #94c4bf;
+  --cover-rose: #dbabbf;
+
+  /* Enamel — the tin's exterior (hero, closing band) */
+  --enamel: #12213f;
+  --enamel-deep: #0d1830;
+  --enamel-ink: #f2f5fb;
+  --enamel-muted: #b9c6de;
+
+  /* Interior — light scheme */
+  --bg: #ffffff;
+  --bg-inset: #f4f6f9;
+  --ink: #1b2330;
+  --ink-2: #465163;
+  --ink-3: #6a7488;
+  --line: #e3e7ee;
+  --link: #2d61b0;
+
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --serif: ui-serif, "New York", Georgia, serif;
+  --rounded: ui-rounded, "SF Pro Rounded", var(--sans);
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-24: 6rem;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  --measure: 62ch;
+  --container: 68rem;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1420;
+    --bg-inset: #161e2e;
+    --ink: #e8ecf4;
+    --ink-2: #aeb9cc;
+    --ink-3: #8291a8;
+    --line: #263149;
+    --link: #85ace4;
+  }
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 1.0625rem; /* 17px — the app's body size */
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--bg);
+  font-kerning: normal;
+}
+
+img { max-width: 100%; height: auto; display: block; }
+
+a { color: var(--link); text-underline-offset: 0.15em; }
+a:hover { text-decoration-thickness: 2px; }
+
+h1, h2, h3 { text-wrap: balance; line-height: 1.15; margin: 0; }
+p { margin: 0 0 var(--space-4); text-wrap: pretty; }
+
+:focus-visible {
+  outline: 2px solid var(--tin-blue);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.container {
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+/* ---------- Header ---------- */
+
+.site-header {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  z-index: 10;
+  padding-block: var(--space-4);
+}
+
+.site-header .container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 700;
+  font-size: 1.125rem;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  color: inherit;
+}
+
+.wordmark svg { flex: none; }
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(0.75rem, 2.5vw, 1.75rem);
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.site-nav a { text-decoration: none; color: inherit; opacity: 0.85; }
+.site-nav a:hover { opacity: 1; text-decoration: underline; }
+
+.on-enamel { color: var(--enamel-ink); }
+
+/* ---------- Hero: the closed tin, opening ---------- */
+
+.hero {
+  background:
+    radial-gradient(120% 90% at 50% 0%, #1b3563 0%, var(--enamel) 55%, var(--enamel-deep) 100%);
+  color: var(--enamel-ink);
+  padding-block: clamp(7rem, 16vh, 10rem) clamp(4rem, 10vh, 7rem);
+  overflow: clip;
+}
+
+.hero .container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-8);
+  text-align: center;
+}
+
+.hero .container > * { max-width: 100%; }
+
+.hero h1 {
+  font-family: var(--sans);
+  font-weight: 800;
+  font-size: clamp(2.5rem, 5.2vw + 1rem, 4.5rem);
+  letter-spacing: -0.025em;
+  max-width: 18ch;
+}
+
+.hero h1 em {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--gold);
+}
+
+.hero .lead {
+  font-size: clamp(1.125rem, 1vw + 0.9rem, 1.3125rem);
+  line-height: 1.55;
+  letter-spacing: 0.005em;
+  color: var(--enamel-muted);
+  max-width: 52ch;
+  margin: 0;
+}
+
+.hero-ctas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1.5rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 1.0625rem;
+  text-decoration: none;
+  transition: transform 0.35s var(--ease-out), box-shadow 0.35s var(--ease-out);
+}
+
+.btn-light { background: var(--enamel-ink); color: var(--enamel-deep); }
+.btn-light:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgb(0 0 0 / 0.35); }
+
+.btn-blue { background: var(--tin-blue); color: #fff; }
+.btn-blue:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgb(59 116 201 / 0.35); }
+
+.soon-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  border: 1px solid rgb(238 187 98 / 0.5);
+  border-radius: 999px;
+  color: var(--gold);
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+/* The ledger — real facts in the app's caption-ledger voice */
+.ledger {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: var(--space-6);
+  row-gap: var(--space-2);
+  font-size: 0.875rem;
+  letter-spacing: 0.01em;
+  color: var(--enamel-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger span { display: inline-flex; align-items: center; gap: var(--space-6); }
+
+.ledger span + span::before {
+  content: "·";
+  color: rgb(185 198 222 / 0.5);
+}
+
+.ledger strong { color: var(--enamel-ink); font-weight: 600; }
+
+/* ---------- The animated tin ---------- */
+
+.tin-stage { width: clamp(150px, 22vw, 210px); }
+
+.tin-svg { width: 100%; height: auto; overflow: visible; }
+
+.tin-card-anim {
+  animation: card-rise 2.8s infinite;
+  will-change: transform;
+}
+
+.tin-lid-anim {
+  transform-origin: 9px 38px; /* bottom-left of the lid, viewBox units */
+  animation: lid-open 2.8s infinite;
+  will-change: transform;
+}
+
+/* Timeline mirrors TinLoadingView.swift (Σ 2.8s):
+   lid  0→.5 open · hold →2.0 · →2.5 close · hold →2.8
+   card 0→.5 rest · →1.1 rise · hold →1.4 · →2.0 drop · rest →2.8 */
+@keyframes lid-open {
+  0%     { transform: rotate(0deg); animation-timing-function: cubic-bezier(0.33, 0, 0.2, 1); }
+  17.9%  { transform: rotate(-26deg); animation-timing-function: linear; }
+  71.4%  { transform: rotate(-26deg); animation-timing-function: cubic-bezier(0.33, 0, 0.2, 1); }
+  89.3%, 100% { transform: rotate(0deg); }
+}
+
+@keyframes card-rise {
+  0%, 17.9% { transform: translateY(0); animation-timing-function: cubic-bezier(0.33, 0, 0.2, 1); }
+  39.3%  { transform: translateY(-32px); animation-timing-function: linear; }
+  50%    { transform: translateY(-32px); animation-timing-function: cubic-bezier(0.33, 0, 0.2, 1); }
+  71.4%, 100% { transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tin-card-anim { animation: none; transform: translateY(-32px); }
+  .tin-lid-anim { animation: none; transform: rotate(-26deg); }
+  .btn { transition: none; }
+  html { scroll-behavior: auto; }
+}
+
+/* ---------- Inside the tin: features ---------- */
+
+.interior { padding-block: clamp(4rem, 10vh, 7rem); }
+
+.divider-tab {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 600;
+  font-size: clamp(1.125rem, 1vw + 1rem, 1.375rem);
+  color: var(--ink-2);
+  margin-bottom: var(--space-2);
+}
+
+.divider-tab::after {
+  content: "";
+  display: block;
+  width: 3.5rem;
+  height: 3px;
+  border-radius: 2px;
+  margin-top: 0.6rem;
+  background: var(--tab-color, var(--tin-blue));
+}
+
+.feature {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(2rem, 6vw, 5rem);
+  padding-block: clamp(2.5rem, 6vh, 4.5rem);
+}
+
+.feature:nth-of-type(even) .feature-media { order: -1; }
+
+.feature h2 {
+  font-size: clamp(1.75rem, 2.2vw + 1rem, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-4);
+}
+
+.feature p { color: var(--ink-2); max-width: 46ch; }
+
+.feature .fine {
+  font-size: 0.875rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Screenshot slot: a labeled card sleeve until real captures land.
+   Swap the .sleeve div for <img class="shot"> — layout is identical. */
+.feature-media { display: grid; justify-items: center; }
+
+.device {
+  width: min(300px, 78vw);
+  aspect-ratio: 300 / 620;
+  border-radius: 44px;
+  padding: 12px;
+  background: linear-gradient(160deg, #2a3140, #14181f);
+  box-shadow:
+    0 2px 6px rgb(20 30 50 / 0.25),
+    0 24px 48px -16px rgb(20 30 50 / 0.35);
+}
+
+.device-screen {
+  width: 100%;
+  height: 100%;
+  border-radius: 34px;
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+
+.shot { width: 100%; height: 100%; object-fit: cover; }
+
+.sleeve {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-3);
+  background:
+    linear-gradient(rgb(255 255 255 / 0.16), rgb(0 0 0 / 0.04)),
+    var(--sleeve-color, var(--cover-manila));
+}
+
+.sleeve svg { opacity: 0.55; }
+
+.sleeve-label {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 1.25rem;
+  color: rgb(27 35 48 / 0.72);
+}
+
+/* ---------- Enamel band: privacy ---------- */
+
+.band {
+  background: linear-gradient(180deg, var(--enamel) 0%, var(--enamel-deep) 100%);
+  color: var(--enamel-ink);
+  padding-block: clamp(4rem, 10vh, 6.5rem);
+}
+
+.band .container { display: grid; gap: var(--space-8); }
+
+.band h2 {
+  font-size: clamp(1.875rem, 2.4vw + 1rem, 2.75rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  max-width: 22ch;
+}
+
+.band h2 em {
+  font-family: var(--serif);
+  font-weight: 600;
+  color: var(--gold);
+}
+
+.band .lead-p { color: var(--enamel-muted); max-width: var(--measure); font-size: 1.125rem; }
+
+.truths {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-6) var(--space-8);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.truths h3 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  margin-bottom: var(--space-1);
+  color: var(--enamel-ink);
+}
+
+.truths p { color: var(--enamel-muted); font-size: 0.9375rem; margin: 0; line-height: 1.55; }
+
+.band a { color: var(--gold); }
+
+/* ---------- Open source ---------- */
+
+.open-source { padding-block: clamp(4rem, 10vh, 6.5rem); }
+
+.open-source .container {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: clamp(2rem, 6vw, 5rem);
+  align-items: start;
+}
+
+.open-source h2 {
+  font-size: clamp(1.75rem, 2.2vw + 1rem, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-4);
+}
+
+.open-source p { color: var(--ink-2); max-width: var(--measure); }
+
+.repo-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  background: var(--bg-inset);
+  display: grid;
+  gap: var(--space-3);
+}
+
+.repo-card .repo-name {
+  font-weight: 700;
+  font-size: 1.125rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.repo-card .repo-name:hover { text-decoration: underline; }
+
+.repo-card p { font-size: 0.9375rem; color: var(--ink-2); margin: 0; }
+
+.repo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: 0.8125rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.repo-meta span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.15rem 0.65rem;
+  background: var(--bg);
+}
+
+/* ---------- Footer ---------- */
+
+.site-footer {
+  border-top: 1px solid var(--line);
+  padding-block: var(--space-12);
+  font-size: 0.875rem;
+  color: var(--ink-3);
+}
+
+.site-footer .container { display: grid; gap: var(--space-6); }
+
+.footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.footer-links { display: flex; flex-wrap: wrap; gap: var(--space-6); }
+.footer-links a { color: var(--ink-2); text-decoration: none; }
+.footer-links a:hover { text-decoration: underline; }
+
+.legal { max-width: 75ch; line-height: 1.6; margin: 0; }
+
+/* ---------- Document pages (privacy, support) ---------- */
+
+.doc-header {
+  position: static;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.doc {
+  padding-block: clamp(3rem, 8vh, 5rem);
+}
+
+.doc .container { max-width: 46rem; }
+
+.doc h1 {
+  font-size: clamp(2rem, 3vw + 1rem, 2.75rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-2);
+}
+
+.doc .doc-date {
+  font-size: 0.875rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--space-8);
+}
+
+.doc h2 {
+  font-size: 1.375rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: var(--space-12) 0 var(--space-3);
+}
+
+.doc h3 { font-size: 1.0625rem; font-weight: 600; margin: var(--space-6) 0 var(--space-2); }
+
+.doc p, .doc li { color: var(--ink-2); max-width: var(--measure); }
+
+.doc ul { padding-left: 1.25rem; margin: 0 0 var(--space-4); }
+.doc li { margin-bottom: var(--space-2); }
+
+.doc .callout {
+  border: 1px solid var(--line);
+  background: var(--bg-inset);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-6);
+  margin-block: var(--space-6);
+}
+
+.doc .callout p { margin: 0; }
+
+/* ---------- Reveal (progressive; content visible without JS) ---------- */
+
+.reveal-ready .reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.7s var(--ease-out), transform 0.7s var(--ease-out);
+}
+
+.reveal-ready .reveal.in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal-ready .reveal { opacity: 1; transform: none; transition: none; }
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 760px) {
+  .feature { grid-template-columns: 1fr; gap: var(--space-8); }
+  .feature:nth-of-type(even) .feature-media { order: 0; }
+  .open-source .container { grid-template-columns: 1fr; }
+  .site-nav { font-size: 0.875rem; }
+}
