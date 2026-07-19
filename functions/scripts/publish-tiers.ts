@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
-import { mkdirSync, copyFileSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { gzipSync, gunzipSync } from "node:zlib";
+import { mkdirSync, copyFileSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { publishCatalog, StoragePort } from "../src/pipeline/publish";
 import { getStorage } from "firebase-admin/storage";
@@ -38,6 +38,76 @@ export function splitTiers(sourceDbPath: string, outDir: string): {
   casual.close();
 
   return { casualPath, averagePath, expertPath };
+}
+
+const DAY_MS = 86_400_000;
+const LOOKBACKS = [
+  { col: "pct_1d", target: 1, min: 0.5, max: 3 },
+  { col: "pct_7d", target: 7, min: 5, max: 10 },
+  { col: "pct_30d", target: 30, min: 25, max: 40 },
+] as const;
+
+/** The published expert artifact whose mtime age (days before `now`) falls inside [min, max],
+ *  closest to `target`. Null when none qualifies (that lookback column stays NULL). */
+function pickLookbackArtifact(catalogDir: string, now: Date,
+                              lb: (typeof LOOKBACKS)[number]): string | null {
+  const candidates = readdirSync(catalogDir)
+    .filter((f) => /^expert-v\d+\.sqlite\.gz$/.test(f))
+    .map((f) => ({ f, age: (now.getTime() - statSync(join(catalogDir, f)).mtimeMs) / DAY_MS }))
+    .filter((c) => c.age >= lb.min && c.age <= lb.max)
+    .sort((a, b) => Math.abs(a.age - lb.target) - Math.abs(b.age - lb.target));
+  return candidates[0]?.f ?? null;
+}
+
+/**
+ * Diff the freshly built catalog against prior published expert artifacts (the NAS catalog dir
+ * doubles as a daily price ledger) and write `price_delta` into the SOURCE DB, so every tier
+ * inherits it through the split. Old artifacts are the only source covering printings (no
+ * history table) and grades/conditions below the expert tier. MUTATES sourceDbPath.
+ */
+export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now: Date): void {
+  const db = new Database(sourceDbPath);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS price_delta(
+      card_id TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL,
+      pct_1d REAL, pct_7d REAL, pct_30d REAL,
+      PRIMARY KEY(card_id, kind, key));
+    CREATE INDEX IF NOT EXISTS idx_price_delta_card ON price_delta(card_id);
+    DELETE FROM price_delta;`);
+  try {
+    for (const lb of LOOKBACKS) {
+      const artifact = pickLookbackArtifact(catalogDir, now, lb);
+      if (!artifact) continue;
+      const tmp = join(catalogDir, `_delta-lookback-${lb.col}.sqlite`);
+      writeFileSync(tmp, gunzipSync(readFileSync(join(catalogDir, artifact))));
+      try {
+        db.exec(`ATTACH DATABASE '${tmp.replace(/'/g, "''")}' AS old`);
+        const upsert = (select: string) => db.exec(`
+          INSERT INTO price_delta(card_id, kind, key, ${lb.col}) ${select}
+          ON CONFLICT(card_id, kind, key) DO UPDATE SET ${lb.col} = excluded.${lb.col}`);
+        upsert(`SELECT n.card_id, 'raw', '', (n.raw_usd - o.raw_usd) / o.raw_usd
+                FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id
+                WHERE n.raw_usd > 0 AND o.raw_usd > 0`);
+        for (let g = 1; g <= 10; g++)
+          upsert(`SELECT n.card_id, 'psa', '${g}', (n.psa${g} - o.psa${g}) / o.psa${g}
+                  FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id
+                  WHERE n.psa${g} > 0 AND o.psa${g} > 0`);
+        upsert(`SELECT n.card_id, 'condition', n.condition, (n.usd - o.usd) / o.usd
+                FROM price_by_condition n JOIN old.price_by_condition o
+                  ON o.card_id = n.card_id AND o.condition = n.condition
+                WHERE n.usd > 0 AND o.usd > 0`);
+        upsert(`SELECT n.card_id, 'printing', n.printing, (n.usd - o.usd) / o.usd
+                FROM price_by_variant n JOIN old.price_by_variant o
+                  ON o.card_id = n.card_id AND o.printing = n.printing
+                WHERE n.usd > 0 AND o.usd > 0`);
+      } finally {
+        db.exec("DETACH DATABASE old");
+        rmSync(tmp, { force: true });
+      }
+    }
+  } finally {
+    db.close();
+  }
 }
 
 export interface TierEntry { path: string; sha256: string; sizeBytes: number }
