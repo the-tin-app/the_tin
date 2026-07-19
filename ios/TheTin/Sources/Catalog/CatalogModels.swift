@@ -80,7 +80,7 @@ enum Condition: String, CaseIterable, Identifiable {
 }
 
 /// Which lookback the app-wide price-change badges show. Persisted under the UserDefaults key
-/// "deltaPeriod" (read via @AppStorage in views, AppConfig.deltaPeriod elsewhere).
+/// "deltaPeriod" — the `@AppStorage("deltaPeriod")` key in views is the single access path.
 enum DeltaPeriod: String, CaseIterable {
     case d1 = "1d", d7 = "7d", d30 = "30d"
     var label: String {
