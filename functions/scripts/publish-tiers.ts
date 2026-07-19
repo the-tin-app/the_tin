@@ -118,6 +118,19 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
                 FROM price_by_variant n JOIN old.price_by_variant o
                   ON o.card_id = n.card_id AND o.printing = n.printing
                 WHERE n.usd > 0 AND o.usd > 0`);
+        // Matrix deltas: keyed "printing|condition" ('|' appears in neither PPT key set).
+        // Guarded like the psa-column probe — artifacts published before the matrix feature
+        // have no price_matrix table, and one missing table must not abort the window's
+        // remaining upserts (they already ran) or log a scary failure for a normal rollout.
+        const oldTables = new Set((db.prepare(
+          "SELECT name FROM old.sqlite_master WHERE type='table'").all() as { name: string }[])
+          .map((t) => t.name));
+        if (oldTables.has("price_matrix")) {
+          upsert(`SELECT n.card_id, 'matrix', n.printing || '|' || n.condition, (n.usd - o.usd) / o.usd
+                  FROM price_matrix n JOIN old.price_matrix o
+                    ON o.card_id = n.card_id AND o.printing = n.printing AND o.condition = n.condition
+                  WHERE n.usd > 0 AND o.usd > 0`);
+        }
       } catch (e) {
         console.warn(`[publish-tiers] ${lb.col} lookback vs ${artifact} failed — skipping:`, e);
       } finally {

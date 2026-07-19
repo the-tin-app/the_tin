@@ -23,7 +23,7 @@ const PRICE_SCHEMA = `
 
 interface SnapshotPrices {
   raw?: number | null; psa10?: number | null;
-  nm?: number | null; holo?: number | null;
+  nm?: number | null; holo?: number | null; matrix?: number | null;
 }
 
 function insertPrices(db: Database.Database, p: SnapshotPrices) {
@@ -33,11 +33,20 @@ function insertPrices(db: Database.Database, p: SnapshotPrices) {
     db.prepare(`INSERT INTO price_by_condition VALUES ('c1', 'Near Mint', ?, '2026-07-18')`).run(p.nm);
   if (p.holo != null)
     db.prepare(`INSERT INTO price_by_variant VALUES ('c1', 'Holofoil', ?, '2026-07-18')`).run(p.holo);
+  if (p.matrix != null)
+    db.prepare(`INSERT INTO price_matrix VALUES ('c1', 'Holofoil', 'Near Mint', ?, '2026-07-18')`).run(p.matrix);
 }
 
 /** Pre-psa-widening artifact schema (production ≤ v13): only psa8-10 columns exist. */
 const LEGACY_SCHEMA = PRICE_SCHEMA.replace(
   /psa1 REAL.*psa7 REAL,\s*/s, "");
+
+/** Schema including price_matrix (Task 2) — old artifacts published before that feature use
+ *  bare PRICE_SCHEMA instead, exercising the same legacy-tolerance pattern as LEGACY_SCHEMA above. */
+const MATRIX_SCHEMA = PRICE_SCHEMA + `
+  CREATE TABLE price_matrix(card_id TEXT, printing TEXT, condition TEXT, usd REAL, as_of TEXT,
+    PRIMARY KEY(card_id, printing, condition));
+`;
 
 /** Write a gzipped old snapshot `expert-v<n>.sqlite.gz` into catalogDir, mtime `ageDays` ago. */
 function makeSnapshot(catalogDir: string, version: number, ageDays: number, p: SnapshotPrices,
@@ -54,10 +63,10 @@ function makeSnapshot(catalogDir: string, version: number, ageDays: number, p: S
   utimesSync(gzPath, mtime, mtime);
 }
 
-function makeSource(dir: string, p: SnapshotPrices): string {
+function makeSource(dir: string, p: SnapshotPrices, schema = PRICE_SCHEMA): string {
   const path = join(dir, "source.sqlite");
   const db = new Database(path);
-  db.exec(PRICE_SCHEMA);
+  db.exec(schema);
   insertPrices(db, p);
   db.close();
   return path;
@@ -129,6 +138,30 @@ describe("computePriceDeltas", () => {
     expect(by("psa", "10")?.pct_7d).toBeCloseTo(-0.1);         // psa10 exists in legacy schema
     expect(by("condition", "Near Mint")?.pct_7d).toBeCloseTo(0.25); // must run despite psa1-7 gone
     expect(by("printing", "Holofoil")?.pct_7d).toBeCloseTo(0.0);
+  });
+
+  it("computes matrix deltas keyed printing|condition", () => {
+    makeSnapshot(catalogDir, 7, 1, { raw: 2.0, matrix: 100 }, MATRIX_SCHEMA);
+    const src = makeSource(dir, { raw: 3.0, matrix: 110 }, MATRIX_SCHEMA);
+    computePriceDeltas(src, catalogDir, NOW);
+    const db = new Database(src, { readonly: true });
+    const rows = db.prepare("SELECT kind, key, pct_1d FROM price_delta WHERE kind='matrix'").all();
+    db.close();
+    expect(rows).toEqual([{ kind: "matrix", key: "Holofoil|Near Mint", pct_1d: expect.closeTo(0.1) }]);
+  });
+
+  it("tolerates an old artifact without price_matrix (pre-feature legacy)", () => {
+    // Old artifact predates the price_matrix feature entirely (bare PRICE_SCHEMA, no table) —
+    // the new source DOES have price_matrix, mirroring a real rollout day.
+    makeSnapshot(catalogDir, 7, 1, { raw: 2.0 });
+    const src = makeSource(dir, { raw: 3.0, matrix: 110 }, MATRIX_SCHEMA);
+    computePriceDeltas(src, catalogDir, NOW);
+    const db = new Database(src, { readonly: true });
+    const rawDeltaRows = db.prepare("SELECT * FROM price_delta WHERE kind='raw'").all();
+    const matrixCount = db.prepare("SELECT COUNT(*) AS n FROM price_delta WHERE kind='matrix'").get();
+    db.close();
+    expect(rawDeltaRows.length).toBeGreaterThan(0);
+    expect(matrixCount).toEqual({ n: 0 });
   });
 
   it("a broken artifact kills only its own lookback", () => {
