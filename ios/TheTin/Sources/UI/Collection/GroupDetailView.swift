@@ -7,6 +7,7 @@ struct CollectionEntryRow: View {
     let entry: CollectionEntry
     var dividerName: String? = nil
     let value: Double?
+    var delta: DeltaRecord? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -23,7 +24,10 @@ struct CollectionEntryRow: View {
                     }
                 }
                 Spacer()
-                PriceLabel(value: value)
+                VStack(alignment: .trailing, spacing: 2) {
+                    PriceLabel(value: value)
+                    DeltaBadge(record: delta)
+                }
             } else {
                 Text(entry.cardId).font(.caption.monospaced())
             }
@@ -246,7 +250,8 @@ struct GroupDetailView: View {
                 entry: entry,
                 dividerName: showDivider
                     ? model.groups.first(where: { $0.id == entry.groupId })?.name : nil,
-                value: model.entryValue(entry))
+                value: model.entryValue(entry),
+                delta: deltaRecord(entry))
         }
         .swipeActions {
             Button("Remove", role: .destructive) { deletingEntry = entry }
@@ -257,6 +262,20 @@ struct GroupDetailView: View {
         .contextMenu {
             Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
         }
+    }
+
+    /// The delta matching what this entry actually is (spec 2026-07-18): a graded copy tracks its
+    /// grade, an ungraded copy its printing when that printing has a delta, else the raw market.
+    private func deltaRecord(_ entry: CollectionEntry) -> DeltaRecord? {
+        let records = model.deltasByCard[entry.cardId] ?? []
+        if let grade = entry.gradeValue {
+            return records.first { $0.kind == .psa && $0.key == String(grade.numeric) }
+        }
+        if let variant = entry.variantValue,
+           let printing = records.first(where: { $0.kind == .printing && variant.matches(printing: $0.key) }) {
+            return printing
+        }
+        return records.first { $0.kind == .raw }
     }
 
     private func sortedAll(_ entries: [CollectionEntry]) -> [CollectionEntry] {

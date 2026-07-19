@@ -79,6 +79,47 @@ enum Condition: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which lookback the app-wide price-change badges show. Persisted under the UserDefaults key
+/// "deltaPeriod" — the `@AppStorage("deltaPeriod")` key in views is the single access path.
+enum DeltaPeriod: String, CaseIterable {
+    case d1 = "1d", d7 = "7d", d30 = "30d"
+    var label: String {
+        switch self {
+        case .d1: return "yesterday"
+        case .d7: return "last week"
+        case .d30: return "last month"
+        }
+    }
+    /// Tap-to-cycle order: yesterday → week → month → yesterday.
+    var next: DeltaPeriod {
+        switch self {
+        case .d1: return .d7
+        case .d7: return .d30
+        case .d30: return .d1
+        }
+    }
+}
+
+/// One `price_delta` row: percent change of one priced thing (raw market, a PSA grade, a
+/// condition, or a printing) over each packaged lookback. NULL column = no artifact covered
+/// that window (or the price didn't exist then).
+struct DeltaRecord: Equatable {
+    enum Kind: String { case raw, psa, condition, printing }
+    let kind: Kind
+    let key: String        // "" | "1"…"10" | condition string | printing string
+    let pct1d: Double?
+    let pct7d: Double?
+    let pct30d: Double?
+
+    func pct(for period: DeltaPeriod) -> Double? {
+        switch period {
+        case .d1: return pct1d
+        case .d7: return pct7d
+        case .d30: return pct30d
+        }
+    }
+}
+
 struct ConditionPrice: Equatable, Identifiable {
     let condition: Condition
     let usd: Double

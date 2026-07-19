@@ -321,6 +321,41 @@ final class CatalogStore {
         }
     }
 
+    /// All price-change rows for one card (`price_delta`). Empty on the casual tier (table kept,
+    /// zero rows); throws when the installed catalog predates the table — callers use `try?`.
+    func deltas(cardId: String) throws -> [DeltaRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql:
+                "SELECT kind, key, pct_1d, pct_7d, pct_30d FROM price_delta WHERE card_id = ?",
+                arguments: [cardId]).compactMap(Self.deltaRecord)
+        }
+    }
+
+    /// Batch of `deltas(cardId:)` keyed by card id — one SQL `IN` query, mirroring
+    /// `conditionPrices(cardIds:)`. Cards with no rows are absent.
+    func deltas(cardIds: [String]) throws -> [String: [DeltaRecord]] {
+        guard !cardIds.isEmpty else { return [:] }
+        let marks = databaseQuestionMarks(count: cardIds.count)
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT card_id, kind, key, pct_1d, pct_7d, pct_30d FROM price_delta
+                WHERE card_id IN (\(marks))
+                """, arguments: StatementArguments(cardIds))
+        }
+        var out: [String: [DeltaRecord]] = [:]
+        for r in rows {
+            guard let rec = Self.deltaRecord(r) else { continue }
+            out[r["card_id"], default: []].append(rec)
+        }
+        return out
+    }
+
+    private static func deltaRecord(_ r: Row) -> DeltaRecord? {
+        guard let kind = DeltaRecord.Kind(rawValue: r["kind"]) else { return nil }
+        return DeltaRecord(kind: kind, key: r["key"],
+                           pct1d: r["pct_1d"], pct7d: r["pct_7d"], pct30d: r["pct_30d"])
+    }
+
     /// Parse `(date TEXT 'yyyy-MM-dd', <valueColumn> REAL)` rows into oldest-first price points.
     private static func pricePoints(_ rows: [Row], valueColumn: String) -> [PricePoint] {
         let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"; fmt.timeZone = TimeZone(identifier: "UTC")

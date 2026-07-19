@@ -18,6 +18,7 @@ final class CardDetailModel {
     private(set) var conditions: [ConditionPrice] = []
     private(set) var variants: [VariantPrice] = []
     private(set) var population: [PopulationRow] = []
+    private(set) var deltas: [DeltaRecord] = []
     private(set) var historyState: HistoryState = .loading
     /// The active catalog tier — drives how much price history the chart shows and its empty copy.
     let tier: CatalogTier
@@ -37,10 +38,15 @@ final class CardDetailModel {
         conditions = (try? store.conditionPrices(cardId: card.id)) ?? []
         variants = (try? store.variantPrices(cardId: card.id)) ?? []
         population = (try? store.population(cardId: card.id)) ?? []
+        deltas = (try? store.deltas(cardId: card.id)) ?? []
         if let set = try? store.set(id: card.setId) {
             setName = set.name
             if let date = set.releaseDate, date.count >= 4 { year = String(date.prefix(4)) }
         }
+    }
+
+    func delta(_ kind: DeltaRecord.Kind, _ key: String = "") -> DeltaRecord? {
+        deltas.first { $0.kind == kind && $0.key == key }
     }
 
     func loadHistory() async {
@@ -77,6 +83,7 @@ struct CardDetailView: View {
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
     @FocusState private var gradingFeeFocused: Bool
     @State private var marketplaceURL: MarketplaceURL?
+    @AppStorage("deltaPeriod") private var deltaPeriodRaw: String = DeltaPeriod.d1.rawValue
 
     /// Identifiable wrapper so `.sheet(item:)` can present a plain URL.
     private struct MarketplaceURL: Identifiable {
@@ -152,11 +159,13 @@ struct CardDetailView: View {
                                     .font(.system(.title, design: .rounded).weight(.bold))
                                     .monospacedDigit()
                                 Text("\(printing.printing) · market").font(.caption).foregroundStyle(.secondary)
+                                DeltaBadge(record: model.delta(.printing, printing.printing))
                             } else if let raw = price.rawUsd {
                                 Text(raw, format: .currency(code: "USD"))
                                     .font(.system(.title, design: .rounded).weight(.bold))
                                     .monospacedDigit()
                                 Text("raw market").font(.caption).foregroundStyle(.secondary)
+                                DeltaBadge(record: model.delta(.raw))
                             } else if let nm = model.conditions.first(where: { $0.condition == .nearMint })?.usd {
                                 Text(nm, format: .currency(code: "USD"))
                                     .font(.system(.title, design: .rounded).weight(.bold))
@@ -167,13 +176,18 @@ struct CardDetailView: View {
                                 Text("raw market").font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        if model.deltas.contains(where: { $0.pct(for: DeltaPeriod(rawValue: deltaPeriodRaw) ?? .d1) != nil }) {
+                            Text("Change vs \((DeltaPeriod(rawValue: deltaPeriodRaw) ?? .d1).label) — tap any badge to switch")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
                         // Graded (PSA) prices — only grades with data appear.
                         let graded = Grade.allCases.filter { price.gradedOnly($0) != nil }
                         if !graded.isEmpty {
                             Text("Graded (PSA)").font(.subheadline.bold())
                             LazyVGrid(columns: Self.priceColumns, spacing: 8) {
                                 ForEach(graded) { grade in
-                                    PriceTile(label: grade.label, value: price.gradedOnly(grade))
+                                    PriceTile(label: grade.label, value: price.gradedOnly(grade),
+                                              delta: model.delta(.psa, String(grade.numeric)))
                                 }
                             }
                         }
@@ -182,7 +196,8 @@ struct CardDetailView: View {
                             Text("By condition").font(.subheadline.bold())
                             LazyVGrid(columns: Self.priceColumns, spacing: 8) {
                                 ForEach(model.conditions) { cp in
-                                    PriceTile(label: cp.condition.label, value: cp.usd)
+                                    PriceTile(label: cp.condition.label, value: cp.usd,
+                                              delta: model.delta(.condition, cp.condition.rawValue))
                                 }
                             }
                         }
@@ -569,6 +584,7 @@ private struct PopulationBar: View {
 private struct PriceTile: View {
     let label: String
     let value: Double?
+    var delta: DeltaRecord? = nil
 
     var body: some View {
         VStack(spacing: 2) {
@@ -579,6 +595,7 @@ private struct PriceTile: View {
             } else {
                 Text("—").font(.subheadline).foregroundStyle(.secondary)
             }
+            DeltaBadge(record: delta)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
