@@ -3,19 +3,28 @@ import Foundation
 /// Spec §5.2: group value = Σ(qty × latest price for the entry's grade, falling back to raw).
 enum GroupStats {
     /// Unit price for one card given what the user saved about it — shared by owned entries
-    /// (`entryValue`) and scan-review drafts (which aren't `CollectionEntry`s yet). Graded uses the
-    /// per-card PSA column (no per-printing graded data). Raw: a played condition uses that
-    /// condition's market price (`price_by_condition`), an NM/unspecified condition uses the owned
-    /// printing's market price (`price_by_variant`), and everything falls back to `raw_usd` (then NM)
-    /// when the specific price is missing.
+    /// (`entryValue`) and scan-review drafts. FIRST rung: the exact printing×condition (or
+    /// printing×grade) cell when the catalog has it. Then the pre-matrix chain unchanged:
+    /// graded → psa column; played condition → card-level condition price; NM/unspecified →
+    /// owned printing's market; then raw_usd, then NM.
     static func unitPrice(grade: Grade? = nil, condition: CardCondition? = nil,
                           variant: CardVariant? = nil, price: PriceRecord?,
-                          variants: [VariantPrice] = [], conditions: [ConditionPrice] = []) -> Double? {
-        if grade != nil { return price?.value(for: grade) }
+                          variants: [VariantPrice] = [], conditions: [ConditionPrice] = [],
+                          matrix: [MatrixPrice] = [],
+                          gradedByPrinting: [GradedPrintingPrice] = []) -> Double? {
+        if let grade {
+            if let variant,
+               let gp = gradedByPrinting.first(where: { $0.grade == grade.rawValue && variant.matches(printing: $0.printing) }) {
+                return gp.usd
+            }
+            return price?.value(for: grade)
+        }
+        if let condition, let variant,
+           let cell = matrix.first(where: { $0.condition == condition.catalog && variant.matches(printing: $0.printing) }) {
+            return cell.usd
+        }
         if let condition, condition != .nm,
            let cp = conditions.first(where: { $0.condition == condition.catalog })?.usd {
-            // ponytail: condition prices are card-level (no condition×printing data), so a played
-            // holo uses the base condition price; scale by printing premium if that data ever ships.
             return cp
         }
         if let vp = variant?.price(in: variants) { return vp }
@@ -25,10 +34,13 @@ enum GroupStats {
     /// Spec §5.2: entry value = qty × unit price for the entry's grade/condition/printing.
     static func entryValue(_ entry: CollectionEntry, price: PriceRecord?,
                            variants: [VariantPrice] = [],
-                           conditions: [ConditionPrice] = []) -> Double? {
+                           conditions: [ConditionPrice] = [],
+                           matrix: [MatrixPrice] = [],
+                           gradedByPrinting: [GradedPrintingPrice] = []) -> Double? {
         guard let unit = unitPrice(grade: entry.gradeValue, condition: entry.conditionValue,
                                    variant: entry.variantValue, price: price,
-                                   variants: variants, conditions: conditions) else { return nil }
+                                   variants: variants, conditions: conditions,
+                                   matrix: matrix, gradedByPrinting: gradedByPrinting) else { return nil }
         return unit * Double(entry.qty)
     }
 
@@ -37,10 +49,18 @@ enum GroupStats {
     /// when the exact condition price is missing, because the aggregate total is meant to be a
     /// best-effort estimate (spec §5.2). A DMG copy with no `price_by_condition` row should read
     /// as unpriced for display/counting — not silently show the NM/raw estimate as if it were exact.
+    /// A matrix-priced entry (exact printing×condition cell) also counts as exact.
     static func isPricedExactly(_ entry: CollectionEntry, price: PriceRecord?,
-                                variants: [VariantPrice] = [], conditions: [ConditionPrice] = []) -> Bool {
-        guard entryValue(entry, price: price, variants: variants, conditions: conditions) != nil else { return false }
+                                variants: [VariantPrice] = [], conditions: [ConditionPrice] = [],
+                                matrix: [MatrixPrice] = [],
+                                gradedByPrinting: [GradedPrintingPrice] = []) -> Bool {
+        guard entryValue(entry, price: price, variants: variants, conditions: conditions,
+                         matrix: matrix, gradedByPrinting: gradedByPrinting) != nil else { return false }
         guard let condition = entry.conditionValue, condition != .nm else { return true }
+        if let variant = entry.variantValue,
+           matrix.contains(where: { $0.condition == condition.catalog && variant.matches(printing: $0.printing) }) {
+            return true
+        }
         return conditions.contains { $0.condition == condition.catalog }
     }
 
@@ -51,17 +71,23 @@ enum GroupStats {
     /// so "27 cards · 26 of 27 priced" never mixes units.
     static func totalValue(entries: [CollectionEntry], prices: [String: PriceRecord],
                            variantsByCard: [String: [VariantPrice]] = [:],
-                           conditionsByCard: [String: [ConditionPrice]] = [:])
+                           conditionsByCard: [String: [ConditionPrice]] = [:],
+                           matrixByCard: [String: [MatrixPrice]] = [:],
+                           gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:])
         -> (total: Double, pricedCards: Int, totalCards: Int) {
         var total = 0.0
         var priced = 0
         for entry in entries {
             let variants = variantsByCard[entry.cardId] ?? []
             let conditions = conditionsByCard[entry.cardId] ?? []
+            let matrix = matrixByCard[entry.cardId] ?? []
+            let gradedByPrinting = gradedByPrintingByCard[entry.cardId] ?? []
             guard let value = entryValue(entry, price: prices[entry.cardId],
-                                         variants: variants, conditions: conditions) else { continue }
+                                         variants: variants, conditions: conditions,
+                                         matrix: matrix, gradedByPrinting: gradedByPrinting) else { continue }
             total += value
-            if isPricedExactly(entry, price: prices[entry.cardId], variants: variants, conditions: conditions) {
+            if isPricedExactly(entry, price: prices[entry.cardId], variants: variants, conditions: conditions,
+                               matrix: matrix, gradedByPrinting: gradedByPrinting) {
                 priced += entry.qty
             }
         }
@@ -70,12 +96,16 @@ enum GroupStats {
 
     static func sortedByValueDescending(entries: [CollectionEntry], prices: [String: PriceRecord],
                                         variantsByCard: [String: [VariantPrice]] = [:],
-                                        conditionsByCard: [String: [ConditionPrice]] = [:]) -> [CollectionEntry] {
+                                        conditionsByCard: [String: [ConditionPrice]] = [:],
+                                        matrixByCard: [String: [MatrixPrice]] = [:],
+                                        gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]) -> [CollectionEntry] {
         entries.sorted {
             (entryValue($0, price: prices[$0.cardId], variants: variantsByCard[$0.cardId] ?? [],
-                        conditions: conditionsByCard[$0.cardId] ?? []) ?? -1) >
+                        conditions: conditionsByCard[$0.cardId] ?? [], matrix: matrixByCard[$0.cardId] ?? [],
+                        gradedByPrinting: gradedByPrintingByCard[$0.cardId] ?? []) ?? -1) >
             (entryValue($1, price: prices[$1.cardId], variants: variantsByCard[$1.cardId] ?? [],
-                        conditions: conditionsByCard[$1.cardId] ?? []) ?? -1)
+                        conditions: conditionsByCard[$1.cardId] ?? [], matrix: matrixByCard[$1.cardId] ?? [],
+                        gradedByPrinting: gradedByPrintingByCard[$1.cardId] ?? []) ?? -1)
         }
     }
 

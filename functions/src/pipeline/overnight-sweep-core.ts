@@ -2,7 +2,7 @@
 import type { Database as Db } from "better-sqlite3";
 import { normalizeNumber } from "./matcher";
 import { PSA_COLUMNS } from "./ppt-export";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant } from "./ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix } from "./ppt-history";
 import type { PptEnrichmentCard } from "../upstream/ppt";
 import type { PopulationRow } from "./ppt-population";
 
@@ -18,7 +18,7 @@ export interface OvernightLedger {
 export interface OvernightOptions { populationEnabled: boolean; asOf: string; }
 export interface OvernightSummary {
   setsDone: number; historyRows: number; gradedRows: number; popRows: number;
-  condHistoryRows: number; byCondRows: number; byVariantRows: number;
+  condHistoryRows: number; byCondRows: number; byVariantRows: number; matrixRows: number;
   stoppedEarly: boolean; stopReason?: string;
 }
 
@@ -38,9 +38,13 @@ CREATE TABLE IF NOT EXISTS price_by_condition(card_id TEXT NOT NULL, condition T
   as_of TEXT NOT NULL, PRIMARY KEY(card_id, condition));
 CREATE TABLE IF NOT EXISTS price_by_variant(card_id TEXT NOT NULL, printing TEXT NOT NULL, usd REAL NOT NULL,
   as_of TEXT NOT NULL, PRIMARY KEY(card_id, printing));
+CREATE TABLE IF NOT EXISTS price_matrix(card_id TEXT NOT NULL, printing TEXT NOT NULL,
+  condition TEXT NOT NULL, usd REAL NOT NULL, as_of TEXT NOT NULL,
+  PRIMARY KEY(card_id, printing, condition));
 CREATE INDEX IF NOT EXISTS idx_price_history_cond_card ON price_history_cond(card_id);
 CREATE INDEX IF NOT EXISTS idx_price_by_condition_card ON price_by_condition(card_id);
-CREATE INDEX IF NOT EXISTS idx_price_by_variant_card ON price_by_variant(card_id);`;
+CREATE INDEX IF NOT EXISTS idx_price_by_variant_card ON price_by_variant(card_id);
+CREATE INDEX IF NOT EXISTS idx_price_matrix_card ON price_matrix(card_id);`;
 
 export async function runOvernightSweep(
   db: Db, client: SweepClient, sets: OvernightSet[], ledger: OvernightLedger,
@@ -57,10 +61,11 @@ export async function runOvernightSweep(
   const insHistCond = db.prepare("INSERT OR REPLACE INTO price_history_cond(card_id, condition, date, raw_usd) VALUES (?,?,?,?)");
   const insByCond = db.prepare("INSERT OR REPLACE INTO price_by_condition(card_id, condition, usd, as_of) VALUES (?,?,?,?)");
   const insByVariant = db.prepare("INSERT OR REPLACE INTO price_by_variant(card_id, printing, usd, as_of) VALUES (?,?,?,?)");
+  const insMatrix = db.prepare("INSERT OR REPLACE INTO price_matrix(card_id, printing, condition, usd, as_of) VALUES (?,?,?,?,?)");
   const ourStmt = db.prepare("SELECT id, number, name FROM card WHERE set_id = ?");
 
   const sum: OvernightSummary = {
-    setsDone: 0, historyRows: 0, gradedRows: 0, popRows: 0, condHistoryRows: 0, byCondRows: 0, byVariantRows: 0, stoppedEarly: false,
+    setsDone: 0, historyRows: 0, gradedRows: 0, popRows: 0, condHistoryRows: 0, byCondRows: 0, byVariantRows: 0, matrixRows: 0, stoppedEarly: false,
   };
 
   // ---- Phase A: per set (history + graded) ----
@@ -105,6 +110,9 @@ export async function runOvernightSweep(
         }
         for (const vl of parseLatestByVariant(pc.pricesRaw)) {
           insByVariant.run(m.id, vl.printing, vl.usd, opts.asOf); sum.byVariantRows++;
+        }
+        for (const cell of parseMatrix(pc.pricesRaw)) {
+          insMatrix.run(m.id, cell.printing, cell.condition, cell.usd, opts.asOf); sum.matrixRows++;
         }
       }
     });

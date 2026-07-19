@@ -46,7 +46,9 @@ enum CollectionCSV {
                        cards: [String: CardRecord], sets: [String: SetRecord],
                        prices: [String: PriceRecord],
                        variantsByCard: [String: [VariantPrice]] = [:],
-                       conditionsByCard: [String: [ConditionPrice]] = [:]) -> Data {
+                       conditionsByCard: [String: [ConditionPrice]] = [:],
+                       matrixByCard: [String: [MatrixPrice]] = [:],
+                       gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]) -> Data {
         let groupName = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.name) })
         let rows = entries.map { e -> [String] in
             let card = cards[e.cardId]
@@ -54,7 +56,9 @@ enum CollectionCSV {
             let price = prices[e.cardId]
             let value = GroupStats.entryValue(e, price: price,
                                               variants: variantsByCard[e.cardId] ?? [],
-                                              conditions: conditionsByCard[e.cardId] ?? [])
+                                              conditions: conditionsByCard[e.cardId] ?? [],
+                                              matrix: matrixByCard[e.cardId] ?? [],
+                                              gradedByPrinting: gradedByPrintingByCard[e.cardId] ?? [])
             return [e.cardId, card?.name ?? "", card?.setId ?? "", set?.name ?? "",
                     card?.number ?? "", card?.rarity ?? "", String(e.qty),
                     e.variant ?? "", e.condition ?? "", e.grade ?? "",

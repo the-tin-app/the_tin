@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant } from "../src/pipeline/ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix } from "../src/pipeline/ppt-history";
 
 describe("parseWeeklyHistory", () => {
   it("normalizes an array shape, dedups exact dates (latest wins), thins to >=6-day spacing", () => {
@@ -222,5 +222,35 @@ describe("fixture-driven: ppt-enrichment-sample.json cardA", () => {
     expect(byCondition.get("Damaged")).toBeCloseTo(7.66);
     expect(byCondition.get("Heavily Played")).toBeCloseTo(5.8);
     expect(out.length).toBe(5);
+  });
+});
+
+describe("parseMatrix", () => {
+  const prices = {
+    primaryPrinting: "Holofoil",
+    variants: {
+      "Holofoil": { "Near Mint": { price: 100 }, "Lightly Played": { price: 80 } },
+      "1st Edition Holofoil": { "Near Mint": { price: 400 }, "Damaged": { price: 60 } },
+    },
+  };
+
+  it("returns every printing×condition cell verbatim", () => {
+    expect(parseMatrix(prices)).toEqual([
+      { printing: "Holofoil", condition: "Near Mint", usd: 100 },
+      { printing: "Holofoil", condition: "Lightly Played", usd: 80 },
+      { printing: "1st Edition Holofoil", condition: "Near Mint", usd: 400 },
+      { printing: "1st Edition Holofoil", condition: "Damaged", usd: 60 },
+    ]);
+  });
+
+  it("skips non-finite and non-positive prices", () => {
+    expect(parseMatrix({ variants: { A: { NM: { price: 0 }, LP: { price: -3 }, MP: { price: "x" }, HP: { price: 5 } } } }))
+      .toEqual([{ printing: "A", condition: "HP", usd: 5 }]);
+  });
+
+  it("tolerates garbage", () => {
+    for (const g of [null, undefined, 42, "x", [], { variants: null }, { variants: [] }, { variants: { A: null } }]) {
+      expect(parseMatrix(g)).toEqual([]);
+    }
   });
 });

@@ -8,6 +8,7 @@ struct EntryFormView: View {
     var existing: CollectionEntry?
     var variants: [VariantPrice] = []   // per-printing prices, for the inline picker labels
     var conditions: [ConditionPrice] = []   // per-condition prices, for the inline picker labels
+    var matrix: [MatrixPrice] = []      // printing×condition cells, for printing-aware labels
     var onCreateGroup: ((String) async -> String)? = nil
     /// Returns whether the entry was actually persisted; the form only dismisses on true, so a
     /// failed write never silently discards what the user typed.
@@ -129,11 +130,12 @@ struct EntryFormView: View {
         return v.label
     }
 
-    /// "DMG · $12" when that condition is priced, else just the condition name.
+    /// "DMG · $12" when that condition is priced — preferring the SELECTED printing's matrix
+    /// cell over the card-level condition price — else just the condition name.
     private func conditionLabel(_ c: CardCondition) -> String {
-        if let usd = conditions.first(where: { $0.condition == c.catalog })?.usd {
-            return "\(c.rawValue) · " + usd.formatted(.currency(code: "USD"))
-        }
+        let usd = matrix.first { $0.condition == c.catalog && variant.matches(printing: $0.printing) }?.usd
+            ?? conditions.first { $0.condition == c.catalog }?.usd
+        if let usd { return "\(c.rawValue) · " + usd.formatted(.currency(code: "USD")) }
         return c.rawValue
     }
 

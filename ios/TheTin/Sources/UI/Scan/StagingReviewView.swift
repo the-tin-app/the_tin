@@ -16,6 +16,8 @@ struct StagingReviewView: View {
     @State private var prices: [String: PriceRecord] = [:]
     @State private var variantsByCard: [String: [VariantPrice]] = [:]
     @State private var conditionsByCard: [String: [ConditionPrice]] = [:]
+    @State private var matrixByCard: [String: [MatrixPrice]] = [:]
+    @State private var gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]
     // Gate: only a load where all three fetches actually succeeded may drive a reprice —
     // an empty-but-successful dict still counts as loaded (see loadPricesAndReprice doc).
     @State private var pricesLoaded = false
@@ -129,6 +131,9 @@ struct StagingReviewView: View {
         prices = p
         variantsByCard = v
         conditionsByCard = c
+        // Old-artifact fallback per store convention (matrix/graded reads throw pre-migration).
+        matrixByCard = (try? store.matrixPrices(cardIds: ids)) ?? [:]
+        gradedByPrintingByCard = (try? store.gradedPrintingPrices(cardIds: ids)) ?? [:]
         pricesLoaded = true
         repriceAll()
     }
@@ -143,7 +148,9 @@ struct StagingReviewView: View {
             GroupStats.unitPrice(condition: d.condition, variant: d.variant,
                                  price: prices[d.cardId],
                                  variants: variantsByCard[d.cardId] ?? [],
-                                 conditions: conditionsByCard[d.cardId] ?? [])
+                                 conditions: conditionsByCard[d.cardId] ?? [],
+                                 matrix: matrixByCard[d.cardId] ?? [],
+                                 gradedByPrinting: gradedByPrintingByCard[d.cardId] ?? [])
         }
     }
 }

@@ -17,6 +17,8 @@ final class CardDetailModel {
     private(set) var price: PriceRecord?
     private(set) var conditions: [ConditionPrice] = []
     private(set) var variants: [VariantPrice] = []
+    private(set) var matrix: [MatrixPrice] = []
+    private(set) var gradedByPrinting: [GradedPrintingPrice] = []
     private(set) var population: [PopulationRow] = []
     private(set) var deltas: [DeltaRecord] = []
     private(set) var historyState: HistoryState = .loading
@@ -42,6 +44,8 @@ final class CardDetailModel {
         price = try? store.price(cardId: card.id)
         conditions = (try? store.conditionPrices(cardId: card.id)) ?? []
         variants = (try? store.variantPrices(cardId: card.id)) ?? []
+        matrix = (try? store.matrixPrices(cardId: card.id)) ?? []
+        gradedByPrinting = (try? store.gradedPrintingPrices(cardId: card.id)) ?? []
         population = (try? store.population(cardId: card.id)) ?? []
         deltas = (try? store.deltas(cardId: card.id)) ?? []
         if tier == .expert {
@@ -191,31 +195,65 @@ struct CardDetailView: View {
                             Text("Change vs \((DeltaPeriod(rawValue: deltaPeriodRaw) ?? .d1).label) — tap any badge to switch")
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
-                        // Graded (PSA) prices — only grades with data appear.
+                        // Printing-scoped slices — empty when the card has one printing, or when
+                        // the selected printing has no matrix/graded rows (PPT gap-fill varies).
+                        let printingMatrix = currentPrinting.map { p in model.matrix.filter { $0.printing == p.printing } } ?? []
+                        // Bridge the two printing vocabularies: currentPrinting is a PPT
+                        // price_by_variant key ("1st Edition Holofoil"), graded_by_printing labels
+                        // come from TCGdex types via pptPrintingName ("1st Edition") — exact
+                        // equality never meets, CardVariant.matches does (mirrors GroupStats).
+                        // e.g. "Unlimited Holofoil"→.holo→matches "Holofoil"; "1st Edition
+                        // Holofoil"→.firstEdition→matches "1st Edition"; "Unlimited"→.regular→
+                        // matches "Normal".
+                        let printingVariant = currentPrinting.flatMap { p in CardVariant.allCases.first { $0.matches(printing: p.printing) } }
+                        let printingGraded = printingVariant.map { v in model.gradedByPrinting.filter { v.matches(printing: $0.printing) } } ?? []
+                        // Graded (PSA) prices — only grades with data appear. When the selected
+                        // printing has its own graded row for a grade, that value replaces the
+                        // card-level one; otherwise the card-level value is shown as a fallback.
+                        // Gating on the card-level psaN column is safe even for printing-only
+                        // rows: applyExport writes both the card-level psaN column and the
+                        // graded_by_printing row from the same ebay sale, so a grade with a
+                        // per-printing row always also has a card-level column set.
                         let graded = Grade.allCases.filter { price.gradedOnly($0) != nil }
                         if !graded.isEmpty {
                             Text("Graded (PSA)").font(.subheadline.bold())
                             LazyVGrid(columns: Self.priceColumns, spacing: 8) {
                                 ForEach(graded) { grade in
-                                    PriceTile(label: grade.label, value: price.gradedOnly(grade),
+                                    let perPrinting = printingGraded.first { $0.grade == grade.rawValue }?.usd
+                                    PriceTile(label: grade.label, value: perPrinting ?? price.gradedOnly(grade),
                                               delta: model.delta(.psa, String(grade.numeric)))
                                 }
                             }
-                        }
-                        // Ungraded per-condition prices (NM/LP/MP/HP/DMG).
-                        if !model.conditions.isEmpty {
-                            Text("By condition").font(.subheadline.bold())
-                            LazyVGrid(columns: Self.priceColumns, spacing: 8) {
-                                ForEach(model.conditions) { cp in
-                                    PriceTile(label: cp.condition.label, value: cp.usd,
-                                              delta: model.delta(.condition, cp.condition.rawValue))
-                                }
+                            if let p = currentPrinting, printingGraded.isEmpty {
+                                Text("Shown for the card overall — no \(p.printing)-specific graded sales.")
+                                    .font(.caption2).foregroundStyle(.tertiary)
                             }
                         }
-                        // Honest data note: PSA/condition feeds carry no printing dimension.
-                        if currentPrinting != nil, !graded.isEmpty || !model.conditions.isEmpty {
-                            Text("Graded and condition prices are for the card overall — they don't distinguish printings.")
-                                .font(.caption2).foregroundStyle(.tertiary)
+                        // Ungraded per-condition prices (NM/LP/MP/HP/DMG). When the selected
+                        // printing has matrix rows, tiles show that printing's own condition
+                        // prices (with matrix deltas); otherwise fall back to card-level tiles.
+                        if !model.conditions.isEmpty || !printingMatrix.isEmpty {
+                            Text("By condition").font(.subheadline.bold())
+                            if let p = currentPrinting, !printingMatrix.isEmpty {
+                                LazyVGrid(columns: Self.priceColumns, spacing: 8) {
+                                    ForEach(Condition.allCases.compactMap { c in printingMatrix.first { $0.condition == c } }) { cell in
+                                        PriceTile(label: cell.condition.label, value: cell.usd,
+                                                  delta: model.delta(.matrix, "\(p.printing)|\(cell.condition.rawValue)")
+                                                      ?? model.delta(.condition, cell.condition.rawValue))
+                                    }
+                                }
+                            } else {
+                                LazyVGrid(columns: Self.priceColumns, spacing: 8) {
+                                    ForEach(model.conditions) { cp in
+                                        PriceTile(label: cp.condition.label, value: cp.usd,
+                                                  delta: model.delta(.condition, cp.condition.rawValue))
+                                    }
+                                }
+                                if let p = currentPrinting, !model.conditions.isEmpty {
+                                    Text("Shown for the card overall — no \(p.printing)-specific condition prices.")
+                                        .font(.caption2).foregroundStyle(.tertiary)
+                                }
+                            }
                         }
                     }
                 } else {
@@ -238,6 +276,10 @@ struct CardDetailView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(model.population) { row in
                                 PopulationBar(grade: row.displayGrade, count: row.count, maxCount: maxCount)
+                            }
+                            if currentPrinting != nil {
+                                Text("Population counts are for the card overall — graders don't split printings here.")
+                                    .font(.caption2).foregroundStyle(.tertiary)
                             }
                         }
                         .padding(.top, 6)
@@ -272,6 +314,7 @@ struct CardDetailView: View {
                 NavigationStack {
                     EntryFormView(card: model.card, groups: collection.groups, existing: nil,
                                   variants: model.variants, conditions: model.conditions,
+                                  matrix: collection.matrixByCard[model.card.id] ?? [],
                                   onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
                         await collection.saveEntry(entry)
                     }
@@ -320,6 +363,10 @@ struct CardDetailView: View {
                     if model.tier == .expert { overlayPickers }
                 }
                 PriceHistoryChart(series: series)
+                if currentPrinting != nil {
+                    Text("History is for the card overall — PPT has no per-printing history.")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
             }
         case .empty where model.tier == .casual:
             VStack(alignment: .leading, spacing: 6) {
@@ -397,7 +444,9 @@ struct CardDetailView: View {
             var one = entry
             one.qty = 1
             baseline = GroupStats.entryValue(one, price: price, variants: model.variants,
-                                             conditions: model.conditions)
+                                             conditions: model.conditions,
+                                             matrix: model.matrix,
+                                             gradedByPrinting: model.gradedByPrinting)
         } else {
             baseline = model.conditions.first(where: { $0.condition == .nearMint })?.usd ?? price.rawUsd
         }

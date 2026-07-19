@@ -156,6 +156,38 @@ final class GroupStatsTests: XCTestCase {
                                             price: rayPrice, variants: variants), 505)
     }
 
+    func testMatrixCellBeatsFlattenedConditionPrice() {
+        // 1st Edition + LP entry: matrix cell ($120) wins over card-level LP price ($60).
+        let matrix = [MatrixPrice(printing: "1st Edition Holofoil", condition: .lightlyPlayed, usd: 120),
+                      MatrixPrice(printing: "1st Edition Holofoil", condition: .nearMint, usd: 400)]
+        let conditions = [ConditionPrice(condition: .lightlyPlayed, usd: 60)]
+        XCTAssertEqual(GroupStats.unitPrice(condition: .lp, variant: .firstEdition, price: nil,
+                                            conditions: conditions, matrix: matrix), 120)
+    }
+
+    func testMatrixMissingFallsBackToConditionPrice() {
+        // Printing set but no matching matrix cell → existing chain (condition price).
+        let conditions = [ConditionPrice(condition: .lightlyPlayed, usd: 60)]
+        XCTAssertEqual(GroupStats.unitPrice(condition: .lp, variant: .holo, price: nil,
+                                            conditions: conditions, matrix: []), 60)
+    }
+
+    func testGradedPrintingBeatsPsaColumn() {
+        // Graded PSA10 1st Edition: per-printing graded row ($5000) wins over psa10 column ($900).
+        let price = PriceRecord(cardId: "base1-4", rawUsd: 50, rawEur: nil, psa3: nil, psa7: nil,
+                                psa9: nil, psa10: 900, asOf: "2026-07-19")
+        let gbp = [GradedPrintingPrice(printing: "1st Edition", grade: "psa10", usd: 5000)]
+        XCTAssertEqual(GroupStats.unitPrice(grade: .psa10, variant: .firstEdition, price: price,
+                                            gradedByPrinting: gbp), 5000)
+    }
+
+    func testGradedWithoutPrintingRowUsesPsaColumn() {
+        let price = PriceRecord(cardId: "base1-4", rawUsd: 50, rawEur: nil, psa3: nil, psa7: nil,
+                                psa9: nil, psa10: 900, asOf: "2026-07-19")
+        XCTAssertEqual(GroupStats.unitPrice(grade: .psa10, variant: .holo, price: price,
+                                            gradedByPrinting: []), 900)
+    }
+
     func testSetCompletionCountsDistinctNumbers() {
         let setCards = [
             CardRecord(id: "swsh7-215", setId: "swsh7", number: "215", name: "Rayquaza VMAX", hp: 320,

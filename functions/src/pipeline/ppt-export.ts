@@ -177,6 +177,7 @@ export interface ExportInputs {
 
 export interface ExportApplyStats {
   rawRows: number; gradedRows: number; sealedRows: number; popRows: number; unmatched: number;
+  gradedPrintingRows: number;
 }
 
 function buildIdByTcgFromDb(db: Database): Map<number, string> {
@@ -195,13 +196,25 @@ function buildIdByTcgFromDb(db: Database): Map<number, string> {
  * counted in `unmatched` and skipped (sealed products are keyed by tcgplayer_id directly, so they
  * are never "unmatched"). Never touches price_by_condition / raw_eur — those stay on the REST path.
  */
-export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?: Map<number, string>): ExportApplyStats {
-  const stats: ExportApplyStats = { rawRows: 0, gradedRows: 0, sealedRows: 0, popRows: 0, unmatched: 0 };
+export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?: Map<number, string>,
+  skuMeta?: Map<number, { printing: string; priority: number }>): ExportApplyStats {
+  const stats: ExportApplyStats = {
+    rawRows: 0, gradedRows: 0, sealedRows: 0, popRows: 0, unmatched: 0, gradedPrintingRows: 0,
+  };
 
   // tcgPlayerId → our card id. The build pipeline passes a map covering EVERY printing SKU of
   // each card (a card can have several tcgPlayerIds); without an override we fall back to the
   // single `card.tcgplayer_id` column (fine for tests / already-stamped catalogs).
   const idByTcg = idByTcgOverride ?? buildIdByTcgFromDb(db);
+
+  // Additive per-printing graded table (labels only exist when skuMeta is supplied — the
+  // build pipeline passes it; bare callers keep today's exact behavior).
+  db.exec(`CREATE TABLE IF NOT EXISTS graded_by_printing(card_id TEXT NOT NULL, printing TEXT NOT NULL,
+    grade TEXT NOT NULL, usd REAL NOT NULL, as_of TEXT NOT NULL, PRIMARY KEY(card_id, printing, grade));
+    CREATE INDEX IF NOT EXISTS idx_graded_by_printing_card ON graded_by_printing(card_id)`);
+  const insGbp = db.prepare(
+    "INSERT OR REPLACE INTO graded_by_printing(card_id, printing, grade, usd, as_of) VALUES (?,?,?,?,?)");
+  const prio = (tcg: number) => skuMeta?.get(tcg)?.priority ?? Number.MAX_SAFE_INTEGER;
 
   const upRaw = db.prepare(`INSERT INTO price_latest(card_id, raw_usd, as_of) VALUES (@id,@raw,@as_of)
     ON CONFLICT(card_id) DO UPDATE SET raw_usd=@raw, as_of=@as_of`);
@@ -216,11 +229,19 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
     population(card_id, grader, grade, count, gem_rate, total_population, as_of) VALUES (?,?,?,?,?,?,?)`);
 
   const tx = db.transaction(() => {
+    // One raw_usd per card: the highest-priority (lowest number) SKU that has a market price.
+    // Without skuMeta every row ties at MAX_SAFE_INTEGER and `<` keeps the FIRST row, which is
+    // still deterministic (input order) — callers that care pass skuMeta.
+    const bestRaw = new Map<string, { p: number; price: number }>();
     for (const c of inputs.cards ?? []) {
       const id = idByTcg.get(c.tcgPlayerId);
       if (!id) { stats.unmatched++; continue; }
       if (c.marketPrice == null) continue;
-      upRaw.run({ id, raw: c.marketPrice, as_of: inputs.asOf });
+      const cur = bestRaw.get(id);
+      if (!cur || prio(c.tcgPlayerId) < cur.p) bestRaw.set(id, { p: prio(c.tcgPlayerId), price: c.marketPrice });
+    }
+    for (const [id, { price }] of bestRaw) {
+      upRaw.run({ id, raw: price, as_of: inputs.asOf });
       stats.rawRows++;
     }
 
@@ -228,17 +249,27 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
     const emptyPsa = (): Record<PsaColumn, number | null> =>
       Object.fromEntries(PSA_COLUMNS.map((c) => [c, null])) as Record<PsaColumn, number | null>;
     const psaByCard = new Map<string, Record<PsaColumn, number | null>>();
+    const psaPrio = new Map<string, number>(); // `${cardId}|${col}` → priority that set it
     for (const e of inputs.ebay ?? []) {
       const id = idByTcg.get(e.tcgPlayerId);
       if (!id) { stats.unmatched++; continue; }
-      const col = ebayGradeToPsaColumn(e.grade);
-      if (!col) continue;
       // medianPrice is the headline: smartMarketPrice can diverge ~2x from real sales (probed).
       const price = e.medianPrice ?? e.smartMarketPrice ?? e.averagePrice;
       if (price == null) continue;
-      const cur = psaByCard.get(id) ?? emptyPsa();
-      cur[col] = price;
-      psaByCard.set(id, cur);
+      const meta = skuMeta?.get(e.tcgPlayerId);
+      if (meta) {
+        insGbp.run(id, meta.printing, e.grade, price, inputs.asOf);
+        stats.gradedPrintingRows++;
+      }
+      const col = ebayGradeToPsaColumn(e.grade);
+      if (!col) continue;
+      const k = `${id}|${col}`;
+      const cur = psaPrio.get(k);
+      if (cur != null && prio(e.tcgPlayerId) >= cur) continue;
+      psaPrio.set(k, prio(e.tcgPlayerId));
+      const g = psaByCard.get(id) ?? emptyPsa();
+      g[col] = price;
+      psaByCard.set(id, g);
     }
     for (const [id, g] of psaByCard) {
       upGraded.run({ id, ...g, as_of: inputs.asOf });

@@ -64,6 +64,7 @@ struct StreamView: View {
             if let collection {
                 NavigationStack {
                     EntryFormView(card: card, groups: collection.groups, existing: nil,
+                                  matrix: collection.matrixByCard[card.id] ?? [],
                                   onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
                         await collection.saveEntry(entry)
                     }
