@@ -34,6 +34,7 @@ import { resolvePptSetName } from "../src/pipeline/ppt-setmap";
 import { computeFills } from "../src/pipeline/ppt-enrich";
 import { mirrorImage, ImageStore } from "../src/pipeline/image-mirror";
 import type { FlatCard, FlatSet } from "./flatten-cards-db";
+import { pptPrintingName } from "./flatten-cards-db";
 import Database from "better-sqlite3";
 import {
   parseCardsExport, parseEbayExport, parseSealedExport, parsePopulationExport, applyExport,
@@ -330,6 +331,15 @@ async function main() {
     const idByTcg = new Map<number, string>();
     for (const c of meta.cards) for (const t of c.tcgplayerIds) if (!idByTcg.has(t)) idByTcg.set(t, c.id);
 
+    // tcgPlayerId → printing label + per-card priority (index in the variant-priority order),
+    // so applyExport can pick the primary printing deterministically and label graded rows.
+    const skuMeta = new Map<number, { printing: string; priority: number }>();
+    for (const c of meta.cards) {
+      (c.tcgplayerByType ?? []).forEach(([type, tcg], i) => {
+        if (!skuMeta.has(tcg)) skuMeta.set(tcg, { printing: pptPrintingName(type), priority: i });
+      });
+    }
+
     const db = new Database(dbPath);
     try {
       // Stamp each card's primary (first) SKU into card.tcgplayer_id for the app + DB-based joins.
@@ -354,8 +364,8 @@ async function main() {
         sealed: sealedCsv ? parseSealedExport(sealedCsv) : undefined,
         population: popCsv ? parsePopulationExport(popCsv) : undefined,
         asOf,
-      }, idByTcg);
-      console.log(`  applied: ${stats.rawRows} raw · ${stats.gradedRows} graded · ${stats.sealedRows} sealed · ${stats.popRows} pop · ${stats.unmatched} unmatched export rows`);
+      }, idByTcg, skuMeta);
+      console.log(`  applied: ${stats.rawRows} raw · ${stats.gradedRows} graded · ${stats.gradedPrintingRows} graded-by-printing · ${stats.sealedRows} sealed · ${stats.popRows} pop · ${stats.unmatched} unmatched export rows`);
       // The coverage/spot summary below is computed from the in-memory join, where USD is always
       // null in export mode (prices land only in the DB via applyExport). Read the true count +
       // spot back from the DB so the summary reflects what actually shipped, not a false 0.

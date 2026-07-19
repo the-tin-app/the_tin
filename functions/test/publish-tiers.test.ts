@@ -29,11 +29,15 @@ describe("splitTiers", () => {
       CREATE TABLE price_history(card_id TEXT, date TEXT, raw_usd REAL);
       CREATE TABLE price_history_cond(card_id TEXT, condition TEXT, date TEXT, usd REAL);
       CREATE TABLE graded_history(card_id TEXT, grade TEXT, date TEXT, usd REAL);
+      CREATE TABLE price_matrix(card_id TEXT, printing TEXT, condition TEXT, usd REAL, as_of TEXT);
+      CREATE TABLE graded_by_printing(card_id TEXT, printing TEXT, grade TEXT, usd REAL, as_of TEXT);
       INSERT INTO card VALUES ('c1', 'Pikachu');
       INSERT INTO price_latest VALUES ('c1', 2.0);
       INSERT INTO price_history VALUES ('c1', '2026-07-01', 1.5);
       INSERT INTO price_history_cond VALUES ('c1', 'NM', '2026-07-01', 1.4);
       INSERT INTO graded_history VALUES ('c1', 'PSA10', '2026-07-01', 90.0);
+      INSERT INTO price_matrix VALUES ('c1', 'Holofoil', 'Near Mint', 100.0, '2026-07-01');
+      INSERT INTO graded_by_printing VALUES ('c1', 'Holofoil', '10', 90.0, '2026-07-01');
     `);
     db.close();
   });
@@ -75,6 +79,18 @@ describe("splitTiers", () => {
     const db = new Database(casualPath);
     expect(tableExists(db, "price_delta")).toBe(false);
     db.close();
+  });
+
+  it("price_matrix + graded_by_printing land in all three tiers (latest prices, not history)", () => {
+    const { casualPath, averagePath, expertPath } = splitTiers(sourcePath, join(dir, "out"));
+    for (const tierPath of [casualPath, averagePath, expertPath]) {
+      const t = new Database(tierPath, { readonly: true });
+      for (const table of ["price_matrix", "graded_by_printing"]) {
+        expect(t.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table))
+          .toBeTruthy();
+      }
+      t.close();
+    }
   });
 });
 
