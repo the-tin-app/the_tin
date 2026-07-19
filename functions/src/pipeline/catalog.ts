@@ -50,6 +50,10 @@ CREATE INDEX idx_price_by_condition_card ON price_by_condition(card_id);
 CREATE TABLE price_by_variant(card_id TEXT NOT NULL REFERENCES card(id), printing TEXT NOT NULL, usd REAL NOT NULL,
   as_of TEXT NOT NULL, PRIMARY KEY(card_id, printing));
 CREATE INDEX idx_price_by_variant_card ON price_by_variant(card_id);
+CREATE TABLE price_matrix(card_id TEXT NOT NULL REFERENCES card(id), printing TEXT NOT NULL,
+  condition TEXT NOT NULL, usd REAL NOT NULL, as_of TEXT NOT NULL,
+  PRIMARY KEY(card_id, printing, condition));
+CREATE INDEX idx_price_matrix_card ON price_matrix(card_id);
 CREATE TABLE card_twin(card_id TEXT NOT NULL, twin_id TEXT NOT NULL, PRIMARY KEY(card_id, twin_id));
 CREATE TABLE sealed_product(tcgplayer_id INTEGER PRIMARY KEY, name TEXT NOT NULL, set_id TEXT, product_type TEXT,
   market_usd REAL, low_usd REAL, as_of TEXT);
