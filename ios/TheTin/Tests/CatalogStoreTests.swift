@@ -161,4 +161,48 @@ final class CatalogStoreTests: XCTestCase {
         XCTAssertEqual(DeltaPeriod.d30.next, .d1)
         XCTAssertEqual(DeltaPeriod.d7.label, "last week")
     }
+
+    // MARK: - Expert-tier chart overlay history
+
+    /// Fixture predates the expert history tables — create them on a temp copy with rows in the
+    /// REAL production formats: graded_history.grade is PPT's key verbatim ("psa10", lowercase),
+    /// and price_history_cond.condition can carry printing names alongside real conditions.
+    private func makeStoreWithOverlayHistory() throws -> CatalogStore {
+        let path = try FixtureCatalog.copyToTemp()
+        let dbQueue = try DatabaseQueue(path: path)
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS graded_history(card_id TEXT NOT NULL, grade TEXT NOT NULL, date TEXT NOT NULL,
+                  usd REAL NOT NULL, PRIMARY KEY(card_id, grade, date))
+                """)
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS price_history_cond(card_id TEXT NOT NULL, condition TEXT NOT NULL, date TEXT NOT NULL,
+                  raw_usd REAL NOT NULL, PRIMARY KEY(card_id, condition, date))
+                """)
+            try db.execute(sql: "INSERT INTO graded_history VALUES ('sv1-25', 'psa10', '2026-07-01', 90.0)")
+            try db.execute(sql: "INSERT INTO graded_history VALUES ('sv1-25', 'psa10', '2026-07-08', 95.0)")
+            try db.execute(sql: "INSERT INTO graded_history VALUES ('sv1-25', 'psa9', '2026-07-01', 60.0)")
+            try db.execute(sql: "INSERT INTO price_history_cond VALUES ('sv1-25', 'Damaged', '2026-07-01', 1.5)")
+            try db.execute(sql: "INSERT INTO price_history_cond VALUES ('sv1-25', 'Near Mint', '2026-07-01', 4.0)")
+            // Real catalogs carry printing names in the condition column (PPT source quirk) — ignored.
+            try db.execute(sql: "INSERT INTO price_history_cond VALUES ('sv1-25', 'Holofoil', '2026-07-01', 9.0)")
+        }
+        try dbQueue.close()
+        return try CatalogStore(path: path)
+    }
+
+    func testGradedHistoryMatchesPptKeyFormat() throws {
+        let store = try makeStoreWithOverlayHistory()
+        XCTAssertEqual(try store.gradedHistory(cardId: "sv1-25", grade: "10").map(\.value), [90.0, 95.0])
+        XCTAssertEqual(try store.gradedHistory(cardId: "sv1-25", grade: "9").map(\.value), [60.0])
+        XCTAssertTrue(try store.gradedHistory(cardId: "sv1-25", grade: "8").isEmpty)
+    }
+
+    func testAvailableOverlayDimensions() throws {
+        let store = try makeStoreWithOverlayHistory()
+        XCTAssertEqual(try store.availableGrades(cardId: "sv1-25"), [.psa10, .psa9])          // highest first
+        XCTAssertEqual(try store.availableConditions(cardId: "sv1-25"), [.nearMint, .damaged]) // NM→DMG, junk dropped
+        XCTAssertEqual(try store.availableGrades(cardId: "sv1-1"), [])
+        XCTAssertEqual(try store.availableConditions(cardId: "sv1-1"), [])
+    }
 }
