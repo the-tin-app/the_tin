@@ -27,6 +27,15 @@ const dataRoot = join(cardsDbDir, "data");
 // Variant priority mirrors pickTcgplayerMarket(): normal → holo → reverse → other.
 const VARIANT_ORDER = ["normal", "holo", "reverse", "metal", "lenticular"];
 
+// TCGdex variant type → PPT/TCGplayer printing key. Unmapped types pass through verbatim —
+// the app's CardVariant.matches() is substring-tolerant, so verbatim beats dropping.
+const PPT_PRINTING_BY_TYPE: Record<string, string> = {
+  normal: "Normal", holo: "Holofoil", reverse: "Reverse Holofoil", firstEdition: "1st Edition",
+};
+export function pptPrintingName(tcgdexType: string): string {
+  return PPT_PRINTING_BY_TYPE[tcgdexType] ?? tcgdexType;
+}
+
 interface ThirdPartyRef { type: string; tcgplayer?: number; cardmarket?: number }
 
 export interface FlatSet {
@@ -51,6 +60,9 @@ export interface FlatCard {
   attacks: { name: string; damage: string | null; cost: string[] }[];
   // ordered candidate ids (variant-priority) for the price joins
   tcgplayerIds: number[];
+  // ordered [tcgdexVariantType, tcgPlayerId] pairs (same priority order as tcgplayerIds);
+  // the card-level fallback ref carries type "card"
+  tcgplayerByType: [string, number][];
   cardmarketIds: number[];
   dexId: number[];
 }
@@ -62,7 +74,7 @@ function en<T = string>(field: any): T | null {
 }
 
 /** Collect thirdParty refs from card-level + each variant, in priority order. */
-function collectThirdParty(card: any): { tcgplayer: number[]; cardmarket: number[] } {
+export function collectThirdParty(card: any): { tcgplayer: number[]; cardmarket: number[]; tcgplayerByType: [string, number][] } {
   const refs: ThirdPartyRef[] = [];
   if (Array.isArray(card.variants)) {
     const sorted = [...card.variants].sort((a, b) => {
@@ -73,11 +85,15 @@ function collectThirdParty(card: any): { tcgplayer: number[]; cardmarket: number
   }
   if (card.thirdParty) refs.push({ type: "card", ...card.thirdParty }); // card-level as fallback
   const tcgplayer: number[] = [], cardmarket: number[] = [];
+  const tcgplayerByType: [string, number][] = [];
   for (const r of refs) {
-    if (typeof r.tcgplayer === "number" && !tcgplayer.includes(r.tcgplayer)) tcgplayer.push(r.tcgplayer);
+    if (typeof r.tcgplayer === "number" && !tcgplayer.includes(r.tcgplayer)) {
+      tcgplayer.push(r.tcgplayer);
+      tcgplayerByType.push([r.type, r.tcgplayer]);
+    }
     if (typeof r.cardmarket === "number" && !cardmarket.includes(r.cardmarket)) cardmarket.push(r.cardmarket);
   }
-  return { tcgplayer, cardmarket };
+  return { tcgplayer, cardmarket, tcgplayerByType };
 }
 
 export function dexIdsOf(card: any): number[] {
@@ -148,7 +164,7 @@ async function main() {
         const name = en(cardObj?.name);
         if (!name) { skippedCards++; continue; } // non-english card
         const localId = f.slice(0, f.lastIndexOf("."));
-        const { tcgplayer, cardmarket } = collectThirdParty(cardObj);
+        const { tcgplayer, cardmarket, tcgplayerByType } = collectThirdParty(cardObj);
         cards.push({
           id: `${setObj.id}-${localId}`,
           setId: setObj.id,
@@ -162,6 +178,7 @@ async function main() {
           text: effectText(cardObj),
           attacks: attacksOf(cardObj),
           tcgplayerIds: tcgplayer,
+          tcgplayerByType,
           cardmarketIds: cardmarket,
           dexId: dexIdsOf(cardObj),
         });
