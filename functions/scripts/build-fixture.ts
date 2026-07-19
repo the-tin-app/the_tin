@@ -24,6 +24,7 @@ const cardsBySet = new Map<string, TcgdexCard[]>([
   ["swsh7", [
     card({ id: "swsh7-215", localId: "215", name: "Rayquaza VMAX", hp: 320, types: ["Dragon"], rarity: "Secret Rare",
       artist: "PLANETA Tsuji", text: "Draconic Zenith Once during your turn, you may draw 3 cards.",
+      attacks: [{ name: "Max Burst", damage: "320", cost: ["Fire", "Lightning"] }],
       imageBase: "https://assets.tcgdex.net/en/swsh/swsh7/215", rawUsd: 92.5, rawEur: 85.0 }),
     card({ id: "swsh7-94", localId: "94", name: "Umbreon V", hp: 200, types: ["Darkness"], rarity: "Rare", artist: "5ban",
       rawUsd: 30.1, rawEur: 27.0 }),

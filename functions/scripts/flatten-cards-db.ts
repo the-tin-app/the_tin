@@ -48,6 +48,7 @@ export interface FlatCard {
   rarity: string | null;
   artist: string | null;
   text: string; // english ability+attack effects joined by \n
+  attacks: { name: string; damage: string | null; cost: string[] }[];
   // ordered candidate ids (variant-priority) for the price joins
   tcgplayerIds: number[];
   cardmarketIds: number[];
@@ -81,6 +82,19 @@ function collectThirdParty(card: any): { tcgplayer: number[]; cardmarket: number
 
 export function dexIdsOf(card: any): number[] {
   return Array.isArray(card?.dexId) ? card.dexId.filter((n: unknown): n is number => typeof n === "number") : [];
+}
+
+/** English attack list (name + damage + energy cost) for the no-image placeholder. */
+export function attacksOf(card: any): FlatCard["attacks"] {
+  return (card.attacks ?? []).flatMap((a: any) => {
+    const name = en(a?.name);
+    if (!name) return [];
+    return [{
+      name,
+      damage: a?.damage != null ? String(a.damage) : null,
+      cost: Array.isArray(a?.cost) ? a.cost.filter((c: unknown): c is string => typeof c === "string") : [],
+    }];
+  });
 }
 
 export function effectText(card: any): string {
@@ -146,6 +160,7 @@ async function main() {
           rarity: en(cardObj.rarity),
           artist: cardObj.illustrator ?? null,
           text: effectText(cardObj),
+          attacks: attacksOf(cardObj),
           tcgplayerIds: tcgplayer,
           cardmarketIds: cardmarket,
           dexId: dexIdsOf(cardObj),

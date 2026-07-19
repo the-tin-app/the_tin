@@ -9,7 +9,7 @@ import type { PptPrice } from "../src/upstream/ppt";
 
 const sets: TcgdexSet[] = [{ id: "swsh7", name: "Evolving Skies", releaseDate: "2021-08-27", cardCountTotal: 237, printedTotal: 203, serie: "Sword & Shield" }];
 const cards: TcgdexCard[] = [
-  { id: "swsh7-215", localId: "215", name: "Rayquaza VMAX", hp: 320, types: ["Dragon"], rarity: "Secret Rare", artist: "PLANETA Tsuji", text: "Once during your turn, you may draw 3 cards.", imageBase: "https://assets.tcgdex.net/en/swsh/swsh7/215", rawUsd: 92.5, rawEur: 85.0 },
+  { id: "swsh7-215", localId: "215", name: "Rayquaza VMAX", hp: 320, types: ["Dragon"], rarity: "Secret Rare", artist: "PLANETA Tsuji", text: "Once during your turn, you may draw 3 cards.", imageBase: "https://assets.tcgdex.net/en/swsh/swsh7/215", rawUsd: 92.5, rawEur: 85.0, attacks: [{ name: "Max Burst", damage: "320", cost: ["Fire", "Lightning"] }] },
   { id: "swsh7-94", localId: "94", name: "Umbreon V", hp: 200, types: ["Darkness"], rarity: "Rare", artist: "5ban", text: "", imageBase: null, rawUsd: null, rawEur: null },
   { id: "swsh7-1", localId: "1", name: "Lotad", hp: 70, types: ["Water"], rarity: "Common", artist: "x", text: "Rain Splash\nAqua Wave\nFlip a coin.", imageBase: "https://x/1", rawUsd: null, rawEur: null }
 ];
@@ -39,6 +39,9 @@ describe("buildCatalog", () => {
     expect(ray.psa7).toBeNull();
     expect(ray.as_of).toBe("2026-07-04");
     expect(db.prepare("SELECT COUNT(*) n FROM connected_art WHERE scene_id='es-ray'").get()).toEqual({ n: 2 });
+    const rayCard = db.prepare("SELECT attacks FROM card WHERE id = ?").get("swsh7-215") as any;
+    expect(JSON.parse(rayCard.attacks)).toEqual([{ name: "Max Burst", damage: "320", cost: ["Fire", "Lightning"] }]);
+    expect((db.prepare("SELECT attacks FROM card WHERE id = ?").get("swsh7-94") as any).attacks).toBeNull();
   });
 
   it("writes no price_latest row for a card with no raw and no graded price", () => {
