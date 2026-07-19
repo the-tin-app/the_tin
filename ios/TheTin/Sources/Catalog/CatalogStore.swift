@@ -311,11 +311,12 @@ final class CatalogStore {
     }
 
     /// Graded (PSA) price history (`graded_history`) for one grade — expert-tier overlay.
-    /// Same tier gate as `conditionHistory`. `grade` matches with any leading "g" tolerated.
+    /// Same tier gate as `conditionHistory`. The `grade` column stores PPT's key verbatim
+    /// ("psa10"); `grade` here is the bare number ("10"), matched case-insensitively.
     func gradedHistory(cardId: String, grade: String) throws -> [PricePoint] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql:
-                "SELECT date, usd FROM graded_history WHERE card_id = ? AND REPLACE(grade, 'g', '') = ? ORDER BY date",
+                "SELECT date, usd FROM graded_history WHERE card_id = ? AND LOWER(grade) = 'psa' || ? ORDER BY date",
                 arguments: [cardId, grade])
             return Self.pricePoints(rows, valueColumn: "usd")
         }
@@ -354,6 +355,31 @@ final class CatalogStore {
         guard let kind = DeltaRecord.Kind(rawValue: r["kind"]) else { return nil }
         return DeltaRecord(kind: kind, key: r["key"],
                            pct1d: r["pct_1d"], pct7d: r["pct_7d"], pct30d: r["pct_30d"])
+    }
+
+    /// Conditions that actually have `price_history_cond` rows for this card, canonical NM→DMG
+    /// order — drives the expert chart's condition menu (hidden when empty). Rows whose condition
+    /// isn't one of the five real conditions (PPT leaks printing names into that column) drop out.
+    /// Throws below the expert tier (table dropped) — callers use `try?`.
+    func availableConditions(cardId: String) throws -> [Condition] {
+        let names = try dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT condition FROM price_history_cond WHERE card_id = ?",
+                                arguments: [cardId])
+        }
+        let present = Set(names)
+        return Condition.allCases.filter { present.contains($0.rawValue) }
+    }
+
+    /// PSA grades that actually have `graded_history` rows for this card, highest grade first —
+    /// drives the expert chart's grade menu (hidden when empty; production data is empty until
+    /// PPT ships dated graded series — probe mode "timeseries"). Same tier gate as above.
+    func availableGrades(cardId: String) throws -> [Grade] {
+        let keys = try dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT LOWER(grade) FROM graded_history WHERE card_id = ?",
+                                arguments: [cardId])
+        }
+        let present = Set(keys)
+        return Grade.allCases.reversed().filter { present.contains($0.rawValue) }
     }
 
     /// Parse `(date TEXT 'yyyy-MM-dd', <valueColumn> REAL)` rows into oldest-first price points.

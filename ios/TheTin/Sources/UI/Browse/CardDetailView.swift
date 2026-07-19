@@ -23,9 +23,14 @@ final class CardDetailModel {
     /// The active catalog tier — drives how much price history the chart shows and its empty copy.
     let tier: CatalogTier
     /// Expert-tier chart overlays: which condition / PSA grade to chart alongside raw. `nil` = off.
-    /// The view re-runs `loadHistory()` when either changes (`.task(id:)`).
-    var overlayCondition: Condition? = .nearMint
-    var overlayGrade: Grade? = .psa10
+    /// The view re-runs `loadHistory()` when either changes (`.task(id:)`). Menus offer ONLY
+    /// dimensions this card has history rows for — a menu of options that plot nothing reads
+    /// as broken (2026-07-18 report). Graded history is empty in production until PPT ships
+    /// dated series, so the PSA menu is currently hidden for every card.
+    private(set) var availableConditions: [Condition] = []
+    private(set) var availableGrades: [Grade] = []
+    var overlayCondition: Condition?
+    var overlayGrade: Grade?
     private let store: CatalogStore
     private let history: PriceHistoryProviding
 
@@ -39,6 +44,12 @@ final class CardDetailModel {
         variants = (try? store.variantPrices(cardId: card.id)) ?? []
         population = (try? store.population(cardId: card.id)) ?? []
         deltas = (try? store.deltas(cardId: card.id)) ?? []
+        if tier == .expert {
+            availableConditions = (try? store.availableConditions(cardId: card.id)) ?? []
+            availableGrades = (try? store.availableGrades(cardId: card.id)) ?? []
+        }
+        overlayCondition = availableConditions.contains(.nearMint) ? .nearMint : nil
+        overlayGrade = availableGrades.first   // highest available grade, or nil
         if let set = try? store.set(id: card.setId) {
             setName = set.name
             if let date = set.releaseDate, date.count >= 4 { year = String(date.prefix(4)) }
@@ -330,26 +341,32 @@ struct CardDetailView: View {
     }
 
     /// Expert-tier overlay selectors: one condition + one PSA grade (each can be off). Chips
-    /// mirror the printing menu; dot color matches the chart line for that overlay.
-    private var overlayPickers: some View {
+    /// mirror the printing menu; dot color matches the chart line for that overlay. Each menu
+    /// only appears when this card actually has history for that dimension, and only offers
+    /// the values with rows — an option that plots nothing reads as broken.
+    @ViewBuilder private var overlayPickers: some View {
         HStack(spacing: 6) {
-            Menu {
-                Picker("Condition", selection: $model.overlayCondition) {
-                    Text("Off").tag(Condition?.none)
-                    ForEach(Condition.allCases) { Text($0.label).tag(Condition?.some($0)) }
+            if !model.availableConditions.isEmpty {
+                Menu {
+                    Picker("Condition", selection: $model.overlayCondition) {
+                        Text("Off").tag(Condition?.none)
+                        ForEach(model.availableConditions) { Text($0.label).tag(Condition?.some($0)) }
+                    }
+                } label: {
+                    overlayChip(model.overlayCondition?.label ?? "Condition",
+                                dot: model.overlayCondition != nil ? .teal : nil)
                 }
-            } label: {
-                overlayChip(model.overlayCondition?.label ?? "Condition",
-                            dot: model.overlayCondition != nil ? .teal : nil)
             }
-            Menu {
-                Picker("PSA grade", selection: $model.overlayGrade) {
-                    Text("Off").tag(Grade?.none)
-                    ForEach(Grade.allCases.reversed()) { Text($0.label).tag(Grade?.some($0)) }
+            if !model.availableGrades.isEmpty {
+                Menu {
+                    Picker("PSA grade", selection: $model.overlayGrade) {
+                        Text("Off").tag(Grade?.none)
+                        ForEach(model.availableGrades) { Text($0.label).tag(Grade?.some($0)) }
+                    }
+                } label: {
+                    overlayChip(model.overlayGrade?.label ?? "PSA",
+                                dot: model.overlayGrade != nil ? .orange : nil)
                 }
-            } label: {
-                overlayChip(model.overlayGrade?.label ?? "PSA",
-                            dot: model.overlayGrade != nil ? .orange : nil)
             }
         }
         .tint(.primary)

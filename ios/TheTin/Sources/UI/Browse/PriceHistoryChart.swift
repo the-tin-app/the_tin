@@ -101,8 +101,13 @@ struct PriceHistoryChart: View {
                                 startPoint: .top, endPoint: .bottom))
                     }
                 }
+                // series: is REQUIRED — a static foregroundStyle does NOT partition marks, so
+                // without it Charts joins every series' points into one connected line (visible
+                // as a stray connector between the last point of one series and the first of
+                // the next, all in a single color).
                 ForEach(s.points) { p in
-                    LineMark(x: .value("Date", p.date), y: .value("USD", p.value))
+                    LineMark(x: .value("Date", p.date), y: .value("USD", p.value),
+                             series: .value("Series", s.name))
                         .foregroundStyle(color(s.name))
                         .interpolationMethod(.monotone)
                 }
