@@ -144,3 +144,56 @@ describe("applyExport", () => {
     expect(row.psa10).toBe(1150);       // medianPrice
   });
 });
+
+describe("applyExport with skuMeta (printing labels)", () => {
+  // Card "base1-4" has two SKUs: 100 = 1st Edition (priority 0), 200 = Unlimited (priority 1).
+  const idByTcg = new Map([[100, "base1-4"], [200, "base1-4"]]);
+  const skuMeta = new Map([
+    [100, { printing: "1st Edition", priority: 0 }],
+    [200, { printing: "Unlimited", priority: 1 }],
+  ]);
+
+  it("raw_usd deterministically uses the highest-priority SKU regardless of row order", () => {
+    const db = makeDb(); // the file's existing minimal-schema helper
+    applyExport(db, {
+      cards: [
+        { tcgPlayerId: 200, name: "", setId: "", cardNumber: "", marketPrice: 50, lowPrice: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 100, name: "", setId: "", cardNumber: "", marketPrice: 400, lowPrice: null, lastPriceUpdate: "" },
+      ],
+      asOf: "2026-07-19",
+    }, idByTcg, skuMeta);
+    expect(db.prepare("SELECT raw_usd FROM price_latest WHERE card_id='base1-4'").get())
+      .toEqual({ raw_usd: 400 }); // 1st Edition (priority 0), not last-written Unlimited
+  });
+
+  it("writes per-printing graded rows and keeps psaN on the highest-priority SKU", () => {
+    const db = makeDb();
+    const stats = applyExport(db, {
+      ebay: [
+        { tcgPlayerId: 200, grade: "psa10", smartMarketPrice: null, medianPrice: 900, averagePrice: null },
+        { tcgPlayerId: 100, grade: "psa10", smartMarketPrice: null, medianPrice: 5000, averagePrice: null },
+        { tcgPlayerId: 200, grade: "cgc9", smartMarketPrice: null, medianPrice: 300, averagePrice: null },
+      ],
+      asOf: "2026-07-19",
+    }, idByTcg, skuMeta);
+    expect(db.prepare("SELECT printing, grade, usd FROM graded_by_printing WHERE card_id='base1-4' ORDER BY printing, grade").all())
+      .toEqual([
+        { printing: "1st Edition", grade: "psa10", usd: 5000 },
+        { printing: "Unlimited", grade: "cgc9", usd: 300 },
+        { printing: "Unlimited", grade: "psa10", usd: 900 },
+      ]);
+    // psa10 column = 1st Edition's (priority 0); cgc9 has no psa column (existing behavior).
+    expect(db.prepare("SELECT psa10 FROM price_latest WHERE card_id='base1-4'").get())
+      .toEqual({ psa10: 5000 });
+    expect(stats.gradedPrintingRows).toBe(3);
+  });
+
+  it("without skuMeta behaves exactly as before (no graded_by_printing writes)", () => {
+    const db = makeDb();
+    applyExport(db, {
+      ebay: [{ tcgPlayerId: 100, grade: "psa10", smartMarketPrice: null, medianPrice: 5000, averagePrice: null }],
+      asOf: "2026-07-19",
+    }, idByTcg);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM graded_by_printing").get()).toEqual({ n: 0 });
+  });
+});
