@@ -116,6 +116,29 @@ describe("runOvernightSweep", () => {
     expect(db.prepare("SELECT COUNT(*) FROM price_by_condition").pluck().get()).toBe(3);
   });
 
+  it("writes the full printing×condition matrix to price_matrix", async () => {
+    const db = freshDb();
+    const matrixPricesRaw = {
+      primaryPrinting: "Holofoil",
+      variants: {
+        "Holofoil": { "Near Mint": { price: 10 }, "Lightly Played": { price: 8 } },
+        "Reverse Holofoil": { "Near Mint": { price: 12 } },
+      },
+    };
+    const c = { ...client, getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
+      priceHistory: [], pricesRaw: matrixPricesRaw, gradedLatest: {}, gradedSeries: [], ebayRaw: {} }]) };
+    const s = await runOvernightSweep(db as any, c as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    const rows = db.prepare(
+      "SELECT printing, condition, usd FROM price_matrix WHERE card_id = 'base-4' ORDER BY printing, condition",
+    ).all();
+    expect(rows).toEqual([
+      { printing: "Holofoil", condition: "Lightly Played", usd: 8 },
+      { printing: "Holofoil", condition: "Near Mint", usd: 10 },
+      { printing: "Reverse Holofoil", condition: "Near Mint", usd: 12 },
+    ]);
+    expect(s.matrixRows).toBe(3);
+  });
+
   it("skips done sets and stops gracefully on a stop error", async () => {
     const db = freshDb();
     const l = ledger(); l.setsDone.add("base");
