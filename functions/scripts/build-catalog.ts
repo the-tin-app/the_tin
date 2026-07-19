@@ -365,7 +365,7 @@ async function main() {
         population: popCsv ? parsePopulationExport(popCsv) : undefined,
         asOf,
       }, idByTcg, skuMeta);
-      console.log(`  applied: ${stats.rawRows} raw · ${stats.gradedRows} graded · ${stats.gradedPrintingRows} graded-by-printing · ${stats.sealedRows} sealed · ${stats.popRows} pop · ${stats.unmatched} unmatched export rows`);
+      console.log(`  applied: ${stats.rawRows} raw cards · ${stats.gradedRows} graded · ${stats.gradedPrintingRows} graded-by-printing · ${stats.sealedRows} sealed · ${stats.popRows} pop · ${stats.unmatched} unmatched export rows`);
       // The coverage/spot summary below is computed from the in-memory join, where USD is always
       // null in export mode (prices land only in the DB via applyExport). Read the true count +
       // spot back from the DB so the summary reflects what actually shipped, not a false 0.

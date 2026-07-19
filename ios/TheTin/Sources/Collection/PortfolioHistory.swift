@@ -21,8 +21,8 @@ enum PortfolioHistory {
     private static let week: TimeInterval = 7 * 86_400
 
     /// `histories` values must be oldest-first (as `CatalogStore.priceHistory` returns them).
-    /// The trailing defaulted `now:` exists for tests — the pinned 5-argument call shape
-    /// (widget feature) compiles unchanged.
+    /// The trailing defaulted `now:` exists for tests — the widget feature's pinned call shape
+    /// compiles unchanged since new params are all defaulted.
     static func series(entries: [CollectionEntry],
                        histories: [String: [PricePoint]],
                        prices: [String: PriceRecord],

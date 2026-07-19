@@ -198,10 +198,22 @@ struct CardDetailView: View {
                         // Printing-scoped slices — empty when the card has one printing, or when
                         // the selected printing has no matrix/graded rows (PPT gap-fill varies).
                         let printingMatrix = currentPrinting.map { p in model.matrix.filter { $0.printing == p.printing } } ?? []
-                        let printingGraded = currentPrinting.map { p in model.gradedByPrinting.filter { $0.printing == p.printing } } ?? []
+                        // Bridge the two printing vocabularies: currentPrinting is a PPT
+                        // price_by_variant key ("1st Edition Holofoil"), graded_by_printing labels
+                        // come from TCGdex types via pptPrintingName ("1st Edition") — exact
+                        // equality never meets, CardVariant.matches does (mirrors GroupStats).
+                        // e.g. "Unlimited Holofoil"→.holo→matches "Holofoil"; "1st Edition
+                        // Holofoil"→.firstEdition→matches "1st Edition"; "Unlimited"→.regular→
+                        // matches "Normal".
+                        let printingVariant = currentPrinting.flatMap { p in CardVariant.allCases.first { $0.matches(printing: p.printing) } }
+                        let printingGraded = printingVariant.map { v in model.gradedByPrinting.filter { v.matches(printing: $0.printing) } } ?? []
                         // Graded (PSA) prices — only grades with data appear. When the selected
                         // printing has its own graded row for a grade, that value replaces the
                         // card-level one; otherwise the card-level value is shown as a fallback.
+                        // Gating on the card-level psaN column is safe even for printing-only
+                        // rows: applyExport writes both the card-level psaN column and the
+                        // graded_by_printing row from the same ebay sale, so a grade with a
+                        // per-printing row always also has a card-level column set.
                         let graded = Grade.allCases.filter { price.gradedOnly($0) != nil }
                         if !graded.isEmpty {
                             Text("Graded (PSA)").font(.subheadline.bold())
@@ -212,8 +224,8 @@ struct CardDetailView: View {
                                               delta: model.delta(.psa, String(grade.numeric)))
                                 }
                             }
-                            if currentPrinting != nil, printingGraded.isEmpty {
-                                Text("Shown for the card overall — no \(currentPrinting!.printing)-specific graded sales.")
+                            if let p = currentPrinting, printingGraded.isEmpty {
+                                Text("Shown for the card overall — no \(p.printing)-specific graded sales.")
                                     .font(.caption2).foregroundStyle(.tertiary)
                             }
                         }
@@ -237,8 +249,8 @@ struct CardDetailView: View {
                                                   delta: model.delta(.condition, cp.condition.rawValue))
                                     }
                                 }
-                                if currentPrinting != nil, !model.conditions.isEmpty {
-                                    Text("Shown for the card overall — no \(currentPrinting!.printing)-specific condition prices.")
+                                if let p = currentPrinting, !model.conditions.isEmpty {
+                                    Text("Shown for the card overall — no \(p.printing)-specific condition prices.")
                                         .font(.caption2).foregroundStyle(.tertiary)
                                 }
                             }

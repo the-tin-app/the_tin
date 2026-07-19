@@ -208,7 +208,7 @@ final class CatalogStore {
     /// or the catalog predates the table (`try?` → `[]`).
     func matrixPrices(cardId: String) throws -> [MatrixPrice] {
         try dbQueue.read { db in
-            try Row.fetchAll(db, sql: "SELECT printing, condition, usd FROM price_matrix WHERE card_id = ?",
+            try Row.fetchAll(db, sql: "SELECT printing, condition, usd FROM price_matrix WHERE card_id = ? ORDER BY printing, condition",
                              arguments: [cardId])
                 .compactMap { r in
                     Condition(rawValue: r["condition"]).map { MatrixPrice(printing: r["printing"], condition: $0, usd: r["usd"]) }
@@ -222,7 +222,7 @@ final class CatalogStore {
         guard !cardIds.isEmpty else { return [:] }
         let marks = databaseQuestionMarks(count: cardIds.count)
         let rows = try dbQueue.read { db in
-            try Row.fetchAll(db, sql: "SELECT card_id, printing, condition, usd FROM price_matrix WHERE card_id IN (\(marks))",
+            try Row.fetchAll(db, sql: "SELECT card_id, printing, condition, usd FROM price_matrix WHERE card_id IN (\(marks)) ORDER BY printing, condition",
                              arguments: StatementArguments(cardIds))
         }
         var out: [String: [MatrixPrice]] = [:]
