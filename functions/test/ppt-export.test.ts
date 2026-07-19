@@ -196,4 +196,48 @@ describe("applyExport with skuMeta (printing labels)", () => {
     }, idByTcg);
     expect(db.prepare("SELECT COUNT(*) AS n FROM graded_by_printing").get()).toEqual({ n: 0 });
   });
+
+  it("a labeled SKU beats an unlabeled SKU (absent from skuMeta defaults to MAX_SAFE_INTEGER)", () => {
+    const db = makeDb();
+    const idByTcg2 = new Map([[100, "base1-4"], [300, "base1-4"]]);
+    const skuMeta2 = new Map([[100, { printing: "1st Edition", priority: 5 }]]); // 300 has no entry
+    applyExport(db, {
+      cards: [
+        { tcgPlayerId: 300, name: "", setId: "", cardNumber: "", marketPrice: 999, lowPrice: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 100, name: "", setId: "", cardNumber: "", marketPrice: 111, lowPrice: null, lastPriceUpdate: "" },
+      ],
+      ebay: [
+        { tcgPlayerId: 300, grade: "psa10", smartMarketPrice: null, medianPrice: 900, averagePrice: null },
+        { tcgPlayerId: 100, grade: "psa10", smartMarketPrice: null, medianPrice: 500, averagePrice: null },
+      ],
+      asOf: "2026-07-19",
+    }, idByTcg2, skuMeta2);
+    expect(db.prepare("SELECT raw_usd, psa10 FROM price_latest WHERE card_id='base1-4'").get())
+      .toEqual({ raw_usd: 111, psa10: 500 }); // labeled SKU (priority 5) beats unlabeled (MAX_SAFE_INTEGER)
+    // Only the labeled SKU's ebay row lands in graded_by_printing — the unlabeled SKU has no printing label.
+    expect(db.prepare("SELECT printing, grade, usd FROM graded_by_printing WHERE card_id='base1-4'").all())
+      .toEqual([{ printing: "1st Edition", grade: "psa10", usd: 500 }]);
+  });
+
+  it("an explicit priority tie is broken by input order (first row wins both raw_usd and the psa column)", () => {
+    const db = makeDb();
+    const idByTcg3 = new Map([[400, "base1-4"], [500, "base1-4"]]);
+    const skuMeta3 = new Map([
+      [400, { printing: "A", priority: 2 }],
+      [500, { printing: "B", priority: 2 }], // same priority as 400
+    ]);
+    applyExport(db, {
+      cards: [
+        { tcgPlayerId: 400, name: "", setId: "", cardNumber: "", marketPrice: 111, lowPrice: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 500, name: "", setId: "", cardNumber: "", marketPrice: 222, lowPrice: null, lastPriceUpdate: "" },
+      ],
+      ebay: [
+        { tcgPlayerId: 400, grade: "psa10", smartMarketPrice: null, medianPrice: 111, averagePrice: null },
+        { tcgPlayerId: 500, grade: "psa10", smartMarketPrice: null, medianPrice: 222, averagePrice: null },
+      ],
+      asOf: "2026-07-19",
+    }, idByTcg3, skuMeta3);
+    expect(db.prepare("SELECT raw_usd, psa10 FROM price_latest WHERE card_id='base1-4'").get())
+      .toEqual({ raw_usd: 111, psa10: 111 }); // 400 processed first, wins the tie
+  });
 });
