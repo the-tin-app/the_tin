@@ -15,7 +15,7 @@ export interface OvernightLedger {
   setsDone: Set<string>; popBatchesDone: Set<string>;
   markSet(id: string): void; markPopBatch(key: string): void;
 }
-export interface OvernightOptions { writeGradedHistory: boolean; populationEnabled: boolean; asOf: string; }
+export interface OvernightOptions { populationEnabled: boolean; asOf: string; }
 export interface OvernightSummary {
   setsDone: number; historyRows: number; gradedRows: number; popRows: number;
   condHistoryRows: number; byCondRows: number; byVariantRows: number;
@@ -90,7 +90,11 @@ export async function runOvernightSweep(
           upGraded.run({ id: m.id, ...psaVals, as_of: opts.asOf });
           sum.gradedRows++;
         }
-        if (opts.writeGradedHistory) for (const p of pc.gradedSeries) insGh.run(m.id, p.grade, p.date, p.usd);
+        // Always write whatever series each card has — parseGradedHistory yields [] for cards
+        // without eBay sales, so there is nothing to gate. (A probe-driven writeGradedHistory
+        // opt-in used to sit here; it sampled ONE card and latched graded_history off for the
+        // whole sweep every night the sample happened to have no sales.)
+        for (const p of pc.gradedSeries) insGh.run(m.id, p.grade, p.date, p.usd);
         // Parallel, app-compat-safe tables: ALL ungraded conditions (Near Mint, Lightly Played,
         // Moderately Played, Heavily Played, Damaged). Does not touch price_history/price_latest.
         for (const s of parseConditionHistory(pc.priceHistory)) {
