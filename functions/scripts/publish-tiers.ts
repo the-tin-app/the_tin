@@ -88,9 +88,11 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
       // OS tempdir, not catalogDir — a leaked temp (ATTACH throws on a corrupt/partial artifact)
       // must never land in the served catalog dir, where the prune regex never touches it.
       const tmp = join(tmpdir(), `_delta-lookback-${lb.col}-${process.pid}-${Date.now()}.sqlite`);
-      writeFileSync(tmp, gunzipSync(readFileSync(join(catalogDir, artifact))));
       let attached = false;
+      // Per-lookback isolation: one bad/old-schema artifact must not kill the other windows
+      // (2026-07-19: a pre-psa-widening 7d artifact aborted 7d cond/psa/printing AND all of 30d).
       try {
+        writeFileSync(tmp, gunzipSync(readFileSync(join(catalogDir, artifact))));
         db.exec(`ATTACH DATABASE '${tmp.replace(/'/g, "''")}' AS old`);
         attached = true;
         const upsert = (select: string) => db.exec(`
@@ -99,10 +101,15 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
         upsert(`SELECT n.card_id, 'raw', '', (n.raw_usd - o.raw_usd) / o.raw_usd
                 FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id
                 WHERE n.raw_usd > 0 AND o.raw_usd > 0`);
-        for (let g = 1; g <= 10; g++)
+        // Artifacts published before the psa1-10 widening only carry psa8-10.
+        const oldCols = new Set((db.pragma("old.table_info(price_latest)") as
+          { name: string }[]).map((c) => c.name));
+        for (let g = 1; g <= 10; g++) {
+          if (!oldCols.has(`psa${g}`)) continue;
           upsert(`SELECT n.card_id, 'psa', '${g}', (n.psa${g} - o.psa${g}) / o.psa${g}
                   FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id
                   WHERE n.psa${g} > 0 AND o.psa${g} > 0`);
+        }
         upsert(`SELECT n.card_id, 'condition', n.condition, (n.usd - o.usd) / o.usd
                 FROM price_by_condition n JOIN old.price_by_condition o
                   ON o.card_id = n.card_id AND o.condition = n.condition
@@ -111,6 +118,8 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
                 FROM price_by_variant n JOIN old.price_by_variant o
                   ON o.card_id = n.card_id AND o.printing = n.printing
                 WHERE n.usd > 0 AND o.usd > 0`);
+      } catch (e) {
+        console.warn(`[publish-tiers] ${lb.col} lookback vs ${artifact} failed — skipping:`, e);
       } finally {
         // Delete the temp file FIRST: if ATTACH failed partway (corrupt/partial sqlite), DETACH
         // below throws "no such database: old", which — if it ran first — would mask the real
