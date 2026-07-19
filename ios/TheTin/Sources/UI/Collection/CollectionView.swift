@@ -495,7 +495,8 @@ struct CollectionView: View {
                 NavigationStack {
                     EntryFormView(card: card, groups: model.groups, existing: entry,
                                   variants: model.variantsByCard[entry.cardId] ?? [],
-                                  conditions: model.conditionsByCard[entry.cardId] ?? []) { updated in
+                                  conditions: model.conditionsByCard[entry.cardId] ?? [],
+                                  matrix: model.matrixByCard[entry.cardId] ?? []) { updated in
                         await model.saveEntry(updated)
                     }
                 }

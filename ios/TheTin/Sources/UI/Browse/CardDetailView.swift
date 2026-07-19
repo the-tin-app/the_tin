@@ -276,6 +276,7 @@ struct CardDetailView: View {
                 NavigationStack {
                     EntryFormView(card: model.card, groups: collection.groups, existing: nil,
                                   variants: model.variants, conditions: model.conditions,
+                                  matrix: collection.matrixByCard[model.card.id] ?? [],
                                   onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
                         await collection.saveEntry(entry)
                     }
