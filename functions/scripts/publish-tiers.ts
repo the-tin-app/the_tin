@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { mkdirSync, copyFileSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { publishCatalog, StoragePort } from "../src/pipeline/publish";
 import { getStorage } from "firebase-admin/storage";
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
@@ -84,10 +85,14 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
     for (const lb of LOOKBACKS) {
       const artifact = pickLookbackArtifact(catalogDir, now, lb);
       if (!artifact) continue;
-      const tmp = join(catalogDir, `_delta-lookback-${lb.col}.sqlite`);
+      // OS tempdir, not catalogDir — a leaked temp (ATTACH throws on a corrupt/partial artifact)
+      // must never land in the served catalog dir, where the prune regex never touches it.
+      const tmp = join(tmpdir(), `_delta-lookback-${lb.col}-${process.pid}-${Date.now()}.sqlite`);
       writeFileSync(tmp, gunzipSync(readFileSync(join(catalogDir, artifact))));
+      let attached = false;
       try {
         db.exec(`ATTACH DATABASE '${tmp.replace(/'/g, "''")}' AS old`);
+        attached = true;
         const upsert = (select: string) => db.exec(`
           INSERT INTO price_delta(card_id, kind, key, ${lb.col}) ${select}
           ON CONFLICT(card_id, kind, key) DO UPDATE SET ${lb.col} = excluded.${lb.col}`);
@@ -107,8 +112,13 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
                   ON o.card_id = n.card_id AND o.printing = n.printing
                 WHERE n.usd > 0 AND o.usd > 0`);
       } finally {
-        db.exec("DETACH DATABASE old");
+        // Delete the temp file FIRST: if ATTACH failed partway (corrupt/partial sqlite), DETACH
+        // below throws "no such database: old", which — if it ran first — would mask the real
+        // error AND abort before rmSync, orphaning a large uncompressed sqlite outside catalogDir.
         rmSync(tmp, { force: true });
+        if (attached) {
+          try { db.exec("DETACH DATABASE old"); } catch { /* swallow: never mask the real error */ }
+        }
       }
     }
   } finally {

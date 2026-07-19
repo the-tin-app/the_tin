@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -172,6 +172,20 @@ describe("publishTiers with deltas", () => {
     const m = await publishTiers({ sourceDbPath: src, version: 8, nasDir,
       firebaseStorage: new MemStore(), now: NOW, publishToFirebase: false });
     expect(existsSync(join(catalogDir, m.tiers.expert.path))).toBe(true);
+  });
+
+  it("publishes and leaves no leaked temp file when a 1d artifact gunzips fine but isn't a valid sqlite", async () => {
+    const src = makeSource(dir, { raw: 3.0 });
+    // gunzip succeeds (it's real gzip), but the decompressed bytes aren't a sqlite database, so
+    // ATTACH (or the first query against it) throws inside computePriceDeltas's per-lookback block.
+    const bad = join(catalogDir, "expert-v7.sqlite.gz");
+    writeFileSync(bad, gzipSync(Buffer.from("not a sqlite database at all")));
+    const mtime = new Date(NOW.getTime() - DAY_MS);
+    utimesSync(bad, mtime, mtime);
+    const m = await publishTiers({ sourceDbPath: src, version: 8, nasDir,
+      firebaseStorage: new MemStore(), now: NOW, publishToFirebase: false });
+    expect(existsSync(join(catalogDir, m.tiers.expert.path))).toBe(true);
+    expect(readdirSync(catalogDir).some(f => f.startsWith("_delta-lookback-"))).toBe(false);
   });
 });
 
