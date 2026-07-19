@@ -46,4 +46,18 @@ describe("catalog schema", () => {
     expect(db.prepare("SELECT raw_usd FROM price_history_cond").pluck().get()).toBe(10.45);
     expect(db.prepare("SELECT usd FROM price_by_condition").pluck().get()).toBe(7.66);
   });
+
+  it("price_latest carries liquidity columns; graded_sales table exists", () => {
+    const out = join(tmpdir(), `cat-${process.pid}-${Math.round(performance.now())}.sqlite`);
+    buildCatalog(emptyInput(), out);
+    const db = new Database(out);
+    db.pragma("foreign_keys = OFF");
+    const cols = db.prepare("SELECT name FROM pragma_table_info('price_latest')").all().map((r: any) => r.name);
+    expect(cols).toContain("sellers");
+    expect(cols).toContain("listings");
+    // shape sanity: verbatim grade keys, idempotent PK
+    db.prepare("INSERT INTO graded_sales VALUES (?,?,?,?,?)").run("c1", "psa10", 14, "high", "2026-07-19");
+    db.prepare("INSERT OR REPLACE INTO graded_sales VALUES (?,?,?,?,?)").run("c1", "psa10", 15, "high", "2026-07-19");
+    expect(db.prepare("SELECT sales_count FROM graded_sales").pluck().get()).toBe(15);
+  });
 });
