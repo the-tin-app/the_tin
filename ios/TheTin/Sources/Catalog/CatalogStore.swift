@@ -243,6 +243,16 @@ final class CatalogStore {
         }
     }
 
+    /// eBay sales counts backing graded prices (all graders, keys verbatim). Throws (→ `[]`
+    /// via `try?`) when the installed catalog predates the `graded_sales` table.
+    func gradedSales(cardId: String) throws -> [GradedSale] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT grade, sales_count, confidence FROM graded_sales WHERE card_id = ?",
+                             arguments: [cardId])
+                .map { GradedSale(grade: $0["grade"], salesCount: $0["sales_count"] ?? 0, confidence: $0["confidence"]) }
+        }
+    }
+
     /// Batch of `gradedPrintingPrices(cardId:)` keyed by card id (→ `[:]` via `try?` on old artifacts).
     func gradedPrintingPrices(cardIds: [String]) throws -> [String: [GradedPrintingPrice]] {
         guard !cardIds.isEmpty else { return [:] }
@@ -666,7 +676,8 @@ final class CatalogStore {
         PriceRecord(cardId: r["card_id"], rawUsd: r["raw_usd"], rawEur: r["raw_eur"],
                     psa1: r["psa1"], psa2: r["psa2"], psa3: r["psa3"], psa4: r["psa4"],
                     psa5: r["psa5"], psa6: r["psa6"], psa7: r["psa7"], psa8: r["psa8"],
-                    psa9: r["psa9"], psa10: r["psa10"], asOf: r["as_of"])
+                    psa9: r["psa9"], psa10: r["psa10"],
+                    sellers: r["sellers"], listings: r["listings"], asOf: r["as_of"])
     }
 }
 

@@ -152,6 +152,15 @@ struct GradedPrintingPrice: Equatable, Identifiable {
     var id: String { "\(printing)|\(grade)" }
 }
 
+/// One `graded_sales` row: how many real eBay sales back the graded price for `grade`
+/// (PPT key verbatim, e.g. "psa10"/"cgc9"), plus PPT's smart-price confidence when present.
+struct GradedSale: Equatable, Identifiable {
+    var grade: String
+    var salesCount: Int
+    var confidence: String?
+    var id: String { grade }
+}
+
 /// A sealed product — booster box, Elite Trainer Box, booster pack, tin, etc. — from the
 /// `sealed_product` table (PPT sealed dataset). `setId` is PPT's set id and may not map 1:1 to
 /// our card set ids, so the per-set section matches best-effort while the global browse is the
@@ -205,6 +214,8 @@ struct PriceRecord: Equatable {
     let psa8: Double?
     let psa9: Double?
     let psa10: Double?
+    let sellers: Int?
+    let listings: Int?
     let asOf: String
 
     /// Grades default to nil so call sites name only the columns they care about. Labels must
@@ -212,11 +223,13 @@ struct PriceRecord: Equatable {
     init(cardId: String, rawUsd: Double?, rawEur: Double?,
          psa1: Double? = nil, psa2: Double? = nil, psa3: Double? = nil, psa4: Double? = nil,
          psa5: Double? = nil, psa6: Double? = nil, psa7: Double? = nil, psa8: Double? = nil,
-         psa9: Double? = nil, psa10: Double? = nil, asOf: String) {
+         psa9: Double? = nil, psa10: Double? = nil,
+         sellers: Int? = nil, listings: Int? = nil, asOf: String) {
         self.cardId = cardId; self.rawUsd = rawUsd; self.rawEur = rawEur
         self.psa1 = psa1; self.psa2 = psa2; self.psa3 = psa3; self.psa4 = psa4
         self.psa5 = psa5; self.psa6 = psa6; self.psa7 = psa7; self.psa8 = psa8
-        self.psa9 = psa9; self.psa10 = psa10; self.asOf = asOf
+        self.psa9 = psa9; self.psa10 = psa10
+        self.sellers = sellers; self.listings = listings; self.asOf = asOf
     }
 
     /// Default display currency is USD; a set grade falls back to raw_usd when that column is null.
