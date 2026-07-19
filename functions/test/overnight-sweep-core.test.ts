@@ -154,11 +154,11 @@ describe("runOvernightSweep", () => {
     const db = freshDb();
     const allNull = { ...client, getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
       priceHistory: [], gradedLatest: { psa10: null }, gradedSeries: [], ebayRaw: {} }]) };
-    const before = db.prepare("SELECT raw_usd, raw_eur, as_of FROM price_latest WHERE card_id='base-4'").get();
+    const before = db.prepare("SELECT raw_usd, raw_eur, psa1, psa2, psa3, psa4, psa5, psa6, psa7, psa8, psa9, psa10, as_of FROM price_latest WHERE card_id='base-4'").get();
     const s = await runOvernightSweep(db as any, allNull as any, [{ setId: "base", pptName: "Base" }], ledger(),
       { ...opts, populationEnabled: false }, never);
     expect(s.gradedRows).toBe(0);
-    const after = db.prepare("SELECT raw_usd, raw_eur, as_of FROM price_latest WHERE card_id='base-4'").get();
+    const after = db.prepare("SELECT raw_usd, raw_eur, psa1, psa2, psa3, psa4, psa5, psa6, psa7, psa8, psa9, psa10, as_of FROM price_latest WHERE card_id='base-4'").get();
     expect(after).toEqual(before); // no as_of bump, no phantom write
   });
 
@@ -166,11 +166,11 @@ describe("runOvernightSweep", () => {
     const db = freshDb();
     const nonPsaOnly = { ...client, getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
       priceHistory: [], gradedLatest: { cgc10: 30 }, gradedSeries: [], ebayRaw: {} }]) };
-    const before = db.prepare("SELECT raw_usd, raw_eur, as_of FROM price_latest WHERE card_id='base-4'").get();
+    const before = db.prepare("SELECT raw_usd, raw_eur, psa1, psa2, psa3, psa4, psa5, psa6, psa7, psa8, psa9, psa10, as_of FROM price_latest WHERE card_id='base-4'").get();
     const s = await runOvernightSweep(db as any, nonPsaOnly as any, [{ setId: "base", pptName: "Base" }], ledger(),
       { ...opts, populationEnabled: false }, never);
     expect(s.gradedRows).toBe(0);
-    const after = db.prepare("SELECT raw_usd, raw_eur, as_of FROM price_latest WHERE card_id='base-4'").get();
+    const after = db.prepare("SELECT raw_usd, raw_eur, psa1, psa2, psa3, psa4, psa5, psa6, psa7, psa8, psa9, psa10, as_of FROM price_latest WHERE card_id='base-4'").get();
     expect(after).toEqual(before); // cgc10 alone must not create a phantom all-psa-null row
   });
 
