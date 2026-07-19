@@ -1,4 +1,5 @@
 import XCTest
+import GRDB
 @testable import TheTin
 
 final class CatalogStoreTests: XCTestCase {
@@ -101,5 +102,63 @@ final class CatalogStoreTests: XCTestCase {
         let twins = try store.twins(cardId: FixtureCatalog.twinA)
         XCTAssertTrue(twins.contains(FixtureCatalog.twinB))
         XCTAssertTrue(try store.twins(cardId: "swsh7-12").isEmpty) // no twin row
+    }
+
+    // MARK: - price_delta
+
+    /// Fixture predates price_delta — add the table to a temp copy the way publish-tiers ships it.
+    private func makeStoreWithDeltas() throws -> CatalogStore {
+        let path = try FixtureCatalog.copyToTemp()
+        let dbQueue = try DatabaseQueue(path: path)
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE price_delta(card_id TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL,
+                  pct_1d REAL, pct_7d REAL, pct_30d REAL, PRIMARY KEY(card_id, kind, key))
+                """)
+            try db.execute(sql: "INSERT INTO price_delta VALUES ('sv1-25', 'raw', '', 0.10, NULL, -0.05)")
+            try db.execute(sql: "INSERT INTO price_delta VALUES ('sv1-25', 'psa', '10', NULL, 0.02, NULL)")
+            try db.execute(sql: "INSERT INTO price_delta VALUES ('sv1-1', 'printing', 'Holofoil', 0.30, NULL, NULL)")
+        }
+        try dbQueue.close()
+        return try CatalogStore(path: path)
+    }
+
+    func testDeltasSingleCard() throws {
+        let store = try makeStoreWithDeltas()
+        let records = try store.deltas(cardId: "sv1-25")
+        XCTAssertEqual(records.count, 2)
+        let raw = records.first { $0.kind == .raw }
+        XCTAssertEqual(raw?.key, "")
+        XCTAssertEqual(raw?.pct1d, 0.10)
+        XCTAssertNil(raw?.pct7d)
+        XCTAssertEqual(raw?.pct30d, -0.05)
+        XCTAssertEqual(raw?.pct(for: .d1), 0.10)
+        XCTAssertNil(raw?.pct(for: .d7))
+        let psa = records.first { $0.kind == .psa }
+        XCTAssertEqual(psa?.key, "10")
+        XCTAssertEqual(psa?.pct(for: .d7), 0.02)
+    }
+
+    func testDeltasBatch() throws {
+        let store = try makeStoreWithDeltas()
+        let byCard = try store.deltas(cardIds: ["sv1-25", "sv1-1", "missing"])
+        XCTAssertEqual(byCard["sv1-25"]?.count, 2)
+        XCTAssertEqual(byCard["sv1-1"]?.first?.kind, .printing)
+        XCTAssertEqual(byCard["sv1-1"]?.first?.key, "Holofoil")
+        XCTAssertNil(byCard["missing"])
+        XCTAssertEqual(try store.deltas(cardIds: []), [:])
+    }
+
+    func testDeltasThrowsWithoutTable() throws {
+        let store = try FixtureCatalog.make()   // fixture has no price_delta table
+        XCTAssertThrowsError(try store.deltas(cardId: "sv1-25"))
+        XCTAssertThrowsError(try store.deltas(cardIds: ["sv1-25"]))
+    }
+
+    func testDeltaPeriodCycle() {
+        XCTAssertEqual(DeltaPeriod.d1.next, .d7)
+        XCTAssertEqual(DeltaPeriod.d7.next, .d30)
+        XCTAssertEqual(DeltaPeriod.d30.next, .d1)
+        XCTAssertEqual(DeltaPeriod.d7.label, "last week")
     }
 }
