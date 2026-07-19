@@ -131,6 +131,9 @@ export function parseEbayExport(csv: string): EbayExportRow[] {
 
 const POP_GRADE_COLUMNS: Record<string, string> = {
   g1: "1", g2: "2", g3: "3", g4: "4", g5: "5", g6: "6", g7: "7", g8: "8", g9: "9", g9_5: "9.5", g10: "10",
+  // Specialty designations (documented export columns): PSA Authentic-only, BGS Pristine 10 /
+  // Perfect "Black Label". Zero counts are dropped by the existing >0 filter.
+  auth: "Auth", pristine: "Pristine", perfect: "Perfect",
 };
 
 export function parsePopulationExport(csv: string): PopulationExportRow[] {

@@ -272,4 +272,11 @@ describe("cards export sellers column", () => {
     const row = db.prepare("SELECT raw_usd, sellers FROM price_latest WHERE card_id='swsh7-215'").get() as any;
     expect(row).toEqual({ raw_usd: 1350.5, sellers: 23 });
   });
+
+  it("parsePopulationExport captures auth/pristine/perfect specialty counts", () => {
+    const rows = parsePopulationExport(
+      "tcgPlayerId,grader,totalPopulation,gemRate,g1,g10,g9_5,auth,pristine,perfect\n" +
+      "246812,BGS,120,10.5,2,50,7,3,4,1");
+    expect(rows[0].grades).toEqual({ "1": 2, "10": 50, "9.5": 7, Auth: 3, Pristine: 4, Perfect: 1 });
+  });
 });
