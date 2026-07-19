@@ -195,3 +195,21 @@ export function parseMatrix(prices: unknown): MatrixCell[] {
   }
   return out;
 }
+
+export interface Liquidity { sellers: number | null; listings: number | null }
+
+/** Marketplace liquidity off the top-level `prices` object: how many sellers/listings back the
+ *  raw market price. Shape-tolerant: absent/garbage → nulls (the trimmed test fixture predates
+ *  these fields; live /cards responses carry them). Negative counts are bogus → null. */
+export function parseLiquidity(prices: unknown): Liquidity {
+  const out: Liquidity = { sellers: null, listings: null };
+  if (!prices || typeof prices !== "object" || Array.isArray(prices)) return out;
+  const p = prices as Record<string, unknown>;
+  const count = (v: unknown): number | null => {
+    const n = typeof v === "string" ? Number(v) : (v as number);
+    return typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.trunc(n) : null;
+  };
+  out.sellers = count(p.sellers);
+  out.listings = count(p.listings);
+  return out;
+}

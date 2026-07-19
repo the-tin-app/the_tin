@@ -262,4 +262,71 @@ final class CatalogStoreTests: XCTestCase {
         let d = try store.deltas(cardId: "swsh7-215")
         XCTAssertEqual(d.first { $0.kind == .matrix }?.key, "Holofoil|Near Mint")
     }
+
+    // MARK: - graded_sales / liquidity
+
+    /// graded_sales added to a temp copy the way publish-tiers ships it (all tiers), plus the
+    /// price_latest sellers/listings columns.
+    private func makeStoreWithGradedSales() throws -> CatalogStore {
+        let path = try FixtureCatalog.copyToTemp()
+        let dbQueue = try DatabaseQueue(path: path)
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE graded_sales(card_id TEXT NOT NULL, grade TEXT NOT NULL,
+                  sales_count INTEGER NOT NULL, confidence TEXT, as_of TEXT NOT NULL,
+                  PRIMARY KEY(card_id, grade));
+                """)
+            try db.execute(sql: "INSERT INTO graded_sales VALUES ('swsh7-215','psa10',14,'high','2026-07-19')")
+            try db.execute(sql: "INSERT INTO graded_sales VALUES ('swsh7-215','cgc9',2,NULL,'2026-07-19')")
+            try db.execute(sql: "ALTER TABLE price_latest ADD COLUMN sellers INTEGER")
+            try db.execute(sql: "ALTER TABLE price_latest ADD COLUMN listings INTEGER")
+            try db.execute(sql: "UPDATE price_latest SET sellers = 23, listings = 61 WHERE card_id = 'swsh7-215'")
+        }
+        try dbQueue.close()
+        return try CatalogStore(path: path)
+    }
+
+    func testGradedSales() throws {
+        let store = try makeStoreWithGradedSales()
+        let sales = try store.gradedSales(cardId: "swsh7-215")
+        XCTAssertEqual(sales.count, 2)
+        XCTAssertEqual(sales.first { $0.grade == "psa10" }?.salesCount, 14)
+        XCTAssertEqual(sales.first { $0.grade == "psa10" }?.confidence, "high")
+        XCTAssertNil(sales.first { $0.grade == "cgc9" }?.confidence)
+    }
+
+    func testGradedSalesMissingTableIsEmptyViaTry() throws {
+        let store = try FixtureCatalog.make()  // fixture predates graded_sales
+        XCTAssertEqual((try? store.gradedSales(cardId: "swsh7-215")) ?? [], [])
+    }
+
+    func testPriceRecordLiquidity() throws {
+        let store = try makeStoreWithGradedSales()
+        let p = try store.price(cardId: "swsh7-215")
+        XCTAssertEqual(p?.sellers, 23)
+        XCTAssertEqual(p?.listings, 61)
+    }
+
+    func testPriceRecordLiquidityMissingColumnsReadAsNil() throws {
+        let store = try FixtureCatalog.make()  // fixture predates the columns
+        let p = try store.price(cardId: "swsh7-215")
+        XCTAssertNil(p?.sellers)
+        XCTAssertNil(p?.listings)
+    }
+
+    func testApplyPriceDeltaPreservesLiquidityColumns() throws {
+        // Regression: applyPriceDelta must upsert, not INSERT OR REPLACE — a REPLACE deletes and
+        // reinserts the whole row, nulling out sellers/listings the delta payload never mentions.
+        let store = try makeStoreWithGradedSales()
+        let d = PriceDelta(asOf: "2026-07-20", rows: [
+            .init(cardId: "swsh7-215", rawUsd: 99.0, rawEur: 90.0, psa9: 190, psa10: 520),
+        ])
+        XCTAssertEqual(try store.applyPriceDelta(d), 1)
+        let p = try XCTUnwrap(store.price(cardId: "swsh7-215"))
+        XCTAssertEqual(p.rawUsd, 99.0)
+        XCTAssertEqual(p.psa10, 520)
+        XCTAssertEqual(p.asOf, "2026-07-20")
+        XCTAssertEqual(p.sellers, 23)   // survived — not nulled by the price delta
+        XCTAssertEqual(p.listings, 61)
+    }
 }

@@ -243,6 +243,16 @@ final class CatalogStore {
         }
     }
 
+    /// eBay sales counts backing graded prices (all graders, keys verbatim). Throws (→ `[]`
+    /// via `try?`) when the installed catalog predates the `graded_sales` table.
+    func gradedSales(cardId: String) throws -> [GradedSale] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT grade, sales_count, confidence FROM graded_sales WHERE card_id = ?",
+                             arguments: [cardId])
+                .map { GradedSale(grade: $0["grade"], salesCount: $0["sales_count"] ?? 0, confidence: $0["confidence"]) }
+        }
+    }
+
     /// Batch of `gradedPrintingPrices(cardId:)` keyed by card id (→ `[:]` via `try?` on old artifacts).
     func gradedPrintingPrices(cardIds: [String]) throws -> [String: [GradedPrintingPrice]] {
         guard !cardIds.isEmpty else { return [:] }
@@ -666,7 +676,8 @@ final class CatalogStore {
         PriceRecord(cardId: r["card_id"], rawUsd: r["raw_usd"], rawEur: r["raw_eur"],
                     psa1: r["psa1"], psa2: r["psa2"], psa3: r["psa3"], psa4: r["psa4"],
                     psa5: r["psa5"], psa6: r["psa6"], psa7: r["psa7"], psa8: r["psa8"],
-                    psa9: r["psa9"], psa10: r["psa10"], asOf: r["as_of"])
+                    psa9: r["psa9"], psa10: r["psa10"],
+                    sellers: r["sellers"], listings: r["listings"], asOf: r["as_of"])
     }
 }
 
@@ -702,7 +713,9 @@ struct PriceDelta: Codable, Equatable {
 extension CatalogStore {
     /// Upsert daily price rows (handoff §3.1). Rows for cards not in the catalog are skipped.
     /// Writes only the psa columns the installed catalog actually has, so a new app applying a
-    /// delta to a pre-all-grades catalog neither errors nor (via OR REPLACE) nulls columns out.
+    /// delta to a pre-all-grades catalog neither errors nor over-writes columns it doesn't know
+    /// about. A true `ON CONFLICT DO UPDATE` upsert — not `INSERT OR REPLACE` — so columns this
+    /// delta never names (e.g. `sellers`/`listings`) survive untouched on existing rows.
     @discardableResult
     func applyPriceDelta(_ delta: PriceDelta) throws -> Int {
         try dbQueue.write { db in
@@ -710,13 +723,16 @@ extension CatalogStore {
             let psaCols = Grade.allCases.filter { cols.contains($0.rawValue) }
             let colList = psaCols.map(\.rawValue).joined(separator: ", ")
             let placeholders = psaCols.map { _ in "?" }.joined(separator: ", ")
+            let setClause = (["raw_usd", "raw_eur"] + psaCols.map(\.rawValue) + ["as_of"])
+                .map { "\($0) = excluded.\($0)" }.joined(separator: ", ")
             var applied = 0
             for row in delta.rows {
                 let psaValues: [DatabaseValueConvertible?] = psaCols.map { row.value(for: $0) }
                 try db.execute(sql: """
-                    INSERT OR REPLACE INTO price_latest (card_id, raw_usd, raw_eur, \(colList), as_of)
+                    INSERT INTO price_latest (card_id, raw_usd, raw_eur, \(colList), as_of)
                     SELECT ?, ?, ?, \(placeholders), ?
                     WHERE EXISTS (SELECT 1 FROM card WHERE id = ?)
+                    ON CONFLICT(card_id) DO UPDATE SET \(setClause)
                     """, arguments: StatementArguments([row.cardId, row.rawUsd, row.rawEur] + psaValues
                                                        + [delta.asOf, row.cardId]))
                 applied += db.changesCount

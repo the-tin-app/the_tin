@@ -19,6 +19,7 @@ final class CardDetailModel {
     private(set) var variants: [VariantPrice] = []
     private(set) var matrix: [MatrixPrice] = []
     private(set) var gradedByPrinting: [GradedPrintingPrice] = []
+    let gradedSales: [GradedSale]
     private(set) var population: [PopulationRow] = []
     private(set) var deltas: [DeltaRecord] = []
     private(set) var historyState: HistoryState = .loading
@@ -46,6 +47,7 @@ final class CardDetailModel {
         variants = (try? store.variantPrices(cardId: card.id)) ?? []
         matrix = (try? store.matrixPrices(cardId: card.id)) ?? []
         gradedByPrinting = (try? store.gradedPrintingPrices(cardId: card.id)) ?? []
+        gradedSales = (try? store.gradedSales(cardId: card.id)) ?? []
         population = (try? store.population(cardId: card.id)) ?? []
         deltas = (try? store.deltas(cardId: card.id)) ?? []
         if tier == .expert {
@@ -62,6 +64,11 @@ final class CardDetailModel {
 
     func delta(_ kind: DeltaRecord.Kind, _ key: String = "") -> DeltaRecord? {
         deltas.first { $0.kind == kind && $0.key == key }
+    }
+
+    /// Sales count backing a PSA grade's price — nil when the catalog has no graded_sales row.
+    func salesCount(_ grade: Grade) -> Int? {
+        gradedSales.first { $0.grade == grade.rawValue }?.salesCount
     }
 
     func loadHistory() async {
@@ -191,6 +198,13 @@ struct CardDetailView: View {
                                 Text("raw market").font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        // Liquidity: how many sellers/listings back the market price right now.
+                        if price.sellers != nil || price.listings != nil {
+                            Text([price.sellers.map { "\($0) sellers" },
+                                  price.listings.map { "\($0) listings" }]
+                                .compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         if model.deltas.contains(where: { $0.pct(for: DeltaPeriod(rawValue: deltaPeriodRaw) ?? .d1) != nil }) {
                             Text("Change vs \((DeltaPeriod(rawValue: deltaPeriodRaw) ?? .d1).label) — tap any badge to switch")
                                 .font(.caption2).foregroundStyle(.tertiary)
@@ -221,7 +235,8 @@ struct CardDetailView: View {
                                 ForEach(graded) { grade in
                                     let perPrinting = printingGraded.first { $0.grade == grade.rawValue }?.usd
                                     PriceTile(label: grade.label, value: perPrinting ?? price.gradedOnly(grade),
-                                              delta: model.delta(.psa, String(grade.numeric)))
+                                              delta: model.delta(.psa, String(grade.numeric)),
+                                              footnote: model.salesCount(grade).map { "\($0) sale\($0 == 1 ? "" : "s")" })
                                 }
                             }
                             if let p = currentPrinting, printingGraded.isEmpty {
@@ -651,6 +666,7 @@ private struct PriceTile: View {
     let label: String
     let value: Double?
     var delta: DeltaRecord? = nil
+    var footnote: String? = nil
 
     var body: some View {
         VStack(spacing: 2) {
@@ -662,6 +678,9 @@ private struct PriceTile: View {
                 Text("—").font(.subheadline).foregroundStyle(.secondary)
             }
             DeltaBadge(record: delta)
+            if let footnote {
+                Text(footnote).font(.caption2).foregroundStyle(.tertiary)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
