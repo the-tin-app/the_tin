@@ -713,7 +713,9 @@ struct PriceDelta: Codable, Equatable {
 extension CatalogStore {
     /// Upsert daily price rows (handoff §3.1). Rows for cards not in the catalog are skipped.
     /// Writes only the psa columns the installed catalog actually has, so a new app applying a
-    /// delta to a pre-all-grades catalog neither errors nor (via OR REPLACE) nulls columns out.
+    /// delta to a pre-all-grades catalog neither errors nor over-writes columns it doesn't know
+    /// about. A true `ON CONFLICT DO UPDATE` upsert — not `INSERT OR REPLACE` — so columns this
+    /// delta never names (e.g. `sellers`/`listings`) survive untouched on existing rows.
     @discardableResult
     func applyPriceDelta(_ delta: PriceDelta) throws -> Int {
         try dbQueue.write { db in
@@ -721,13 +723,16 @@ extension CatalogStore {
             let psaCols = Grade.allCases.filter { cols.contains($0.rawValue) }
             let colList = psaCols.map(\.rawValue).joined(separator: ", ")
             let placeholders = psaCols.map { _ in "?" }.joined(separator: ", ")
+            let setClause = (["raw_usd", "raw_eur"] + psaCols.map(\.rawValue) + ["as_of"])
+                .map { "\($0) = excluded.\($0)" }.joined(separator: ", ")
             var applied = 0
             for row in delta.rows {
                 let psaValues: [DatabaseValueConvertible?] = psaCols.map { row.value(for: $0) }
                 try db.execute(sql: """
-                    INSERT OR REPLACE INTO price_latest (card_id, raw_usd, raw_eur, \(colList), as_of)
+                    INSERT INTO price_latest (card_id, raw_usd, raw_eur, \(colList), as_of)
                     SELECT ?, ?, ?, \(placeholders), ?
                     WHERE EXISTS (SELECT 1 FROM card WHERE id = ?)
+                    ON CONFLICT(card_id) DO UPDATE SET \(setClause)
                     """, arguments: StatementArguments([row.cardId, row.rawUsd, row.rawEur] + psaValues
                                                        + [delta.asOf, row.cardId]))
                 applied += db.changesCount

@@ -313,4 +313,20 @@ final class CatalogStoreTests: XCTestCase {
         XCTAssertNil(p?.sellers)
         XCTAssertNil(p?.listings)
     }
+
+    func testApplyPriceDeltaPreservesLiquidityColumns() throws {
+        // Regression: applyPriceDelta must upsert, not INSERT OR REPLACE — a REPLACE deletes and
+        // reinserts the whole row, nulling out sellers/listings the delta payload never mentions.
+        let store = try makeStoreWithGradedSales()
+        let d = PriceDelta(asOf: "2026-07-20", rows: [
+            .init(cardId: "swsh7-215", rawUsd: 99.0, rawEur: 90.0, psa9: 190, psa10: 520),
+        ])
+        XCTAssertEqual(try store.applyPriceDelta(d), 1)
+        let p = try XCTUnwrap(store.price(cardId: "swsh7-215"))
+        XCTAssertEqual(p.rawUsd, 99.0)
+        XCTAssertEqual(p.psa10, 520)
+        XCTAssertEqual(p.asOf, "2026-07-20")
+        XCTAssertEqual(p.sellers, 23)   // survived — not nulled by the price delta
+        XCTAssertEqual(p.listings, 61)
+    }
 }
