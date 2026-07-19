@@ -171,3 +171,27 @@ export function parseLatestByCondition(prices: unknown): ConditionLatest[] {
   }
   return out;
 }
+
+export interface MatrixCell { printing: string; condition: string; usd: number }
+
+/**
+ * EVERY printing×condition cell from `prices.variants[printing][condition].price` — the full
+ * matrix that `parseLatestByVariant` (NM only) and `parseLatestByCondition` (primaryPrinting
+ * only) each flatten one axis of. Keys stay PPT-verbatim. Only finite, strictly-positive
+ * prices are included. Shape-tolerant: garbage → [].
+ */
+export function parseMatrix(prices: unknown): MatrixCell[] {
+  const out: MatrixCell[] = [];
+  if (!prices || typeof prices !== "object" || Array.isArray(prices)) return out;
+  const variants = (prices as Record<string, unknown>).variants;
+  if (!variants || typeof variants !== "object" || Array.isArray(variants)) return out;
+  for (const [printing, byConditionRaw] of Object.entries(variants as Record<string, unknown>)) {
+    if (!byConditionRaw || typeof byConditionRaw !== "object" || Array.isArray(byConditionRaw)) continue;
+    for (const [condition, v] of Object.entries(byConditionRaw as Record<string, unknown>)) {
+      if (!v || typeof v !== "object") continue;
+      const n = Number((v as Record<string, unknown>).price);
+      if (Number.isFinite(n) && n > 0) out.push({ printing, condition, usd: n });
+    }
+  }
+  return out;
+}
