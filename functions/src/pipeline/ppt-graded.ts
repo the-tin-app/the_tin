@@ -67,3 +67,22 @@ export function parseGradedHistory(ebay: unknown): GradedHistoryPoint[] {
   }
   return out;
 }
+
+export interface GradedSale { grade: string; salesCount: number; confidence: string | null }
+
+/** How many real eBay sales back each graded price, plus PPT's smartMarketPrice confidence
+ *  ("low"/"high") when present. Grade keys verbatim (psa10/cgc9/ace10/...). Grades with no
+ *  positive count are dropped — a count is the whole point of the row. */
+export function parseGradedSales(ebay: unknown): GradedSale[] {
+  const out: GradedSale[] = [];
+  if (!ebay || typeof ebay !== "object") return out;
+  const salesByGrade = (ebay as Record<string, unknown>).salesByGrade;
+  if (!salesByGrade || typeof salesByGrade !== "object") return out;
+  for (const [grade, stats] of Object.entries(salesByGrade as Record<string, any>)) {
+    const n = num(stats?.count);
+    if (n == null || n <= 0) continue;
+    const conf = stats?.smartMarketPrice?.confidence;
+    out.push({ grade, salesCount: Math.trunc(n), confidence: typeof conf === "string" ? conf : null });
+  }
+  return out;
+}
