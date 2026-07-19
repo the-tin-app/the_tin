@@ -56,7 +56,9 @@ struct PortfolioView: View {
         .task(id: model.entries) {
             await model.portfolio.refresh(entries: model.entries, prices: model.prices,
                                           variantsByCard: model.variantsByCard,
-                                          conditionsByCard: model.conditionsByCard)
+                                          conditionsByCard: model.conditionsByCard,
+                                          matrixByCard: model.matrixByCard,
+                                          gradedByPrintingByCard: model.gradedByPrintingByCard)
         }
     }
 

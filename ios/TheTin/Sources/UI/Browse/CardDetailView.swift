@@ -17,6 +17,8 @@ final class CardDetailModel {
     private(set) var price: PriceRecord?
     private(set) var conditions: [ConditionPrice] = []
     private(set) var variants: [VariantPrice] = []
+    private(set) var matrix: [MatrixPrice] = []
+    private(set) var gradedByPrinting: [GradedPrintingPrice] = []
     private(set) var population: [PopulationRow] = []
     private(set) var deltas: [DeltaRecord] = []
     private(set) var historyState: HistoryState = .loading
@@ -42,6 +44,8 @@ final class CardDetailModel {
         price = try? store.price(cardId: card.id)
         conditions = (try? store.conditionPrices(cardId: card.id)) ?? []
         variants = (try? store.variantPrices(cardId: card.id)) ?? []
+        matrix = (try? store.matrixPrices(cardId: card.id)) ?? []
+        gradedByPrinting = (try? store.gradedPrintingPrices(cardId: card.id)) ?? []
         population = (try? store.population(cardId: card.id)) ?? []
         deltas = (try? store.deltas(cardId: card.id)) ?? []
         if tier == .expert {
@@ -397,7 +401,9 @@ struct CardDetailView: View {
             var one = entry
             one.qty = 1
             baseline = GroupStats.entryValue(one, price: price, variants: model.variants,
-                                             conditions: model.conditions)
+                                             conditions: model.conditions,
+                                             matrix: model.matrix,
+                                             gradedByPrinting: model.gradedByPrinting)
         } else {
             baseline = model.conditions.first(where: { $0.condition == .nearMint })?.usd ?? price.rawUsd
         }

@@ -289,6 +289,8 @@ struct SettingsView: View {
         let prices = collection.prices
         let variantsByCard = collection.variantsByCard
         let conditionsByCard = collection.conditionsByCard
+        let matrixByCard = collection.matrixByCard
+        let gradedByPrintingByCard = collection.gradedByPrintingByCard
         return await Task.detached {
             let ids = Array(Set(entries.map(\.cardId)))
             let cards = Dictionary(uniqueKeysWithValues: ((try? store.cards(ids: ids)) ?? []).map { ($0.id, $0) })
@@ -296,7 +298,9 @@ struct SettingsView: View {
             return CSVDocument(data: CollectionCSV.export(
                 entries: entries, groups: groups, cards: cards, sets: sets,
                 prices: prices, variantsByCard: variantsByCard,
-                conditionsByCard: conditionsByCard))
+                conditionsByCard: conditionsByCard,
+                matrixByCard: matrixByCard,
+                gradedByPrintingByCard: gradedByPrintingByCard))
         }.value
     }
 

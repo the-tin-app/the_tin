@@ -16,6 +16,8 @@ final class CollectionModel {
     private(set) var prices: [String: PriceRecord] = [:]
     private(set) var variantsByCard: [String: [VariantPrice]] = [:]
     private(set) var conditionsByCard: [String: [ConditionPrice]] = [:]
+    private(set) var matrixByCard: [String: [MatrixPrice]] = [:]
+    private(set) var gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]
     private(set) var deltasByCard: [String: [DeltaRecord]] = [:]
     private var streamTasks: [Task<Void, Never>] = []
     /// Mirrors the header's numbers to the home-screen widget. nil until AppModel injects one
@@ -78,6 +80,8 @@ final class CollectionModel {
         }
         variantsByCard = (try? store.variantPrices(cardIds: ids)) ?? [:]
         conditionsByCard = (try? store.conditionPrices(cardIds: ids)) ?? [:]
+        matrixByCard = (try? store.matrixPrices(cardIds: ids)) ?? [:]
+        gradedByPrintingByCard = (try? store.gradedPrintingPrices(cardIds: ids)) ?? [:]
         deltasByCard = (try? store.deltas(cardIds: ids)) ?? [:]
     }
 
@@ -94,20 +98,26 @@ final class CollectionModel {
     func entryValue(_ entry: CollectionEntry) -> Double? {
         let variants = variantsByCard[entry.cardId] ?? []
         let conditions = conditionsByCard[entry.cardId] ?? []
-        guard GroupStats.isPricedExactly(entry, price: prices[entry.cardId], variants: variants, conditions: conditions)
+        let matrix = matrixByCard[entry.cardId] ?? []
+        let gradedByPrinting = gradedByPrintingByCard[entry.cardId] ?? []
+        guard GroupStats.isPricedExactly(entry, price: prices[entry.cardId], variants: variants, conditions: conditions,
+                                         matrix: matrix, gradedByPrinting: gradedByPrinting)
         else { return nil }
-        return GroupStats.entryValue(entry, price: prices[entry.cardId], variants: variants, conditions: conditions)
+        return GroupStats.entryValue(entry, price: prices[entry.cardId], variants: variants, conditions: conditions,
+                                     matrix: matrix, gradedByPrinting: gradedByPrinting)
     }
 
     func groupValue(_ groupId: String) -> (total: Double, pricedCards: Int, totalCards: Int) {
         GroupStats.totalValue(entries: entries(in: groupId), prices: prices,
-                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard)
+                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
     }
 
     /// The whole tin's value across every group and ungrouped card.
     var tinValue: (total: Double, pricedCards: Int, totalCards: Int) {
         GroupStats.totalValue(entries: entries, prices: prices,
-                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard)
+                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
     }
 
     /// The catalog's price date — prices always carry their as-of stamp (Caption Ledger Rule).
@@ -139,6 +149,8 @@ final class CollectionModel {
         let prices = self.prices
         let variantsByCard = self.variantsByCard
         let conditionsByCard = self.conditionsByCard
+        let matrixByCard = self.matrixByCard
+        let gradedByPrintingByCard = self.gradedByPrintingByCard
         let asOf = prices.values.map(\.asOf).max()   // "yyyy-MM-dd" sorts lexicographically
         let store = self.store   // @unchecked Sendable — safe to hand to a detached task
         widgetSnapshotTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -147,7 +159,9 @@ final class CollectionModel {
             let histories = (try? store.priceHistory(cardIds: ids)) ?? [:]
             let series = PortfolioHistory.series(entries: entries, histories: histories,
                                                  prices: prices, variantsByCard: variantsByCard,
-                                                 conditionsByCard: conditionsByCard)
+                                                 conditionsByCard: conditionsByCard,
+                                                 matrixByCard: matrixByCard,
+                                                 gradedByPrintingByCard: gradedByPrintingByCard)
             var delta7d: Double?
             var sparkline: [Double]?
             if series.points.count >= 2, series.cardsWithHistory > 0, let last = series.points.last {

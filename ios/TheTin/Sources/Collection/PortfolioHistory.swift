@@ -28,6 +28,8 @@ enum PortfolioHistory {
                        prices: [String: PriceRecord],
                        variantsByCard: [String: [VariantPrice]],
                        conditionsByCard: [String: [ConditionPrice]],
+                       matrixByCard: [String: [MatrixPrice]] = [:],
+                       gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:],
                        now: Date = Date()) -> PortfolioSeries {
         let cardIds = Set(entries.map(\.cardId))
         let covered = cardIds.filter { !(histories[$0] ?? []).isEmpty }.count
@@ -35,13 +37,17 @@ enum PortfolioHistory {
         let ownedDates = entries.map { ownedFrom($0, now: now) }
         let scales = entries.map { scale($0, price: prices[$0.cardId],
                                          variants: variantsByCard[$0.cardId] ?? [],
-                                         conditions: conditionsByCard[$0.cardId] ?? []) }
+                                         conditions: conditionsByCard[$0.cardId] ?? [],
+                                         matrix: matrixByCard[$0.cardId] ?? [],
+                                         gradedByPrinting: gradedByPrintingByCard[$0.cardId] ?? []) }
         // Current per-unit value (same math as the tin header's total). nil = no price data.
         let currentUnits = entries.map { e -> Double? in
             guard e.qty > 0,
                   let total = GroupStats.entryValue(e, price: prices[e.cardId],
                                                     variants: variantsByCard[e.cardId] ?? [],
-                                                    conditions: conditionsByCard[e.cardId] ?? [])
+                                                    conditions: conditionsByCard[e.cardId] ?? [],
+                                                    matrix: matrixByCard[e.cardId] ?? [],
+                                                    gradedByPrinting: gradedByPrintingByCard[e.cardId] ?? [])
             else { return nil }
             return total / Double(e.qty)
         }
@@ -95,10 +101,12 @@ enum PortfolioHistory {
     /// (current per-unit entry value ÷ current rawUsd). Documented approximation — exact graded
     /// history (expert tier) is a future refinement. 1 when either side is missing or raw is 0.
     static func scale(_ entry: CollectionEntry, price: PriceRecord?,
-                      variants: [VariantPrice], conditions: [ConditionPrice]) -> Double {
+                      variants: [VariantPrice], conditions: [ConditionPrice],
+                      matrix: [MatrixPrice] = [], gradedByPrinting: [GradedPrintingPrice] = []) -> Double {
         guard entry.qty > 0,
               let total = GroupStats.entryValue(entry, price: price,
-                                                variants: variants, conditions: conditions),
+                                                variants: variants, conditions: conditions,
+                                                matrix: matrix, gradedByPrinting: gradedByPrinting),
               let raw = price?.rawUsd, raw > 0 else { return 1 }
         return (total / Double(entry.qty)) / raw
     }

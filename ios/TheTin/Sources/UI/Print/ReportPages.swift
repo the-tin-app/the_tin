@@ -262,6 +262,8 @@ private struct CollectionReportFlow: ViewModifier {
         let prices = collection.prices
         let variantsByCard = collection.variantsByCard
         let conditionsByCard = collection.conditionsByCard
+        let matrixByCard = collection.matrixByCard
+        let gradedByPrintingByCard = collection.gradedByPrintingByCard
         let store = store
 
         // DB reads (CatalogStore is not @MainActor) + InsuranceReport aggregation are
@@ -274,13 +276,19 @@ private struct CollectionReportFlow: ViewModifier {
                 ((try? store.sets()) ?? []).map { ($0.id, $0.name) })
             let rows = InsuranceReport.rows(entries: entries, cards: cards, setNames: setNames,
                                             prices: prices, variantsByCard: variantsByCard,
-                                            conditionsByCard: conditionsByCard)
+                                            conditionsByCard: conditionsByCard,
+                                            matrixByCard: matrixByCard,
+                                            gradedByPrintingByCard: gradedByPrintingByCard)
             let totals = InsuranceReport.totals(entries: entries, prices: prices,
                                                 variantsByCard: variantsByCard,
-                                                conditionsByCard: conditionsByCard)
+                                                conditionsByCard: conditionsByCard,
+                                                matrixByCard: matrixByCard,
+                                                gradedByPrintingByCard: gradedByPrintingByCard)
             let subs = InsuranceReport.subtotals(entries: entries, groups: groups, prices: prices,
                                                  variantsByCard: variantsByCard,
-                                                 conditionsByCard: conditionsByCard)
+                                                 conditionsByCard: conditionsByCard,
+                                                 matrixByCard: matrixByCard,
+                                                 gradedByPrintingByCard: gradedByPrintingByCard)
             return (rows, totals, subs, (try? store.priceAsOf()) ?? nil)
         }.value
         guard !Task.isCancelled else { return }

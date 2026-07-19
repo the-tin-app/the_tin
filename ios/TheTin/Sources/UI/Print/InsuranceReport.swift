@@ -21,10 +21,14 @@ struct DividerSubtotal: Identifiable, Equatable {
 enum InsuranceReport {
     static func totals(entries: [CollectionEntry], prices: [String: PriceRecord],
                        variantsByCard: [String: [VariantPrice]],
-                       conditionsByCard: [String: [ConditionPrice]]) -> ReportTotals {
+                       conditionsByCard: [String: [ConditionPrice]],
+                       matrixByCard: [String: [MatrixPrice]] = [:],
+                       gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]) -> ReportTotals {
         let v = GroupStats.totalValue(entries: entries, prices: prices,
                                       variantsByCard: variantsByCard,
-                                      conditionsByCard: conditionsByCard)
+                                      conditionsByCard: conditionsByCard,
+                                      matrixByCard: matrixByCard,
+                                      gradedByPrintingByCard: gradedByPrintingByCard)
         return ReportTotals(totalValue: v.total, pricedCards: v.pricedCards,
                             totalEntries: entries.count, totalCards: v.totalCards,
                             costBasis: entries.compactMap(\.pricePaid).reduce(0, +))
@@ -35,7 +39,9 @@ enum InsuranceReport {
     static func subtotals(entries: [CollectionEntry], groups: [CardGroup],
                           prices: [String: PriceRecord],
                           variantsByCard: [String: [VariantPrice]],
-                          conditionsByCard: [String: [ConditionPrice]]) -> [DividerSubtotal] {
+                          conditionsByCard: [String: [ConditionPrice]],
+                          matrixByCard: [String: [MatrixPrice]] = [:],
+                          gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]) -> [DividerSubtotal] {
         var buckets = [(id: String, name: String)]()
         buckets.append(contentsOf: groups.map { ($0.id, $0.name) })
         buckets.append(("", "No divider"))
@@ -44,7 +50,9 @@ enum InsuranceReport {
             guard !inGroup.isEmpty else { return nil }
             let v = GroupStats.totalValue(entries: inGroup, prices: prices,
                                           variantsByCard: variantsByCard,
-                                          conditionsByCard: conditionsByCard)
+                                          conditionsByCard: conditionsByCard,
+                                          matrixByCard: matrixByCard,
+                                          gradedByPrintingByCard: gradedByPrintingByCard)
             return DividerSubtotal(id: id, name: name, cards: inGroup.cardCount, value: v.total)
         }
     }
@@ -70,10 +78,14 @@ extension InsuranceReport {
     static func rows(entries: [CollectionEntry], cards: [String: CardRecord],
                      setNames: [String: String], prices: [String: PriceRecord],
                      variantsByCard: [String: [VariantPrice]],
-                     conditionsByCard: [String: [ConditionPrice]]) -> [ReportRow] {
+                     conditionsByCard: [String: [ConditionPrice]],
+                     matrixByCard: [String: [MatrixPrice]] = [:],
+                     gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]) -> [ReportRow] {
         let sorted = GroupStats.sortedByValueDescending(entries: entries, prices: prices,
                                                         variantsByCard: variantsByCard,
-                                                        conditionsByCard: conditionsByCard)
+                                                        conditionsByCard: conditionsByCard,
+                                                        matrixByCard: matrixByCard,
+                                                        gradedByPrintingByCard: gradedByPrintingByCard)
         return sorted.map { entry in
             let card = cards[entry.cardId]
             let detail = [entry.variantValue?.label, entry.condition, entry.gradeValue?.label]
@@ -87,7 +99,9 @@ extension InsuranceReport {
                 pricePaid: entry.pricePaid,
                 currentValue: GroupStats.entryValue(entry, price: prices[entry.cardId],
                                                     variants: variantsByCard[entry.cardId] ?? [],
-                                                    conditions: conditionsByCard[entry.cardId] ?? []))
+                                                    conditions: conditionsByCard[entry.cardId] ?? [],
+                                                    matrix: matrixByCard[entry.cardId] ?? [],
+                                                    gradedByPrinting: gradedByPrintingByCard[entry.cardId] ?? []))
         }
     }
 }
