@@ -16,6 +16,7 @@ final class CollectionModel {
     private(set) var prices: [String: PriceRecord] = [:]
     private(set) var variantsByCard: [String: [VariantPrice]] = [:]
     private(set) var conditionsByCard: [String: [ConditionPrice]] = [:]
+    private(set) var deltasByCard: [String: [DeltaRecord]] = [:]
     private var streamTasks: [Task<Void, Never>] = []
     /// Mirrors the header's numbers to the home-screen widget. nil until AppModel injects one
     /// (and in unit tests that don't care) — publishing is then a no-op.
@@ -77,6 +78,7 @@ final class CollectionModel {
         }
         variantsByCard = (try? store.variantPrices(cardIds: ids)) ?? [:]
         conditionsByCard = (try? store.conditionPrices(cardIds: ids)) ?? [:]
+        deltasByCard = (try? store.deltas(cardIds: ids)) ?? [:]
     }
 
     func entries(in groupId: String) -> [CollectionEntry] {
