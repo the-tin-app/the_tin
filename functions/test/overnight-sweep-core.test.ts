@@ -154,11 +154,11 @@ describe("runOvernightSweep", () => {
     const db = freshDb();
     const allNull = { ...client, getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
       priceHistory: [], gradedLatest: { psa10: null }, gradedSeries: [], ebayRaw: {} }]) };
-    const before = db.prepare("SELECT * FROM price_latest WHERE card_id='base-4'").get();
+    const before = db.prepare("SELECT raw_usd, raw_eur, as_of FROM price_latest WHERE card_id='base-4'").get();
     const s = await runOvernightSweep(db as any, allNull as any, [{ setId: "base", pptName: "Base" }], ledger(),
       { ...opts, populationEnabled: false }, never);
     expect(s.gradedRows).toBe(0);
-    const after = db.prepare("SELECT * FROM price_latest WHERE card_id='base-4'").get();
+    const after = db.prepare("SELECT raw_usd, raw_eur, as_of FROM price_latest WHERE card_id='base-4'").get();
     expect(after).toEqual(before); // no as_of bump, no phantom write
   });
 
@@ -166,11 +166,41 @@ describe("runOvernightSweep", () => {
     const db = freshDb();
     const nonPsaOnly = { ...client, getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
       priceHistory: [], gradedLatest: { cgc10: 30 }, gradedSeries: [], ebayRaw: {} }]) };
-    const before = db.prepare("SELECT * FROM price_latest WHERE card_id='base-4'").get();
+    const before = db.prepare("SELECT raw_usd, raw_eur, as_of FROM price_latest WHERE card_id='base-4'").get();
     const s = await runOvernightSweep(db as any, nonPsaOnly as any, [{ setId: "base", pptName: "Base" }], ledger(),
       { ...opts, populationEnabled: false }, never);
     expect(s.gradedRows).toBe(0);
-    const after = db.prepare("SELECT * FROM price_latest WHERE card_id='base-4'").get();
+    const after = db.prepare("SELECT raw_usd, raw_eur, as_of FROM price_latest WHERE card_id='base-4'").get();
     expect(after).toEqual(before); // cgc10 alone must not create a phantom all-psa-null row
+  });
+
+  it("captures liquidity into price_latest and sales counts into graded_sales (ALTER guard for old DBs)", async () => {
+    const db = freshDb();
+    const c = { ...client, getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
+      priceHistory: [], pricesRaw: { ...pricesRaw, sellers: 7, listings: 31 }, gradedLatest: {},
+      gradedSeries: [],
+      ebayRaw: { salesByGrade: {
+        psa10: { count: 14, medianPrice: 450, smartMarketPrice: { price: 460, confidence: "high" } },
+        cgc9: { count: 2, medianPrice: 90 },
+      } } }]) };
+    const s = await runOvernightSweep(db as any, c as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(s.liquidityRows).toBe(1);
+    expect(s.gradedSalesRows).toBe(2);
+    const row = db.prepare("SELECT raw_usd, sellers, listings FROM price_latest WHERE card_id='base-4'").get() as any;
+    expect(row).toEqual({ raw_usd: 100, sellers: 7, listings: 31 }); // raw preserved
+    expect(db.prepare("SELECT grade, sales_count, confidence FROM graded_sales ORDER BY grade").all()).toEqual([
+      { grade: "cgc9", sales_count: 2, confidence: null },
+      { grade: "psa10", sales_count: 14, confidence: "high" },
+    ]);
+  });
+
+  it("no liquidity fields → no phantom write; empty ebay → no graded_sales rows", async () => {
+    const db = freshDb();
+    const s = await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(s.liquidityRows).toBe(0);
+    expect(s.gradedSalesRows).toBe(0);
+    const row = db.prepare("SELECT sellers, listings FROM price_latest WHERE card_id='base-4'").get() as any;
+    expect(row).toEqual({ sellers: null, listings: null });
+    expect(db.prepare("SELECT COUNT(*) FROM graded_sales").pluck().get()).toBe(0);
   });
 });
