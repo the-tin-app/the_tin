@@ -69,6 +69,13 @@ describe("splitTiers", () => {
     expect(rowCount(db, "graded_history")).toBe(1);
     db.close();
   });
+
+  it("tolerates a source without price_delta (casual simply lacks it too)", () => {
+    const { casualPath } = splitTiers(sourcePath, join(dir, "out"));
+    const db = new Database(casualPath);
+    expect(tableExists(db, "price_delta")).toBe(false);
+    db.close();
+  });
 });
 
 class MemStore implements StoragePort {

@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, readFileSync
 import { gzipSync, gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computePriceDeltas } from "../scripts/publish-tiers";
+import { computePriceDeltas, publishTiers, pruneOldArtifacts, NasManifest } from "../scripts/publish-tiers";
+import { StoragePort } from "../src/pipeline/publish";
 
 const DAY_MS = 86_400_000;
 const NOW = new Date("2026-07-18T07:00:00Z");
@@ -121,5 +122,74 @@ describe("computePriceDeltas", () => {
     const raws = deltaRows(src).filter(r => r.kind === "raw");
     expect(raws).toHaveLength(1);
     expect(raws[0].pct_1d).toBeCloseTo(0.5);
+  });
+});
+
+class MemStore implements StoragePort {
+  files = new Map<string, Buffer>();
+  async save(path: string, data: Buffer) { this.files.set(path, Buffer.from(data)); }
+}
+
+function openGz(path: string): Database.Database {
+  const raw = path.replace(/\.gz$/, ".unzipped");
+  writeFileSync(raw, gunzipSync(readFileSync(path)));
+  return new Database(raw, { readonly: true });
+}
+
+describe("publishTiers with deltas", () => {
+  let dir: string, nasDir: string, catalogDir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "deltas-pub-"));
+    nasDir = join(dir, "nas");
+    catalogDir = join(nasDir, "catalog");
+    mkdirSync(catalogDir, { recursive: true });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("average+expert carry populated price_delta; casual has the table EMPTY", async () => {
+    makeSnapshot(catalogDir, 7, 1, { raw: 2.0 });
+    const src = makeSource(dir, { raw: 3.0 });
+    const m = await publishTiers({ sourceDbPath: src, version: 8, nasDir,
+      firebaseStorage: new MemStore(), now: NOW, publishToFirebase: false });
+    for (const tier of ["average", "expert"] as const) {
+      const db = openGz(join(catalogDir, m.tiers[tier].path));
+      expect(db.prepare("SELECT COUNT(*) AS n FROM price_delta").get()).toEqual({ n: 1 });
+      db.close();
+    }
+    const casual = openGz(join(catalogDir, m.tiers.casual.path));
+    expect(casual.prepare("SELECT COUNT(*) AS n FROM price_delta").get()).toEqual({ n: 0 });
+    casual.close();
+  });
+
+  it("publishes even when delta computation throws", async () => {
+    const src = makeSource(dir, { raw: 3.0 });
+    // Corrupt "artifact" in the 1d window: gunzip inside computePriceDeltas throws, the
+    // publishTiers wrapper swallows it, and the tiers still ship (without deltas).
+    const bad = join(catalogDir, "expert-v7.sqlite.gz");
+    writeFileSync(bad, Buffer.from("not gzip"));
+    const mtime = new Date(NOW.getTime() - DAY_MS);
+    utimesSync(bad, mtime, mtime);
+    const m = await publishTiers({ sourceDbPath: src, version: 8, nasDir,
+      firebaseStorage: new MemStore(), now: NOW, publishToFirebase: false });
+    expect(existsSync(join(catalogDir, m.tiers.expert.path))).toBe(true);
+  });
+});
+
+describe("pruneOldArtifacts", () => {
+  it("deletes tier files older than 45 days but never the current manifest's", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prune-"));
+    makeSnapshot(dir, 1, 60, { raw: 1 });           // 60 days old → pruned
+    makeSnapshot(dir, 2, 44, { raw: 1 });           // 44 days → kept
+    makeSnapshot(dir, 3, 60, { raw: 1 });           // 60 days old BUT in manifest → kept
+    const manifest = { version: 3, generatedAt: NOW.toISOString(), tiers: {
+      casual: { path: "casual-v3.sqlite.gz", sha256: "", sizeBytes: 0 },
+      average: { path: "average-v3.sqlite.gz", sha256: "", sizeBytes: 0 },
+      expert: { path: "expert-v3.sqlite.gz", sha256: "", sizeBytes: 0 },
+    } } as NasManifest;
+    const deleted = pruneOldArtifacts(dir, manifest, NOW);
+    expect(deleted).toEqual(["expert-v1.sqlite.gz"]);
+    expect(existsSync(join(dir, "expert-v2.sqlite.gz"))).toBe(true);
+    expect(existsSync(join(dir, "expert-v3.sqlite.gz"))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

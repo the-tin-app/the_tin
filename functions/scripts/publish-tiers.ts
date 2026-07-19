@@ -30,10 +30,16 @@ export function splitTiers(sourceDbPath: string, outDir: string): {
   average.close();
 
   // casual = average, and additionally EMPTY price_history (keep the table so the app's sparkline
-  // query returns no rows instead of failing on a missing table).
+  // query returns no rows instead of failing on a missing table). Guarded — some test fixtures
+  // (and older sources) don't have every history table.
   copyFileSync(averagePath, casualPath);
   const casual = new Database(casualPath);
-  casual.exec('DELETE FROM price_history');
+  const hasTable = (name: string) =>
+    !!casual.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+  if (hasTable("price_history")) casual.exec("DELETE FROM price_history");
+  // price_delta mirrors the price_history pattern: casual keeps the table, zero rows. Guarded —
+  // a source built before this feature (or a direct splitTiers call in tests) has no table.
+  if (hasTable("price_delta")) casual.exec("DELETE FROM price_delta");
   casual.exec("VACUUM");
   casual.close();
 
@@ -110,6 +116,23 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
   }
 }
 
+const RETENTION_DAYS = 45;
+
+/** Delete tier artifacts older than RETENTION_DAYS (mtime) — the delta lookback only needs 40
+ *  days back — but never a file the just-written manifest references. Returns deleted names. */
+export function pruneOldArtifacts(catalogDir: string, manifest: NasManifest, now: Date): string[] {
+  const keep = new Set(Object.values(manifest.tiers).map((t) => t.path));
+  const deleted: string[] = [];
+  for (const f of readdirSync(catalogDir)) {
+    if (!/^(casual|average|expert)-v\d+\.sqlite\.gz$/.test(f) || keep.has(f)) continue;
+    if ((now.getTime() - statSync(join(catalogDir, f)).mtimeMs) / DAY_MS > RETENTION_DAYS) {
+      unlinkSync(join(catalogDir, f));
+      deleted.push(f);
+    }
+  }
+  return deleted;
+}
+
 export interface TierEntry { path: string; sha256: string; sizeBytes: number }
 
 export interface NasManifest {
@@ -122,9 +145,18 @@ export async function publishTiers(opts: {
   sourceDbPath: string; version: number; nasDir: string;
   firebaseStorage: StoragePort; now: Date; publishToFirebase: boolean;
 }): Promise<NasManifest> {
-  const { casualPath, averagePath, expertPath } = splitTiers(opts.sourceDbPath, join(opts.nasDir, "_work"));
   const catalogDir = join(opts.nasDir, "catalog");
   mkdirSync(catalogDir, { recursive: true });
+
+  // Deltas diff against PRIOR artifacts, so this must run before today's tiers are written —
+  // and must never block a publish: a catalog without deltas beats no catalog.
+  try {
+    computePriceDeltas(opts.sourceDbPath, catalogDir, opts.now);
+  } catch (e) {
+    console.warn("[publish-tiers] price_delta computation failed — publishing without deltas:", e);
+  }
+
+  const { casualPath, averagePath, expertPath } = splitTiers(opts.sourceDbPath, join(opts.nasDir, "_work"));
 
   const writeTier = (tier: string, dbPath: string): TierEntry => {
     const gz = gzipSync(readFileSync(dbPath));
@@ -154,6 +186,9 @@ export async function publishTiers(opts: {
   // The uncompressed split sqlites are already gzipped into catalogDir above; nothing else needs
   // the scratch copies, so clean them up (~850MB uncompressed across the three tiers).
   rmSync(join(opts.nasDir, "_work"), { recursive: true, force: true });
+
+  const pruned = pruneOldArtifacts(catalogDir, manifest, opts.now);
+  if (pruned.length) console.log(`  pruned ${pruned.length} artifact(s) older than 45d: ${pruned.join(", ")}`);
 
   return manifest;
 }
