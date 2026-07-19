@@ -35,11 +35,16 @@ function insertPrices(db: Database.Database, p: SnapshotPrices) {
     db.prepare(`INSERT INTO price_by_variant VALUES ('c1', 'Holofoil', ?, '2026-07-18')`).run(p.holo);
 }
 
+/** Pre-psa-widening artifact schema (production ≤ v13): only psa8-10 columns exist. */
+const LEGACY_SCHEMA = PRICE_SCHEMA.replace(
+  /psa1 REAL.*psa7 REAL,\s*/s, "");
+
 /** Write a gzipped old snapshot `expert-v<n>.sqlite.gz` into catalogDir, mtime `ageDays` ago. */
-function makeSnapshot(catalogDir: string, version: number, ageDays: number, p: SnapshotPrices) {
+function makeSnapshot(catalogDir: string, version: number, ageDays: number, p: SnapshotPrices,
+                      schema = PRICE_SCHEMA) {
   const raw = join(catalogDir, `snapshot-${version}.sqlite`);
   const db = new Database(raw);
-  db.exec(PRICE_SCHEMA);
+  db.exec(schema);
   insertPrices(db, p);
   db.close();
   const gzPath = join(catalogDir, `expert-v${version}.sqlite.gz`);
@@ -110,6 +115,33 @@ describe("computePriceDeltas", () => {
     const src = makeSource(dir, { raw: 3.0, psa10: 90 });
     computePriceDeltas(src, catalogDir, NOW);
     expect(deltaRows(src)).toHaveLength(0);
+  });
+
+  it("tolerates an old artifact missing psa columns (pre-widening schema)", () => {
+    makeSnapshot(catalogDir, 5, 7, { raw: 2.0, psa10: 100, nm: 1.6, holo: 4.0 }, LEGACY_SCHEMA);
+    makeSnapshot(catalogDir, 7, 1, { raw: 2.5 });
+    const src = makeSource(dir, { raw: 3.0, psa10: 90, nm: 2.0, holo: 4.0 });
+    computePriceDeltas(src, catalogDir, NOW);
+    const rows = deltaRows(src);
+    const by = (kind: string, key: string) => rows.find(r => r.kind === kind && r.key === key);
+    expect(by("raw", "")?.pct_1d).toBeCloseTo(0.2);            // (3-2.5)/2.5 — 1d pass intact
+    expect(by("raw", "")?.pct_7d).toBeCloseTo(0.5);            // (3-2)/2
+    expect(by("psa", "10")?.pct_7d).toBeCloseTo(-0.1);         // psa10 exists in legacy schema
+    expect(by("condition", "Near Mint")?.pct_7d).toBeCloseTo(0.25); // must run despite psa1-7 gone
+    expect(by("printing", "Holofoil")?.pct_7d).toBeCloseTo(0.0);
+  });
+
+  it("a broken artifact kills only its own lookback", () => {
+    const bad = join(catalogDir, "expert-v9.sqlite.gz");       // 1d window, gunzips to non-sqlite
+    writeFileSync(bad, gzipSync(Buffer.from("not a sqlite database")));
+    const mtime = new Date(NOW.getTime() - DAY_MS);
+    utimesSync(bad, mtime, mtime);
+    makeSnapshot(catalogDir, 5, 7, { raw: 2.0 });
+    const src = makeSource(dir, { raw: 3.0 });
+    computePriceDeltas(src, catalogDir, NOW);
+    const raw = deltaRows(src).find(r => r.kind === "raw");
+    expect(raw?.pct_1d).toBeNull();
+    expect(raw?.pct_7d).toBeCloseTo(0.5);                      // 7d survived the 1d failure
   });
 
   it("creates an empty table when no artifacts exist, and re-runs idempotently", () => {
