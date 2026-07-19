@@ -53,7 +53,7 @@ const client = {
     pricesRaw, gradedLatest: { psa10: 450, psa8: 33, cgc10: 99 }, gradedSeries: [], ebayRaw: {} }]),
   getPopulation: async () => ([{ tcgPlayerId: 111, grader: "PSA", grade: "g10", count: 5, gemRate: 100, totalPopulation: 5 }]),
 };
-const opts = { writeGradedHistory: false, populationEnabled: true, asOf: "2026-07-08" };
+const opts = { populationEnabled: true, asOf: "2026-07-08" };
 const never = () => false;
 
 describe("runOvernightSweep", () => {
@@ -67,6 +67,17 @@ describe("runOvernightSweep", () => {
     // idempotent re-run of the same set (fresh ledger) does not duplicate history
     await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
     expect(db.prepare("SELECT COUNT(*) FROM price_history").pluck().get()).toBe(2);
+  });
+
+  it("always writes gradedSeries to graded_history — no opt-in gate (2026-07-19: the single-card probe wrongly latched it off for every card, every night)", async () => {
+    const db = freshDb();
+    const c = { ...client, getSetEnrichment: async () => ([{ tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
+        priceHistory: [], pricesRaw: null, gradedLatest: {},
+        gradedSeries: [{ grade: "psa10", date: "2026-07-01", usd: 400 }, { grade: "psa9", date: "2026-07-01", usd: 200 }],
+        ebayRaw: {} }]) };
+    await runOvernightSweep(db as any, c as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(db.prepare("SELECT COUNT(*) FROM graded_history").pluck().get()).toBe(2);
+    expect(db.prepare("SELECT usd FROM graded_history WHERE grade='psa10'").pluck().get()).toBe(400);
   });
 
   it("writes ALL ungraded conditions to price_history_cond + price_by_condition (parallel tables)", async () => {

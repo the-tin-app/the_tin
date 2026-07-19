@@ -151,8 +151,7 @@ async function main() {
   // the set limit, and population comes from the bulk export anyway).
   const bounded = Number.isInteger(setLimit) && setLimit > 0;
   const summary = await runOvernightSweep(db as any, client as any, sets, ledger,
-    { writeGradedHistory: sc.probe.gradedHistoryMode === "timeseries",
-      populationEnabled: bounded ? false : sc.probe.populationEnabled, asOf }, isStopError);
+    { populationEnabled: bounded ? false : sc.probe.populationEnabled, asOf }, isStopError);
   console.log(`[overnight] +${summary.setsDone} sets · ${summary.historyRows} history · ${summary.gradedRows} graded · ${summary.popRows} pop${summary.stoppedEarly ? ` · STOPPED (${summary.stopReason})` : ""}`);
 
   if (summary.stoppedEarly) {
