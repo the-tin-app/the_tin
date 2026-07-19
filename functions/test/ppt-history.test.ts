@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix } from "../src/pipeline/ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity } from "../src/pipeline/ppt-history";
 
 describe("parseWeeklyHistory", () => {
   it("normalizes an array shape, dedups exact dates (latest wins), thins to >=6-day spacing", () => {
@@ -252,5 +252,18 @@ describe("parseMatrix", () => {
     for (const g of [null, undefined, 42, "x", [], { variants: null }, { variants: [] }, { variants: { A: null } }]) {
       expect(parseMatrix(g)).toEqual([]);
     }
+  });
+});
+
+describe("parseLiquidity", () => {
+  it("reads sellers + listings from the prices object (numeric strings tolerated)", () => {
+    expect(parseLiquidity({ market: 10.57, sellers: 42, listings: "17" }))
+      .toEqual({ sellers: 42, listings: 17 });
+  });
+  it("absence and garbage → nulls, never a throw (live fixture is trimmed and lacks these fields)", () => {
+    expect(parseLiquidity({ market: 10.57 })).toEqual({ sellers: null, listings: null });
+    expect(parseLiquidity(null)).toEqual({ sellers: null, listings: null });
+    expect(parseLiquidity([1, 2])).toEqual({ sellers: null, listings: null });
+    expect(parseLiquidity({ sellers: -3, listings: NaN })).toEqual({ sellers: null, listings: null });
   });
 });

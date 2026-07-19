@@ -2,7 +2,8 @@
 import type { Database as Db } from "better-sqlite3";
 import { normalizeNumber } from "./matcher";
 import { PSA_COLUMNS } from "./ppt-export";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix } from "./ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity } from "./ppt-history";
+import { parseGradedSales } from "./ppt-graded";
 import type { PptEnrichmentCard } from "../upstream/ppt";
 import type { PopulationRow } from "./ppt-population";
 
@@ -19,6 +20,7 @@ export interface OvernightOptions { populationEnabled: boolean; asOf: string; }
 export interface OvernightSummary {
   setsDone: number; historyRows: number; gradedRows: number; popRows: number;
   condHistoryRows: number; byCondRows: number; byVariantRows: number; matrixRows: number;
+  liquidityRows: number; gradedSalesRows: number;
   stoppedEarly: boolean; stopReason?: string;
 }
 
@@ -44,13 +46,20 @@ CREATE TABLE IF NOT EXISTS price_matrix(card_id TEXT NOT NULL, printing TEXT NOT
 CREATE INDEX IF NOT EXISTS idx_price_history_cond_card ON price_history_cond(card_id);
 CREATE INDEX IF NOT EXISTS idx_price_by_condition_card ON price_by_condition(card_id);
 CREATE INDEX IF NOT EXISTS idx_price_by_variant_card ON price_by_variant(card_id);
-CREATE INDEX IF NOT EXISTS idx_price_matrix_card ON price_matrix(card_id);`;
+CREATE INDEX IF NOT EXISTS idx_price_matrix_card ON price_matrix(card_id);
+CREATE TABLE IF NOT EXISTS graded_sales(card_id TEXT NOT NULL, grade TEXT NOT NULL,
+  sales_count INTEGER NOT NULL, confidence TEXT, as_of TEXT NOT NULL, PRIMARY KEY(card_id, grade));
+CREATE INDEX IF NOT EXISTS idx_graded_sales_card ON graded_sales(card_id);`;
 
 export async function runOvernightSweep(
   db: Db, client: SweepClient, sets: OvernightSet[], ledger: OvernightLedger,
   opts: OvernightOptions, isStopError: (e: unknown) => boolean,
 ): Promise<OvernightSummary> {
   db.exec(DDL);
+  const plCols = new Set((db.pragma("table_info(price_latest)") as { name: string }[]).map((c) => c.name));
+  for (const col of ["sellers", "listings"]) {
+    if (!plCols.has(col)) db.exec(`ALTER TABLE price_latest ADD COLUMN ${col} INTEGER`);
+  }
   const insHist = db.prepare("INSERT OR REPLACE INTO price_history(card_id, date, raw_usd) VALUES (?,?,?)");
   const upGraded = db.prepare(`INSERT INTO price_latest(card_id, ${PSA_COLUMNS.join(", ")}, as_of)
     VALUES (@id,${PSA_COLUMNS.map((c) => `@${c}`).join(",")},@as_of)
@@ -62,10 +71,15 @@ export async function runOvernightSweep(
   const insByCond = db.prepare("INSERT OR REPLACE INTO price_by_condition(card_id, condition, usd, as_of) VALUES (?,?,?,?)");
   const insByVariant = db.prepare("INSERT OR REPLACE INTO price_by_variant(card_id, printing, usd, as_of) VALUES (?,?,?,?)");
   const insMatrix = db.prepare("INSERT OR REPLACE INTO price_matrix(card_id, printing, condition, usd, as_of) VALUES (?,?,?,?,?)");
+  const upLiquidity = db.prepare(`INSERT INTO price_latest(card_id, sellers, listings, as_of)
+    VALUES (@id,@sellers,@listings,@as_of)
+    ON CONFLICT(card_id) DO UPDATE SET
+      sellers=COALESCE(@sellers, sellers), listings=COALESCE(@listings, listings)`);
+  const insGs = db.prepare("INSERT OR REPLACE INTO graded_sales(card_id, grade, sales_count, confidence, as_of) VALUES (?,?,?,?,?)");
   const ourStmt = db.prepare("SELECT id, number, name FROM card WHERE set_id = ?");
 
   const sum: OvernightSummary = {
-    setsDone: 0, historyRows: 0, gradedRows: 0, popRows: 0, condHistoryRows: 0, byCondRows: 0, byVariantRows: 0, matrixRows: 0, stoppedEarly: false,
+    setsDone: 0, historyRows: 0, gradedRows: 0, popRows: 0, condHistoryRows: 0, byCondRows: 0, byVariantRows: 0, matrixRows: 0, liquidityRows: 0, gradedSalesRows: 0, stoppedEarly: false,
   };
 
   // ---- Phase A: per set (history + graded) ----
@@ -113,6 +127,15 @@ export async function runOvernightSweep(
         }
         for (const cell of parseMatrix(pc.pricesRaw)) {
           insMatrix.run(m.id, cell.printing, cell.condition, cell.usd, opts.asOf); sum.matrixRows++;
+        }
+        const liq = parseLiquidity(pc.pricesRaw);
+        if (liq.sellers != null || liq.listings != null) {
+          upLiquidity.run({ id: m.id, sellers: liq.sellers, listings: liq.listings, as_of: opts.asOf });
+          sum.liquidityRows++;
+        }
+        for (const gs of parseGradedSales(pc.ebayRaw)) {
+          insGs.run(m.id, gs.grade, gs.salesCount, gs.confidence, opts.asOf);
+          sum.gradedSalesRows++;
         }
       }
     });

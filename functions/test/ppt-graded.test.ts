@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { parseLatestGraded, detectGradedHistoryMode, parseGradedHistory } from "../src/pipeline/ppt-graded";
+import { parseLatestGraded, detectGradedHistoryMode, parseGradedHistory, parseGradedSales } from "../src/pipeline/ppt-graded";
 import { parseWeeklyHistory } from "../src/pipeline/ppt-history";
 
 // Real PPT shapes (confirmed by the live-captured fixture, see ppt-enrichment-sample.json).
@@ -40,6 +40,20 @@ describe("graded parsers", () => {
     expect(parseGradedHistory(withTimeseries)).toEqual([
       { grade: "psa10", date: "2026-04-20", usd: 39.99 },
     ]);
+  });
+
+  it("parseGradedSales captures count + smartMarketPrice confidence per grade, verbatim keys", () => {
+    expect(parseGradedSales(salesByGradeOnly)).toEqual([
+      { grade: "psa9", salesCount: 1, confidence: null },
+      { grade: "psa10", salesCount: 14, confidence: "high" },
+    ]);
+  });
+
+  it("parseGradedSales tolerates garbage and drops zero/absent counts", () => {
+    expect(parseGradedSales(null)).toEqual([]);
+    expect(parseGradedSales({})).toEqual([]);
+    expect(parseGradedSales({ salesByGrade: "nope" })).toEqual([]);
+    expect(parseGradedSales({ salesByGrade: { psa10: { count: 0, medianPrice: 5 }, psa9: { medianPrice: 5 } } })).toEqual([]);
   });
 
   it("tolerates garbage", () => {
@@ -81,5 +95,13 @@ describe("fixture-driven: real captured PPT enrichment sample", () => {
     expect(parseGradedHistory(cardB.ebay)).toEqual([]);
     expect(detectGradedHistoryMode(cardB.ebay)).toBe("latest-only");
     expect(parseWeeklyHistory(cardB.priceHistory).length).toBeGreaterThan(0);
+  });
+
+  it("parseGradedSales on the live-captured sample: all graders, ace10 included", () => {
+    expect(parseGradedSales(cardA.ebay)).toEqual([
+      { grade: "psa9", salesCount: 1, confidence: "low" },
+      { grade: "psa10", salesCount: 14, confidence: "high" },
+      { grade: "ace10", salesCount: 1, confidence: "low" },
+    ]);
   });
 });

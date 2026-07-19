@@ -23,7 +23,7 @@ CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT NOT NULL REFERENCES set_info(
 CREATE VIRTUAL TABLE card_text USING fts5(card_id UNINDEXED, name, body);
 CREATE TABLE price_latest(card_id TEXT PRIMARY KEY REFERENCES card(id), raw_usd REAL, raw_eur REAL,
   psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
-  psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
+  psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, sellers INTEGER, listings INTEGER, as_of TEXT NOT NULL);
 CREATE TABLE connected_art(scene_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'combined', title TEXT NOT NULL, card_id TEXT NOT NULL, position INTEGER NOT NULL,
   PRIMARY KEY(scene_id, card_id));
 CREATE TABLE pokemon(dex_id INTEGER PRIMARY KEY, name TEXT NOT NULL, rep_card_id TEXT);
@@ -41,6 +41,9 @@ CREATE TABLE graded_history(card_id TEXT NOT NULL REFERENCES card(id), grade TEX
   usd REAL NOT NULL, PRIMARY KEY(card_id, grade, date));
 CREATE INDEX idx_population_card ON population(card_id);
 CREATE INDEX idx_graded_history_card ON graded_history(card_id);
+CREATE TABLE graded_sales(card_id TEXT NOT NULL REFERENCES card(id), grade TEXT NOT NULL,
+  sales_count INTEGER NOT NULL, confidence TEXT, as_of TEXT NOT NULL, PRIMARY KEY(card_id, grade));
+CREATE INDEX idx_graded_sales_card ON graded_sales(card_id);
 CREATE TABLE price_history_cond(card_id TEXT NOT NULL REFERENCES card(id), condition TEXT NOT NULL, date TEXT NOT NULL,
   raw_usd REAL NOT NULL, PRIMARY KEY(card_id, condition, date));
 CREATE TABLE price_by_condition(card_id TEXT NOT NULL REFERENCES card(id), condition TEXT NOT NULL, usd REAL NOT NULL,
@@ -90,7 +93,8 @@ export function buildCatalog(input: CatalogInput, outPath: string): void {
   const insSet = db.prepare("INSERT INTO set_info VALUES (?,?,?,?,?,?,?)");
   const insCard = db.prepare("INSERT INTO card VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
   const insText = db.prepare("INSERT INTO card_text (card_id, name, body) VALUES (?,?,?)");
-  const insPrice = db.prepare(`INSERT INTO price_latest VALUES (?,?,?,${PSA_COLUMNS.map(() => "?").join(",")},?)`);
+  const insPrice = db.prepare(`INSERT INTO price_latest(card_id, raw_usd, raw_eur, ${PSA_COLUMNS.join(", ")}, as_of)
+    VALUES (?,?,?,${PSA_COLUMNS.map(() => "?").join(",")},?)`);
   const insArt = db.prepare("INSERT INTO connected_art VALUES (?,?,?,?,?)");
   const insPokemon = db.prepare("INSERT INTO pokemon VALUES (?,?,?)");
   const insCardDex = db.prepare("INSERT INTO card_dex VALUES (?,?)");
