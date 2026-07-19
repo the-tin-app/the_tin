@@ -204,6 +204,58 @@ final class CatalogStore {
         return out
     }
 
+    /// Full printing×condition latest prices (`price_matrix`). Empty when the card is uncovered
+    /// or the catalog predates the table (`try?` → `[]`).
+    func matrixPrices(cardId: String) throws -> [MatrixPrice] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT printing, condition, usd FROM price_matrix WHERE card_id = ?",
+                             arguments: [cardId])
+                .compactMap { r in
+                    Condition(rawValue: r["condition"]).map { MatrixPrice(printing: r["printing"], condition: $0, usd: r["usd"]) }
+                }
+        }
+    }
+
+    /// Batch of `matrixPrices(cardId:)` keyed by card id. Throws on a catalog without the
+    /// table (→ `[:]` via `try?`).
+    func matrixPrices(cardIds: [String]) throws -> [String: [MatrixPrice]] {
+        guard !cardIds.isEmpty else { return [:] }
+        let marks = databaseQuestionMarks(count: cardIds.count)
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT card_id, printing, condition, usd FROM price_matrix WHERE card_id IN (\(marks))",
+                             arguments: StatementArguments(cardIds))
+        }
+        var out: [String: [MatrixPrice]] = [:]
+        for r in rows {
+            guard let c = Condition(rawValue: r["condition"]) else { continue }
+            out[r["card_id"], default: []].append(MatrixPrice(printing: r["printing"], condition: c, usd: r["usd"]))
+        }
+        return out
+    }
+
+    /// Per-printing graded prices (`graded_by_printing`) — only distinct-product printings
+    /// (e.g. 1st Edition vs Unlimited) ever have rows. Empty on old artifacts (`try?` → `[]`).
+    func gradedPrintingPrices(cardId: String) throws -> [GradedPrintingPrice] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT printing, grade, usd FROM graded_by_printing WHERE card_id = ?",
+                             arguments: [cardId])
+                .map { GradedPrintingPrice(printing: $0["printing"], grade: $0["grade"], usd: $0["usd"]) }
+        }
+    }
+
+    /// Batch of `gradedPrintingPrices(cardId:)` keyed by card id (→ `[:]` via `try?` on old artifacts).
+    func gradedPrintingPrices(cardIds: [String]) throws -> [String: [GradedPrintingPrice]] {
+        guard !cardIds.isEmpty else { return [:] }
+        let marks = databaseQuestionMarks(count: cardIds.count)
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT card_id, printing, grade, usd FROM graded_by_printing WHERE card_id IN (\(marks))",
+                             arguments: StatementArguments(cardIds))
+        }
+        var out: [String: [GradedPrintingPrice]] = [:]
+        for r in rows { out[r["card_id"], default: []].append(GradedPrintingPrice(printing: r["printing"], grade: r["grade"], usd: r["usd"])) }
+        return out
+    }
+
     func prices(cardIds: [String]) throws -> [String: PriceRecord] {
         guard !cardIds.isEmpty else { return [:] }
         let marks = databaseQuestionMarks(count: cardIds.count)

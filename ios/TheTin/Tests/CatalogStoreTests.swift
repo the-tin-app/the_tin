@@ -205,4 +205,61 @@ final class CatalogStoreTests: XCTestCase {
         XCTAssertEqual(try store.availableGrades(cardId: "sv1-1"), [])
         XCTAssertEqual(try store.availableConditions(cardId: "sv1-1"), [])
     }
+
+    // MARK: - price_matrix / graded_by_printing
+
+    /// Fixture predates price_matrix/graded_by_printing and the price_delta 'matrix' kind — add
+    /// them to a temp copy the way publish-tiers ships them.
+    private func makeStoreWithMatrixTables() throws -> CatalogStore {
+        let path = try FixtureCatalog.copyToTemp()
+        let dbQueue = try DatabaseQueue(path: path)
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE price_matrix(card_id TEXT NOT NULL, printing TEXT NOT NULL, condition TEXT NOT NULL,
+                  usd REAL NOT NULL, as_of TEXT NOT NULL, PRIMARY KEY(card_id, printing, condition))
+                """)
+            try db.execute(sql: """
+                CREATE TABLE graded_by_printing(card_id TEXT NOT NULL, printing TEXT NOT NULL, grade TEXT NOT NULL,
+                  usd REAL NOT NULL, as_of TEXT NOT NULL, PRIMARY KEY(card_id, printing, grade))
+                """)
+            try db.execute(sql: """
+                CREATE TABLE price_delta(card_id TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL,
+                  pct_1d REAL, pct_7d REAL, pct_30d REAL, PRIMARY KEY(card_id, kind, key))
+                """)
+            try db.execute(sql: "INSERT INTO price_matrix VALUES ('swsh7-215', 'Holofoil', 'Near Mint', 100, '2026-07-04')")
+            try db.execute(sql: "INSERT INTO price_matrix VALUES ('swsh7-215', 'Holofoil', 'Lightly Played', 80, '2026-07-04')")
+            try db.execute(sql: "INSERT INTO price_matrix VALUES ('swsh7-215', 'Reverse Holofoil', 'Near Mint', 120, '2026-07-04')")
+            try db.execute(sql: "INSERT INTO graded_by_printing VALUES ('base1-4', '1st Edition', 'psa10', 5000, '2026-07-04')")
+            try db.execute(sql: "INSERT INTO graded_by_printing VALUES ('base1-4', 'Unlimited', 'psa10', 900, '2026-07-04')")
+            try db.execute(sql: "INSERT INTO price_delta VALUES ('swsh7-215', 'matrix', 'Holofoil|Near Mint', 0.1, NULL, NULL)")
+        }
+        try dbQueue.close()
+        return try CatalogStore(path: path)
+    }
+
+    func testMatrixPrices() throws {
+        let store = try makeStoreWithMatrixTables()
+        let m = try store.matrixPrices(cardId: "swsh7-215")
+        XCTAssertEqual(m.count, 3)
+        XCTAssertEqual(m.first { $0.printing == "Holofoil" && $0.condition == .lightlyPlayed }?.usd, 80)
+    }
+
+    func testMatrixPricesMissingTableIsEmptyViaTry() throws {
+        // `oldStore` is a store over the base fixture, which lacks price_matrix (old artifact):
+        // (try? …) ?? [] must yield [].
+        let oldStore = try FixtureCatalog.make()
+        XCTAssertEqual((try? oldStore.matrixPrices(cardId: "swsh7-215")) ?? [], [])
+    }
+
+    func testGradedPrintingPrices() throws {
+        let store = try makeStoreWithMatrixTables()
+        let g = try store.gradedPrintingPrices(cardId: "base1-4")
+        XCTAssertEqual(g.first { $0.printing == "1st Edition" }?.usd, 5000)
+    }
+
+    func testMatrixDeltaKindParses() throws {
+        let store = try makeStoreWithMatrixTables()
+        let d = try store.deltas(cardId: "swsh7-215")
+        XCTAssertEqual(d.first { $0.kind == .matrix }?.key, "Holofoil|Near Mint")
+    }
 }

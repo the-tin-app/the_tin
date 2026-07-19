@@ -104,7 +104,7 @@ enum DeltaPeriod: String, CaseIterable {
 /// condition, or a printing) over each packaged lookback. NULL column = no artifact covered
 /// that window (or the price didn't exist then).
 struct DeltaRecord: Equatable {
-    enum Kind: String { case raw, psa, condition, printing }
+    enum Kind: String { case raw, psa, condition, printing, matrix }
     let kind: Kind
     let key: String        // "" | "1"…"10" | condition string | printing string
     let pct1d: Double?
@@ -132,6 +132,24 @@ struct VariantPrice: Equatable, Identifiable {
     let printing: String
     let usd: Double
     var id: String { printing }
+}
+
+/// Full printing×condition latest price (`price_matrix`) — the cross-product `variantPrices`/
+/// `conditionPrices` each only give one axis of.
+struct MatrixPrice: Equatable, Identifiable {
+    let printing: String
+    let condition: Condition
+    let usd: Double
+    var id: String { "\(printing)|\(condition.rawValue)" }
+}
+
+/// Graded price for one printing (`graded_by_printing`) — only distinct-product printings
+/// (e.g. 1st Edition vs Unlimited) ever have rows. `grade` is PPT's key verbatim ("psa10", "cgc9").
+struct GradedPrintingPrice: Equatable, Identifiable {
+    let printing: String
+    let grade: String
+    let usd: Double
+    var id: String { "\(printing)|\(grade)" }
 }
 
 /// A sealed product — booster box, Elite Trainer Box, booster pack, tin, etc. — from the
