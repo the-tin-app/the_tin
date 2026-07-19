@@ -157,8 +157,8 @@ describe("applyExport with skuMeta (printing labels)", () => {
     const db = makeDb(); // the file's existing minimal-schema helper
     applyExport(db, {
       cards: [
-        { tcgPlayerId: 200, name: "", setId: "", cardNumber: "", marketPrice: 50, lowPrice: null, lastPriceUpdate: "" },
-        { tcgPlayerId: 100, name: "", setId: "", cardNumber: "", marketPrice: 400, lowPrice: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 200, name: "", setId: "", cardNumber: "", marketPrice: 50, lowPrice: null, sellers: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 100, name: "", setId: "", cardNumber: "", marketPrice: 400, lowPrice: null, sellers: null, lastPriceUpdate: "" },
       ],
       asOf: "2026-07-19",
     }, idByTcg, skuMeta);
@@ -203,8 +203,8 @@ describe("applyExport with skuMeta (printing labels)", () => {
     const skuMeta2 = new Map([[100, { printing: "1st Edition", priority: 5 }]]); // 300 has no entry
     applyExport(db, {
       cards: [
-        { tcgPlayerId: 300, name: "", setId: "", cardNumber: "", marketPrice: 999, lowPrice: null, lastPriceUpdate: "" },
-        { tcgPlayerId: 100, name: "", setId: "", cardNumber: "", marketPrice: 111, lowPrice: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 300, name: "", setId: "", cardNumber: "", marketPrice: 999, lowPrice: null, sellers: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 100, name: "", setId: "", cardNumber: "", marketPrice: 111, lowPrice: null, sellers: null, lastPriceUpdate: "" },
       ],
       ebay: [
         { tcgPlayerId: 300, grade: "psa10", smartMarketPrice: null, medianPrice: 900, averagePrice: null },
@@ -228,8 +228,8 @@ describe("applyExport with skuMeta (printing labels)", () => {
     ]);
     applyExport(db, {
       cards: [
-        { tcgPlayerId: 400, name: "", setId: "", cardNumber: "", marketPrice: 111, lowPrice: null, lastPriceUpdate: "" },
-        { tcgPlayerId: 500, name: "", setId: "", cardNumber: "", marketPrice: 222, lowPrice: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 400, name: "", setId: "", cardNumber: "", marketPrice: 111, lowPrice: null, sellers: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 500, name: "", setId: "", cardNumber: "", marketPrice: 222, lowPrice: null, sellers: null, lastPriceUpdate: "" },
       ],
       ebay: [
         { tcgPlayerId: 400, grade: "psa10", smartMarketPrice: null, medianPrice: 111, averagePrice: null },
@@ -239,5 +239,37 @@ describe("applyExport with skuMeta (printing labels)", () => {
     }, idByTcg3, skuMeta3);
     expect(db.prepare("SELECT raw_usd, psa10 FROM price_latest WHERE card_id='base1-4'").get())
       .toEqual({ raw_usd: 111, psa10: 111 }); // 400 processed first, wins the tie
+  });
+});
+
+describe("cards export sellers column", () => {
+  it("parseCardsExport captures sellers (empty field → null)", () => {
+    const rows = parseCardsExport(
+      "tcgPlayerId,name,setId,cardNumber,marketPrice,lowPrice,sellers,lastPriceUpdate\n" +
+      "246812,Metal Energy,swsh7,237/203,10.57,5.8,23,2026-07-18\n" +
+      "246790,Treasure Energy,swsh7,165/203,0.05,,,2026-07-18");
+    expect(rows[0].sellers).toBe(23);
+    expect(rows[1].sellers).toBeNull();
+  });
+
+  it("applyExport writes sellers with the raw price (ALTER guard for pre-column fixtures)", () => {
+    const db = new Database(":memory:");
+    db.exec(`CREATE TABLE card(id TEXT PRIMARY KEY, tcgplayer_id INTEGER);
+      CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL,
+        psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
+        psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
+      CREATE TABLE sealed_product(tcgplayer_id INTEGER PRIMARY KEY, name TEXT NOT NULL, set_id TEXT,
+        product_type TEXT, market_usd REAL, low_usd REAL, as_of TEXT);
+      CREATE TABLE population(card_id TEXT NOT NULL, grader TEXT NOT NULL, grade TEXT NOT NULL,
+        count INTEGER, gem_rate REAL, total_population INTEGER, as_of TEXT NOT NULL,
+        PRIMARY KEY(card_id, grader, grade));`);
+    db.prepare("INSERT INTO card VALUES ('swsh7-215', 246812)").run();
+    applyExport(db, {
+      cards: [{ tcgPlayerId: 246812, name: "Umbreon VMAX", setId: "swsh7", cardNumber: "215/203",
+        marketPrice: 1350.5, lowPrice: null, sellers: 23, lastPriceUpdate: "" }],
+      asOf: "2026-07-19",
+    });
+    const row = db.prepare("SELECT raw_usd, sellers FROM price_latest WHERE card_id='swsh7-215'").get() as any;
+    expect(row).toEqual({ raw_usd: 1350.5, sellers: 23 });
   });
 });

@@ -74,7 +74,7 @@ function intOrNull(s: string | undefined): number | null {
 
 export interface CardsExportRow {
   tcgPlayerId: number; name: string; setId: string; cardNumber: string;
-  marketPrice: number | null; lowPrice: number | null; lastPriceUpdate: string;
+  marketPrice: number | null; lowPrice: number | null; sellers: number | null; lastPriceUpdate: string;
 }
 export interface SealedExportRow {
   tcgPlayerId: number; name: string; setId: string; productType: string;
@@ -99,7 +99,7 @@ export function parseCardsExport(csv: string): CardsExportRow[] {
     if (id == null) return [];
     return [{
       tcgPlayerId: id, name: r.name ?? "", setId: r.setId ?? "", cardNumber: r.cardNumber ?? "",
-      marketPrice: numOrNull(r.marketPrice), lowPrice: numOrNull(r.lowPrice),
+      marketPrice: numOrNull(r.marketPrice), lowPrice: numOrNull(r.lowPrice), sellers: intOrNull(r.sellers),
       lastPriceUpdate: r.lastPriceUpdate ?? "",
     }];
   });
@@ -216,8 +216,13 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
     "INSERT OR REPLACE INTO graded_by_printing(card_id, printing, grade, usd, as_of) VALUES (?,?,?,?,?)");
   const prio = (tcg: number) => skuMeta?.get(tcg)?.priority ?? Number.MAX_SAFE_INTEGER;
 
-  const upRaw = db.prepare(`INSERT INTO price_latest(card_id, raw_usd, as_of) VALUES (@id,@raw,@as_of)
-    ON CONFLICT(card_id) DO UPDATE SET raw_usd=@raw, as_of=@as_of`);
+  const plCols = new Set((db.pragma("table_info(price_latest)") as { name: string }[]).map((c) => c.name));
+  for (const col of ["sellers", "listings"]) {
+    if (!plCols.has(col)) db.exec(`ALTER TABLE price_latest ADD COLUMN ${col} INTEGER`);
+  }
+
+  const upRaw = db.prepare(`INSERT INTO price_latest(card_id, raw_usd, sellers, as_of) VALUES (@id,@raw,@sellers,@as_of)
+    ON CONFLICT(card_id) DO UPDATE SET raw_usd=@raw, sellers=COALESCE(@sellers, sellers), as_of=@as_of`);
   const upGraded = db.prepare(`INSERT INTO price_latest(card_id, ${PSA_COLUMNS.join(", ")}, as_of)
     VALUES (@id,${PSA_COLUMNS.map((c) => `@${c}`).join(",")},@as_of)
     ON CONFLICT(card_id) DO UPDATE SET
@@ -232,16 +237,18 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
     // One raw_usd per card: the highest-priority (lowest number) SKU that has a market price.
     // Without skuMeta every row ties at MAX_SAFE_INTEGER and `<` keeps the FIRST row, which is
     // still deterministic (input order) — callers that care pass skuMeta.
-    const bestRaw = new Map<string, { p: number; price: number }>();
+    const bestRaw = new Map<string, { p: number; price: number; sellers: number | null }>();
     for (const c of inputs.cards ?? []) {
       const id = idByTcg.get(c.tcgPlayerId);
       if (!id) { stats.unmatched++; continue; }
       if (c.marketPrice == null) continue;
       const cur = bestRaw.get(id);
-      if (!cur || prio(c.tcgPlayerId) < cur.p) bestRaw.set(id, { p: prio(c.tcgPlayerId), price: c.marketPrice });
+      if (!cur || prio(c.tcgPlayerId) < cur.p) {
+        bestRaw.set(id, { p: prio(c.tcgPlayerId), price: c.marketPrice, sellers: c.sellers });
+      }
     }
-    for (const [id, { price }] of bestRaw) {
-      upRaw.run({ id, raw: price, as_of: inputs.asOf });
+    for (const [id, { price, sellers }] of bestRaw) {
+      upRaw.run({ id, raw: price, sellers, as_of: inputs.asOf });
       stats.rawRows++;
     }
 
