@@ -42,6 +42,17 @@ targets:
           if [ -f "$PLIST" ]; then
             cp "$PLIST" "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/"
           fi
+      # Uploads dSYMs so Crashlytics reports arrive symbolicated. Without this a review-device
+      # crash lands as raw addresses — useless, which is the whole reason Crashlytics is here.
+      # No-ops when the SDK isn't checked out yet (fresh clone, first resolve).
+      - name: Upload Crashlytics dSYMs
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - ${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}
+          - $(BUILT_PRODUCTS_DIR)/$(INFOPLIST_PATH)
+        script: |
+          RUN="${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
+          if [ -f "$RUN" ]; then "$RUN"; fi
     dependencies:
       - package: GRDB
         product: GRDB
@@ -53,6 +64,8 @@ targets:
         product: FirebaseAppCheck
       - package: Firebase
         product: FirebaseStorage
+      - package: Firebase
+        product: FirebaseCrashlytics
       - package: OpenCV
         product: OpenCV
       - target: TheTinWidgets
@@ -97,6 +110,9 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
           PROVISIONING_PROFILE_SPECIFIER: "The Tin App Store"
+          # Explicit, not inherited: Crashlytics can only symbolicate what the dSYM upload
+          # phase above finds, and that phase finds nothing without dSYMs.
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
   TheTinTests:
     type: bundle.unit-test
     platform: iOS
