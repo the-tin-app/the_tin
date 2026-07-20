@@ -197,6 +197,10 @@ struct CardDetailView: View {
                                 Text("raw market").font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        if let low = price.lowUsd {
+                            Text("low \(low, format: .currency(code: "USD"))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         // Liquidity: how many sellers/listings back the market price right now.
                         // PPT sometimes reports a literal 0 for a count it doesn't really have
                         // (e.g. "22 sellers · 0 listings" — 22 sellers implies listings > 0), so
@@ -268,7 +272,8 @@ struct CardDetailView: View {
                                 LazyVGrid(columns: Self.priceColumns, spacing: 8) {
                                     ForEach(model.conditions) { cp in
                                         PriceTile(label: cp.condition.label, value: cp.usd,
-                                                  delta: model.delta(.condition, cp.condition.rawValue))
+                                                  delta: model.delta(.condition, cp.condition.rawValue),
+                                                  footnote: cp.salesCount.map { "\($0) sale\($0 == 1 ? "" : "s")" })
                                     }
                                 }
                                 if let p = currentPrinting, !model.conditions.isEmpty {
