@@ -47,7 +47,7 @@ CREATE INDEX idx_graded_sales_card ON graded_sales(card_id);
 CREATE TABLE price_history_cond(card_id TEXT NOT NULL REFERENCES card(id), condition TEXT NOT NULL, date TEXT NOT NULL,
   raw_usd REAL NOT NULL, PRIMARY KEY(card_id, condition, date));
 CREATE TABLE price_by_condition(card_id TEXT NOT NULL REFERENCES card(id), condition TEXT NOT NULL, usd REAL NOT NULL,
-  as_of TEXT NOT NULL, PRIMARY KEY(card_id, condition));
+  sales_count INTEGER, as_of TEXT NOT NULL, PRIMARY KEY(card_id, condition));
 CREATE INDEX idx_price_history_cond_card ON price_history_cond(card_id);
 CREATE INDEX idx_price_by_condition_card ON price_by_condition(card_id);
 CREATE TABLE price_by_variant(card_id TEXT NOT NULL REFERENCES card(id), printing TEXT NOT NULL, usd REAL NOT NULL,

@@ -2,7 +2,7 @@
 import type { Database as Db } from "better-sqlite3";
 import { normalizeNumber } from "./matcher";
 import { PSA_COLUMNS } from "./ppt-export";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity } from "./ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales } from "./ppt-history";
 import { parseGradedSales } from "./ppt-graded";
 import type { PptEnrichmentCard } from "../upstream/ppt";
 import type { PopulationRow } from "./ppt-population";
@@ -19,7 +19,7 @@ export interface OvernightLedger {
 export interface OvernightOptions { populationEnabled: boolean; asOf: string; }
 export interface OvernightSummary {
   setsDone: number; historyRows: number; gradedRows: number; popRows: number;
-  condHistoryRows: number; byCondRows: number; byVariantRows: number; matrixRows: number;
+  condHistoryRows: number; byCondRows: number; byVariantRows: number; matrixRows: number; condSalesRows: number;
   liquidityRows: number; gradedSalesRows: number;
   stoppedEarly: boolean; stopReason?: string;
 }
@@ -60,6 +60,8 @@ export async function runOvernightSweep(
   for (const col of ["sellers", "listings"]) {
     if (!plCols.has(col)) db.exec(`ALTER TABLE price_latest ADD COLUMN ${col} INTEGER`);
   }
+  const pbcCols = new Set((db.pragma("table_info(price_by_condition)") as { name: string }[]).map((c) => c.name));
+  if (!pbcCols.has("sales_count")) db.exec(`ALTER TABLE price_by_condition ADD COLUMN sales_count INTEGER`);
   const insHist = db.prepare("INSERT OR REPLACE INTO price_history(card_id, date, raw_usd) VALUES (?,?,?)");
   const upGraded = db.prepare(`INSERT INTO price_latest(card_id, ${PSA_COLUMNS.join(", ")}, as_of)
     VALUES (@id,${PSA_COLUMNS.map((c) => `@${c}`).join(",")},@as_of)
@@ -69,6 +71,7 @@ export async function runOvernightSweep(
     VALUES (?,?,?,?,?,?,?)`);
   const insHistCond = db.prepare("INSERT OR REPLACE INTO price_history_cond(card_id, condition, date, raw_usd) VALUES (?,?,?,?)");
   const insByCond = db.prepare("INSERT OR REPLACE INTO price_by_condition(card_id, condition, usd, as_of) VALUES (?,?,?,?)");
+  const upCondSales = db.prepare("UPDATE price_by_condition SET sales_count=? WHERE card_id=? AND condition=?");
   const insByVariant = db.prepare("INSERT OR REPLACE INTO price_by_variant(card_id, printing, usd, as_of) VALUES (?,?,?,?)");
   const insMatrix = db.prepare("INSERT OR REPLACE INTO price_matrix(card_id, printing, condition, usd, as_of) VALUES (?,?,?,?,?)");
   const upLiquidity = db.prepare(`INSERT INTO price_latest(card_id, sellers, listings, as_of)
@@ -79,7 +82,7 @@ export async function runOvernightSweep(
   const ourStmt = db.prepare("SELECT id, number, name FROM card WHERE set_id = ?");
 
   const sum: OvernightSummary = {
-    setsDone: 0, historyRows: 0, gradedRows: 0, popRows: 0, condHistoryRows: 0, byCondRows: 0, byVariantRows: 0, matrixRows: 0, liquidityRows: 0, gradedSalesRows: 0, stoppedEarly: false,
+    setsDone: 0, historyRows: 0, gradedRows: 0, popRows: 0, condHistoryRows: 0, byCondRows: 0, byVariantRows: 0, matrixRows: 0, condSalesRows: 0, liquidityRows: 0, gradedSalesRows: 0, stoppedEarly: false,
   };
 
   // ---- Phase A: per set (history + graded) ----
@@ -121,6 +124,9 @@ export async function runOvernightSweep(
         }
         for (const cl of parseLatestByCondition(pc.pricesRaw)) {
           insByCond.run(m.id, cl.condition, cl.usd, opts.asOf); sum.byCondRows++;
+        }
+        for (const cs of parseConditionSales(pc.priceHistory, opts.asOf)) {
+          upCondSales.run(cs.salesCount, m.id, cs.condition); sum.condSalesRows++;
         }
         for (const vl of parseLatestByVariant(pc.pricesRaw)) {
           insByVariant.run(m.id, vl.printing, vl.usd, opts.asOf); sum.byVariantRows++;

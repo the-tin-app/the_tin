@@ -203,4 +203,24 @@ describe("runOvernightSweep", () => {
     expect(row).toEqual({ sellers: null, listings: null });
     expect(db.prepare("SELECT COUNT(*) FROM graded_sales").pluck().get()).toBe(0);
   });
+
+  it("rolls up per-condition volume into price_by_condition.sales_count", async () => {
+    const db = freshDb();
+    const c = { ...client, getSetEnrichment: async () => ([{
+      tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
+      priceHistory: { conditions: {
+        "Near Mint": { history: [
+          { date: "2026-07-02T00:00:00Z", market: 100, volume: 4 },
+          { date: "2026-06-20T00:00:00Z", market: 100, volume: 3 },
+          { date: "2026-01-01T00:00:00Z", market: 90,  volume: 50 }, // >90d before asOf 2026-07-08
+        ] },
+        "Damaged": { history: [{ date: "2026-07-01T00:00:00Z", market: 1, volume: 0 }] }, // 0 → no row update
+      } },
+      pricesRaw, gradedLatest: {}, gradedSeries: [], ebayRaw: {},
+    }]) };
+    const s = await runOvernightSweep(db as any, c as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(s.condSalesRows).toBe(1);
+    const nm = db.prepare("SELECT sales_count FROM price_by_condition WHERE card_id='base-4' AND condition='Near Mint'").pluck().get();
+    expect(nm).toBe(7);
+  });
 });
