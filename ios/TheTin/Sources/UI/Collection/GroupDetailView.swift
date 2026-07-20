@@ -128,6 +128,11 @@ struct GroupDetailView: View {
         group.map { model.entries(in: $0.id) } ?? model.entries
     }
 
+    /// Any owned card carries change data — gates the period picker (empty on the casual tier).
+    private var hasDeltas: Bool {
+        model.deltasByCard.values.contains { $0.contains(where: { $0.hasData }) }
+    }
+
     private var title: String { group?.name ?? "Everything" }
     private var color: Color { group.map { DividerPalette.color(for: $0.id) } ?? DividerPalette.steel }
     private var tier: CatalogTier { CatalogTier(rawValue: AppConfig.catalogTier) ?? .average }
@@ -185,6 +190,14 @@ struct GroupDetailView: View {
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             performanceRow
+            // App-wide selector for the per-row change badges below — only when there's data.
+            if hasDeltas {
+                HStack(spacing: 8) {
+                    Text("Change vs").font(.caption2).foregroundStyle(.secondary)
+                    DeltaPeriodPicker().fixedSize()
+                    Spacer()
+                }
+            }
             NavigationLink(value: TinPagerRoute(groupId: group?.id)) {
                 Label("Flip through your cards", systemImage: "rectangle.stack")
             }

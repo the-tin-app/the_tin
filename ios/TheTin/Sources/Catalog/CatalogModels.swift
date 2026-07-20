@@ -90,6 +90,14 @@ enum DeltaPeriod: String, CaseIterable {
         case .d30: return "last month"
         }
     }
+    /// Compact segment label for `DeltaPeriodPicker` (finance shorthand: 1 day / 1 week / 1 month).
+    var short: String {
+        switch self {
+        case .d1: return "1D"
+        case .d7: return "1W"
+        case .d30: return "1M"
+        }
+    }
     /// Tap-to-cycle order: yesterday → week → month → yesterday.
     var next: DeltaPeriod {
         switch self {
@@ -118,6 +126,11 @@ struct DeltaRecord: Equatable {
         case .d30: return pct30d
         }
     }
+
+    /// True when at least one lookback has a value. Lets a badge keep a tappable
+    /// placeholder for a window this row happens to lack, so the app-wide period can
+    /// always be cycled back to one that has data (never a persisted blank dead-end).
+    var hasData: Bool { pct1d != nil || pct7d != nil || pct30d != nil }
 }
 
 struct ConditionPrice: Equatable, Identifiable {
