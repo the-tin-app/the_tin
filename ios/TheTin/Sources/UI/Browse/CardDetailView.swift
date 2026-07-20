@@ -105,7 +105,6 @@ struct CardDetailView: View {
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
     @FocusState private var gradingFeeFocused: Bool
     @State private var marketplaceURL: MarketplaceURL?
-    @AppStorage("deltaPeriod") private var deltaPeriodRaw: String = DeltaPeriod.d1.rawValue
 
     /// Identifiable wrapper so `.sheet(item:)` can present a plain URL.
     private struct MarketplaceURL: Identifiable {
@@ -199,15 +198,23 @@ struct CardDetailView: View {
                             }
                         }
                         // Liquidity: how many sellers/listings back the market price right now.
-                        if price.sellers != nil || price.listings != nil {
-                            Text([price.sellers.map { "\($0) sellers" },
-                                  price.listings.map { "\($0) listings" }]
-                                .compactMap { $0 }.joined(separator: " · "))
+                        // PPT sometimes reports a literal 0 for a count it doesn't really have
+                        // (e.g. "22 sellers · 0 listings" — 22 sellers implies listings > 0), so
+                        // treat 0 as no-data and drop that half; hide the line if both drop out.
+                        let liquidity = [price.sellers.flatMap { $0 > 0 ? "\($0) sellers" : nil },
+                                         price.listings.flatMap { $0 > 0 ? "\($0) listings" : nil }]
+                            .compactMap { $0 }
+                        if !liquidity.isEmpty {
+                            Text(liquidity.joined(separator: " · "))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        if model.deltas.contains(where: { $0.pct(for: DeltaPeriod(rawValue: deltaPeriodRaw) ?? .d1) != nil }) {
-                            Text("Change vs \((DeltaPeriod(rawValue: deltaPeriodRaw) ?? .d1).label) — tap any badge to switch")
-                                .font(.caption2).foregroundStyle(.tertiary)
+                        // App-wide period selector for the change badges (headline, graded tiles,
+                        // condition tiles). Shown only when the card has delta data at all.
+                        if model.deltas.contains(where: { $0.hasData }) {
+                            HStack(spacing: 8) {
+                                Text("Change vs").font(.caption2).foregroundStyle(.secondary)
+                                DeltaPeriodPicker().fixedSize()
+                            }
                         }
                         // Printing-scoped slices — empty when the card has one printing, or when
                         // the selected printing has no matrix/graded rows (PPT gap-fill varies).
