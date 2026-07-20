@@ -115,6 +115,41 @@ export function parseConditionHistory(priceHistory: unknown): ConditionSeries[] 
   return out;
 }
 
+export interface ConditionSales { condition: string; salesCount: number; }
+
+/** Rolled-up ungraded sales count per condition: sum the per-day `volume` on
+ *  `priceHistory.conditions[condition].history[]` for points within the last `windowDays`
+ *  (relative to `asOf`, a YYYY-MM-DD). Conditions with no qualifying volume are omitted (→ no
+ *  footnote in the app). Shape-tolerant: garbage → []. `volume` is a count — absent / non-finite /
+ *  non-positive contributes 0. */
+export const CONDITION_SALES_WINDOW_DAYS = 90;
+
+export function parseConditionSales(
+  priceHistory: unknown, asOf: string, windowDays = CONDITION_SALES_WINDOW_DAYS,
+): ConditionSales[] {
+  const out: ConditionSales[] = [];
+  if (!priceHistory || typeof priceHistory !== "object" || Array.isArray(priceHistory)) return out;
+  const conditions = (priceHistory as Record<string, unknown>).conditions;
+  if (!conditions || typeof conditions !== "object" || Array.isArray(conditions)) return out;
+  const cutoffMs = Date.parse(`${asOf}T00:00:00Z`) - windowDays * DAY_MS;
+  if (!Number.isFinite(cutoffMs)) return out;
+  for (const [condition, v] of Object.entries(conditions as Record<string, unknown>)) {
+    const history = v && typeof v === "object" ? (v as Record<string, unknown>).history : undefined;
+    if (!Array.isArray(history)) continue;
+    let total = 0;
+    for (const p of history) {
+      if (!p || typeof p !== "object") continue;
+      const o = p as Record<string, unknown>;
+      const date = parseDate(o.date ?? o.timestamp ?? o.t ?? o.day);
+      if (!date || date.getTime() < cutoffMs) continue;
+      const vol = Number(o.volume);
+      if (Number.isFinite(vol) && vol > 0) total += Math.trunc(vol);
+    }
+    if (total > 0) out.push({ condition, salesCount: total });
+  }
+  return out;
+}
+
 export interface ConditionLatest { condition: string; usd: number; }
 
 export interface VariantLatest { printing: string; usd: number; }
@@ -212,4 +247,13 @@ export function parseLiquidity(prices: unknown): Liquidity {
   out.sellers = count(p.sellers);
   out.listings = count(p.listings);
   return out;
+}
+
+/** Raw market LOW off the top-level `prices` object (`prices.low`). Positive number/numeric-string
+ *  → USD low; absent / garbage / non-positive → null. */
+export function parseRawLow(prices: unknown): number | null {
+  if (!prices || typeof prices !== "object" || Array.isArray(prices)) return null;
+  const v = (prices as Record<string, unknown>).low;
+  const n = typeof v === "string" ? Number(v) : (v as number);
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : null;
 }

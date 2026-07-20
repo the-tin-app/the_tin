@@ -42,7 +42,7 @@ describe("catalog schema", () => {
     expect(names).toContain("price_by_condition");
     // shape sanity: insert one row each, idempotent PK
     db.prepare("INSERT INTO price_history_cond VALUES (?,?,?,?)").run("c1", "Lightly Played", "2026-07-01", 10.45);
-    db.prepare("INSERT INTO price_by_condition VALUES (?,?,?,?)").run("c1", "Damaged", 7.66, "2026-07-07");
+    db.prepare("INSERT INTO price_by_condition VALUES (?,?,?,?,?)").run("c1", "Damaged", 7.66, null, "2026-07-07");
     expect(db.prepare("SELECT raw_usd FROM price_history_cond").pluck().get()).toBe(10.45);
     expect(db.prepare("SELECT usd FROM price_by_condition").pluck().get()).toBe(7.66);
   });

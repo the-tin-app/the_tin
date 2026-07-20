@@ -23,7 +23,7 @@ CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT NOT NULL REFERENCES set_info(
 CREATE VIRTUAL TABLE card_text USING fts5(card_id UNINDEXED, name, body);
 CREATE TABLE price_latest(card_id TEXT PRIMARY KEY REFERENCES card(id), raw_usd REAL, raw_eur REAL,
   psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
-  psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, sellers INTEGER, listings INTEGER, as_of TEXT NOT NULL);
+  psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, sellers INTEGER, listings INTEGER, low_usd REAL, as_of TEXT NOT NULL);
 CREATE TABLE connected_art(scene_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'combined', title TEXT NOT NULL, card_id TEXT NOT NULL, position INTEGER NOT NULL,
   PRIMARY KEY(scene_id, card_id));
 CREATE TABLE pokemon(dex_id INTEGER PRIMARY KEY, name TEXT NOT NULL, rep_card_id TEXT);
@@ -47,7 +47,7 @@ CREATE INDEX idx_graded_sales_card ON graded_sales(card_id);
 CREATE TABLE price_history_cond(card_id TEXT NOT NULL REFERENCES card(id), condition TEXT NOT NULL, date TEXT NOT NULL,
   raw_usd REAL NOT NULL, PRIMARY KEY(card_id, condition, date));
 CREATE TABLE price_by_condition(card_id TEXT NOT NULL REFERENCES card(id), condition TEXT NOT NULL, usd REAL NOT NULL,
-  as_of TEXT NOT NULL, PRIMARY KEY(card_id, condition));
+  sales_count INTEGER, as_of TEXT NOT NULL, PRIMARY KEY(card_id, condition));
 CREATE INDEX idx_price_history_cond_card ON price_history_cond(card_id);
 CREATE INDEX idx_price_by_condition_card ON price_by_condition(card_id);
 CREATE TABLE price_by_variant(card_id TEXT NOT NULL REFERENCES card(id), printing TEXT NOT NULL, usd REAL NOT NULL,

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity } from "../src/pipeline/ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales, parseRawLow } from "../src/pipeline/ppt-history";
 
 describe("parseWeeklyHistory", () => {
   it("normalizes an array shape, dedups exact dates (latest wins), thins to >=6-day spacing", () => {
@@ -265,5 +265,38 @@ describe("parseLiquidity", () => {
     expect(parseLiquidity(null)).toEqual({ sellers: null, listings: null });
     expect(parseLiquidity([1, 2])).toEqual({ sellers: null, listings: null });
     expect(parseLiquidity({ sellers: -3, listings: NaN })).toEqual({ sellers: null, listings: null });
+  });
+});
+
+describe("parseConditionSales", () => {
+  const asOf = "2026-07-08"; // 90d cutoff ≈ 2026-04-09
+  it("sums volume within the window, skipping old points, nulls, and non-positive", () => {
+    const ph = { conditions: {
+      "Near Mint": { history: [
+        { date: "2026-07-02T00:00:00Z", market: 10, volume: 4 },
+        { date: "2026-06-20T00:00:00Z", market: 10, volume: 3 },   // within 90d
+        { date: "2026-01-01T00:00:00Z", market: 9,  volume: 99 },  // older than 90d → excluded
+        { date: "2026-07-03T00:00:00Z", market: 10, volume: null },// null → 0
+      ] },
+      "Lightly Played": { history: [{ date: "2026-07-01T00:00:00Z", market: 9, volume: 0 }] }, // 0 → omitted
+      "Damaged": { history: [] },
+    } };
+    expect(parseConditionSales(ph, asOf)).toEqual([{ condition: "Near Mint", salesCount: 7 }]);
+  });
+  it("is shape-tolerant", () => {
+    expect(parseConditionSales(null, asOf)).toEqual([]);
+    expect(parseConditionSales({}, asOf)).toEqual([]);
+    expect(parseConditionSales({ conditions: 5 }, asOf)).toEqual([]);
+  });
+});
+
+describe("parseRawLow", () => {
+  it("reads a positive prices.low, else null", () => {
+    expect(parseRawLow({ low: 12.4, market: 15 })).toBe(12.4);
+    expect(parseRawLow({ low: "9.5" })).toBe(9.5);
+    expect(parseRawLow({ low: 0 })).toBeNull();
+    expect(parseRawLow({ low: -3 })).toBeNull();
+    expect(parseRawLow({})).toBeNull();
+    expect(parseRawLow(null)).toBeNull();
   });
 });
