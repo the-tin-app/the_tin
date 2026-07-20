@@ -136,6 +136,7 @@ struct DeltaRecord: Equatable {
 struct ConditionPrice: Equatable, Identifiable {
     let condition: Condition
     let usd: Double
+    var salesCount: Int? = nil    // rolled-up ungraded sales over the last 90 days; nil = no data
     var id: String { condition.rawValue }
 }
 
@@ -229,6 +230,7 @@ struct PriceRecord: Equatable {
     let psa10: Double?
     let sellers: Int?
     let listings: Int?
+    let lowUsd: Double?
     let asOf: String
 
     /// Grades default to nil so call sites name only the columns they care about. Labels must
@@ -237,12 +239,12 @@ struct PriceRecord: Equatable {
          psa1: Double? = nil, psa2: Double? = nil, psa3: Double? = nil, psa4: Double? = nil,
          psa5: Double? = nil, psa6: Double? = nil, psa7: Double? = nil, psa8: Double? = nil,
          psa9: Double? = nil, psa10: Double? = nil,
-         sellers: Int? = nil, listings: Int? = nil, asOf: String) {
+         sellers: Int? = nil, listings: Int? = nil, lowUsd: Double? = nil, asOf: String) {
         self.cardId = cardId; self.rawUsd = rawUsd; self.rawEur = rawEur
         self.psa1 = psa1; self.psa2 = psa2; self.psa3 = psa3; self.psa4 = psa4
         self.psa5 = psa5; self.psa6 = psa6; self.psa7 = psa7; self.psa8 = psa8
         self.psa9 = psa9; self.psa10 = psa10
-        self.sellers = sellers; self.listings = listings; self.asOf = asOf
+        self.sellers = sellers; self.listings = listings; self.lowUsd = lowUsd; self.asOf = asOf
     }
 
     /// Default display currency is USD; a set grade falls back to raw_usd when that column is null.
