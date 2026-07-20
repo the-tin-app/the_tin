@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales } from "../src/pipeline/ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales, parseRawLow } from "../src/pipeline/ppt-history";
 
 describe("parseWeeklyHistory", () => {
   it("normalizes an array shape, dedups exact dates (latest wins), thins to >=6-day spacing", () => {
@@ -287,5 +287,16 @@ describe("parseConditionSales", () => {
     expect(parseConditionSales(null, asOf)).toEqual([]);
     expect(parseConditionSales({}, asOf)).toEqual([]);
     expect(parseConditionSales({ conditions: 5 }, asOf)).toEqual([]);
+  });
+});
+
+describe("parseRawLow", () => {
+  it("reads a positive prices.low, else null", () => {
+    expect(parseRawLow({ low: 12.4, market: 15 })).toBe(12.4);
+    expect(parseRawLow({ low: "9.5" })).toBe(9.5);
+    expect(parseRawLow({ low: 0 })).toBeNull();
+    expect(parseRawLow({ low: -3 })).toBeNull();
+    expect(parseRawLow({})).toBeNull();
+    expect(parseRawLow(null)).toBeNull();
   });
 });

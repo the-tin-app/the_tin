@@ -248,3 +248,12 @@ export function parseLiquidity(prices: unknown): Liquidity {
   out.listings = count(p.listings);
   return out;
 }
+
+/** Raw market LOW off the top-level `prices` object (`prices.low`). Positive number/numeric-string
+ *  → USD low; absent / garbage / non-positive → null. */
+export function parseRawLow(prices: unknown): number | null {
+  if (!prices || typeof prices !== "object" || Array.isArray(prices)) return null;
+  const v = (prices as Record<string, unknown>).low;
+  const n = typeof v === "string" ? Number(v) : (v as number);
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : null;
+}
