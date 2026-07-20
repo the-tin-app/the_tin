@@ -223,9 +223,10 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
   for (const col of ["sellers", "listings"]) {
     if (!plCols.has(col)) db.exec(`ALTER TABLE price_latest ADD COLUMN ${col} INTEGER`);
   }
+  if (!plCols.has("low_usd")) db.exec(`ALTER TABLE price_latest ADD COLUMN low_usd REAL`);
 
-  const upRaw = db.prepare(`INSERT INTO price_latest(card_id, raw_usd, sellers, as_of) VALUES (@id,@raw,@sellers,@as_of)
-    ON CONFLICT(card_id) DO UPDATE SET raw_usd=@raw, sellers=COALESCE(@sellers, sellers), as_of=@as_of`);
+  const upRaw = db.prepare(`INSERT INTO price_latest(card_id, raw_usd, sellers, low_usd, as_of) VALUES (@id,@raw,@sellers,@low,@as_of)
+    ON CONFLICT(card_id) DO UPDATE SET raw_usd=@raw, sellers=COALESCE(@sellers, sellers), low_usd=COALESCE(@low, low_usd), as_of=@as_of`);
   const upGraded = db.prepare(`INSERT INTO price_latest(card_id, ${PSA_COLUMNS.join(", ")}, as_of)
     VALUES (@id,${PSA_COLUMNS.map((c) => `@${c}`).join(",")},@as_of)
     ON CONFLICT(card_id) DO UPDATE SET
@@ -240,18 +241,18 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
     // One raw_usd per card: the highest-priority (lowest number) SKU that has a market price.
     // Without skuMeta every row ties at MAX_SAFE_INTEGER and `<` keeps the FIRST row, which is
     // still deterministic (input order) — callers that care pass skuMeta.
-    const bestRaw = new Map<string, { p: number; price: number; sellers: number | null }>();
+    const bestRaw = new Map<string, { p: number; price: number; sellers: number | null; low: number | null }>();
     for (const c of inputs.cards ?? []) {
       const id = idByTcg.get(c.tcgPlayerId);
       if (!id) { stats.unmatched++; continue; }
       if (c.marketPrice == null) continue;
       const cur = bestRaw.get(id);
       if (!cur || prio(c.tcgPlayerId) < cur.p) {
-        bestRaw.set(id, { p: prio(c.tcgPlayerId), price: c.marketPrice, sellers: c.sellers });
+        bestRaw.set(id, { p: prio(c.tcgPlayerId), price: c.marketPrice, sellers: c.sellers, low: c.lowPrice });
       }
     }
-    for (const [id, { price, sellers }] of bestRaw) {
-      upRaw.run({ id, raw: price, sellers, as_of: inputs.asOf });
+    for (const [id, { price, sellers, low }] of bestRaw) {
+      upRaw.run({ id, raw: price, sellers, low, as_of: inputs.asOf });
       stats.rawRows++;
     }
 

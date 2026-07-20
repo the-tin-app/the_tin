@@ -2,7 +2,7 @@
 import type { Database as Db } from "better-sqlite3";
 import { normalizeNumber } from "./matcher";
 import { PSA_COLUMNS } from "./ppt-export";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales } from "./ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales, parseRawLow } from "./ppt-history";
 import { parseGradedSales } from "./ppt-graded";
 import type { PptEnrichmentCard } from "../upstream/ppt";
 import type { PopulationRow } from "./ppt-population";
@@ -60,6 +60,7 @@ export async function runOvernightSweep(
   for (const col of ["sellers", "listings"]) {
     if (!plCols.has(col)) db.exec(`ALTER TABLE price_latest ADD COLUMN ${col} INTEGER`);
   }
+  if (!plCols.has("low_usd")) db.exec(`ALTER TABLE price_latest ADD COLUMN low_usd REAL`);
   const pbcCols = new Set((db.pragma("table_info(price_by_condition)") as { name: string }[]).map((c) => c.name));
   if (!pbcCols.has("sales_count")) db.exec(`ALTER TABLE price_by_condition ADD COLUMN sales_count INTEGER`);
   const insHist = db.prepare("INSERT OR REPLACE INTO price_history(card_id, date, raw_usd) VALUES (?,?,?)");
@@ -74,10 +75,10 @@ export async function runOvernightSweep(
   const upCondSales = db.prepare("UPDATE price_by_condition SET sales_count=? WHERE card_id=? AND condition=?");
   const insByVariant = db.prepare("INSERT OR REPLACE INTO price_by_variant(card_id, printing, usd, as_of) VALUES (?,?,?,?)");
   const insMatrix = db.prepare("INSERT OR REPLACE INTO price_matrix(card_id, printing, condition, usd, as_of) VALUES (?,?,?,?,?)");
-  const upLiquidity = db.prepare(`INSERT INTO price_latest(card_id, sellers, listings, as_of)
-    VALUES (@id,@sellers,@listings,@as_of)
+  const upLiquidity = db.prepare(`INSERT INTO price_latest(card_id, sellers, listings, low_usd, as_of)
+    VALUES (@id,@sellers,@listings,@low,@as_of)
     ON CONFLICT(card_id) DO UPDATE SET
-      sellers=COALESCE(@sellers, sellers), listings=COALESCE(@listings, listings)`);
+      sellers=COALESCE(@sellers, sellers), listings=COALESCE(@listings, listings), low_usd=COALESCE(@low, low_usd)`);
   const insGs = db.prepare("INSERT OR REPLACE INTO graded_sales(card_id, grade, sales_count, confidence, as_of) VALUES (?,?,?,?,?)");
   const ourStmt = db.prepare("SELECT id, number, name FROM card WHERE set_id = ?");
 
@@ -135,8 +136,9 @@ export async function runOvernightSweep(
           insMatrix.run(m.id, cell.printing, cell.condition, cell.usd, opts.asOf); sum.matrixRows++;
         }
         const liq = parseLiquidity(pc.pricesRaw);
-        if (liq.sellers != null || liq.listings != null) {
-          upLiquidity.run({ id: m.id, sellers: liq.sellers, listings: liq.listings, as_of: opts.asOf });
+        const low = parseRawLow(pc.pricesRaw);
+        if (liq.sellers != null || liq.listings != null || low != null) {
+          upLiquidity.run({ id: m.id, sellers: liq.sellers, listings: liq.listings, low, as_of: opts.asOf });
           sum.liquidityRows++;
         }
         for (const gs of parseGradedSales(pc.ebayRaw)) {

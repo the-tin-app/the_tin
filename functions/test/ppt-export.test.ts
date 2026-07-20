@@ -143,6 +143,15 @@ describe("applyExport", () => {
     expect(row.raw_usd).toBe(999);      // untouched by the graded-only upsert
     expect(row.psa10).toBe(1150);       // medianPrice
   });
+
+  it("writes low_usd from the export lowPrice column", () => {
+    const db = makeDb();
+    applyExport(db, { cards: parseCardsExport(CARDS_CSV), asOf: "2026-07-11" });
+    const KNOWN_CARD_ID = "base1-4";
+    const EXPECTED_LOW = 300; // CARDS_CSV row 200 "Charizard, Base" lowPrice
+    const low = db.prepare("SELECT low_usd FROM price_latest WHERE card_id = ?").pluck().get(KNOWN_CARD_ID);
+    expect(low).toBe(EXPECTED_LOW);
+  });
 });
 
 describe("applyExport with skuMeta (printing labels)", () => {
