@@ -96,12 +96,9 @@ actor ImageCache {
     }()
 
     @Sendable static func defaultDownload(_ url: URL) async throws -> Data {
-        // Private mirrored art lives in our Firebase Storage bucket behind App Check + Auth
-        // enforcement; a plain GET 403s. Public TCGdex art (assets.tcgdex.net) needs no headers.
-        let request = url.host == "firebasestorage.googleapis.com"
-            ? await StorageAuth.authorizedRequest(url: url)
-            : URLRequest(url: url)
-        let (data, response) = try await session.data(for: request)
+        // All card art is public: TCGdex (assets.tcgdex.net) and gap-fill (tcgplayer-cdn.tcgplayer.com).
+        // No auth headers — we no longer self-host/mirror any images.
+        let (data, response) = try await session.data(for: URLRequest(url: url))
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw URLError(.badServerResponse)
         }
