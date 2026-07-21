@@ -31,6 +31,41 @@ enum GroupStats {
         return price?.rawUsd ?? conditions.first(where: { $0.condition == .nearMint })?.usd
     }
 
+    /// The price-change (`price_delta`) row that matches what an owned entry actually is — the
+    /// change counterpart to `unitPrice`. MUST mirror `unitPrice`'s rung order so the % change
+    /// tracks the SAME price the value uses: graded → PSA grade; else printing×condition matrix →
+    /// card-level condition → printing → raw. (Bug 2026-07-21: this ladder had silently dropped the
+    /// matrix + condition rungs, so every played/ungraded copy showed the raw market change.)
+    static func unitDelta(_ entry: CollectionEntry, records: [DeltaRecord]) -> DeltaRecord? {
+        if let grade = entry.gradeValue {
+            return records.first { $0.kind == .psa && $0.key == String(grade.numeric) }
+        }
+        if let condition = entry.conditionValue, let variant = entry.variantValue,
+           let matrix = records.first(where: {
+               $0.kind == .matrix && matrixDeltaKey($0.key, matches: variant, condition: condition) }) {
+            return matrix
+        }
+        if let condition = entry.conditionValue, condition != .nm,
+           let cond = records.first(where: { $0.kind == .condition && $0.key == condition.catalog.rawValue }) {
+            return cond
+        }
+        if let variant = entry.variantValue,
+           let printing = records.first(where: { $0.kind == .printing && variant.matches(printing: $0.key) }) {
+            return printing
+        }
+        return records.first { $0.kind == .raw }
+    }
+
+    /// A `.matrix` delta key is "<printing>|<condition rawValue>" (publish-tiers.ts). Condition
+    /// rawValues never contain "|", so split on the LAST bar; match the printing half to the
+    /// entry's variant and the condition half to its condition.
+    private static func matrixDeltaKey(_ key: String, matches variant: CardVariant,
+                                       condition: CardCondition) -> Bool {
+        guard let bar = key.lastIndex(of: "|") else { return false }
+        return String(key[key.index(after: bar)...]) == condition.catalog.rawValue
+            && variant.matches(printing: String(key[..<bar]))
+    }
+
     /// Spec §5.2: entry value = qty × unit price for the entry's grade/condition/printing.
     static func entryValue(_ entry: CollectionEntry, price: PriceRecord?,
                            variants: [VariantPrice] = [],

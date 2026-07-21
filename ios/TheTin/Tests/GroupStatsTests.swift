@@ -188,6 +188,63 @@ final class GroupStatsTests: XCTestCase {
                                             gradedByPrinting: []), 900)
     }
 
+    // MARK: - unitDelta (price-change ladder — must mirror unitPrice)
+
+    private func delta(_ kind: DeltaRecord.Kind, _ key: String, pct1d: Double) -> DeltaRecord {
+        DeltaRecord(kind: kind, key: key, pct1d: pct1d, pct7d: nil, pct30d: nil)
+    }
+
+    func testUnitDeltaTracksConditionNotRaw() {
+        // The bug: an ungraded played copy showed the RAW change instead of its condition's change.
+        let records = [delta(.raw, "", pct1d: 1),
+                       delta(.condition, "Lightly Played", pct1d: 5),
+                       delta(.condition, "Damaged", pct1d: -8)]
+        // DMG entry → the Damaged condition delta, not raw.
+        XCTAssertEqual(GroupStats.unitDelta(entry("dmg", card: "base1-4", condition: "DMG"), records: records),
+                       records[2])
+        // LP entry → the Lightly Played delta.
+        XCTAssertEqual(GroupStats.unitDelta(entry("lp", card: "base1-4", condition: "LP"), records: records),
+                       records[1])
+        // NM is the raw/market baseline (mirrors unitPrice's `condition != .nm`) → raw delta.
+        XCTAssertEqual(GroupStats.unitDelta(entry("nm", card: "base1-4", condition: "NM"), records: records),
+                       records[0])
+        // Condition set but that condition has no delta row → falls through to raw.
+        let noMp = [delta(.raw, "", pct1d: 1), delta(.condition, "Lightly Played", pct1d: 5)]
+        XCTAssertEqual(GroupStats.unitDelta(entry("mp", card: "base1-4", condition: "MP"), records: noMp),
+                       noMp[0])
+    }
+
+    func testUnitDeltaMatrixBeatsCondition() {
+        // printing×condition matrix cell wins over the flattened condition delta (parity with unitPrice).
+        let records = [delta(.raw, "", pct1d: 1),
+                       delta(.condition, "Lightly Played", pct1d: 5),
+                       delta(.matrix, "1st Edition Holofoil|Lightly Played", pct1d: 12),
+                       delta(.printing, "1st Edition Holofoil", pct1d: 3)]
+        XCTAssertEqual(
+            GroupStats.unitDelta(entry("m", card: "base1-4", variant: .firstEdition, condition: "LP"), records: records),
+            records[2])
+        // No matrix cell for this printing → condition delta.
+        let noMatrix = [records[0], records[1], records[3]]
+        XCTAssertEqual(
+            GroupStats.unitDelta(entry("m2", card: "base1-4", variant: .firstEdition, condition: "LP"), records: noMatrix),
+            noMatrix[1])
+    }
+
+    func testUnitDeltaGradedAndVariantAndRawFallbacks() {
+        let records = [delta(.raw, "", pct1d: 1),
+                       delta(.psa, "10", pct1d: 20),
+                       delta(.printing, "Reverse Holofoil", pct1d: 7)]
+        // Graded → PSA grade delta, ignoring condition/variant.
+        XCTAssertEqual(GroupStats.unitDelta(entry("g", card: "swsh7-215", grade: "psa10", variant: .reverseHolo),
+                                            records: records), records[1])
+        // NM + variant, no matrix/condition rows → the owned printing's delta.
+        XCTAssertEqual(GroupStats.unitDelta(entry("rev", card: "swsh7-215", variant: .reverseHolo, condition: "NM"),
+                                            records: records), records[2])
+        // Nothing matches → raw.
+        XCTAssertEqual(GroupStats.unitDelta(entry("plain", card: "swsh7-215", variant: .holo, condition: "NM"),
+                                            records: records), records[0])
+    }
+
     func testSetCompletionCountsDistinctNumbers() {
         let setCards = [
             CardRecord(id: "swsh7-215", setId: "swsh7", number: "215", name: "Rayquaza VMAX", hp: 320,

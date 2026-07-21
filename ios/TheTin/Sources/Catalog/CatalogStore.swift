@@ -6,14 +6,19 @@ import GRDB
 final class CatalogStore {
     private let path: String
     private let lock = NSLock()
-    private var queue: DatabaseQueue
+    // DatabasePool, not DatabaseQueue: the artifact is WAL, so a pool lets main-thread reads (a set
+    // tap's synchronous SetDetailModel.init reads, list bodies) run CONCURRENTLY with a detached
+    // DiscoverModel.assemble read or a background price-delta write, instead of serializing behind
+    // them. A serial DatabaseQueue on a WAL file made a long background query block the main thread
+    // → multi-second UI freeze on tapping a set (fix 2026-07-21). Readers never block on the writer.
+    private var queue: DatabasePool
     /// Lock-guarded: `reopen` swaps the handle on the main actor while detached readers
     /// (DiscoverModel.assemble, widget snapshots) fetch it concurrently.
-    var dbQueue: DatabaseQueue { lock.withLock { queue } }
+    var dbQueue: DatabasePool { lock.withLock { queue } }
 
     init(path: String) throws {
         self.path = path
-        queue = try DatabaseQueue(path: path)
+        queue = try DatabasePool(path: path)
     }
 
     func close() throws { try dbQueue.close() }
@@ -23,7 +28,7 @@ final class CatalogStore {
     /// never rebuilt mid-session, so a replacement instance leaves them querying a closed handle
     /// (the dead Discover tab after a daily update).
     func reopen() throws {
-        let fresh = try DatabaseQueue(path: path)
+        let fresh = try DatabasePool(path: path)
         let stale = lock.withLock {
             let old = queue
             queue = fresh
@@ -744,6 +749,6 @@ extension CatalogStore {
     }
 }
 
-// GRDB's DatabaseQueue is internally synchronized and safe to use across threads, so the
+// GRDB's DatabasePool is internally synchronized and safe to use across threads, so the
 // read-only CatalogStore can be handed to a detached feed-build task (DiscoverModel).
 extension CatalogStore: @unchecked Sendable {}

@@ -280,18 +280,10 @@ struct GroupDetailView: View {
         }
     }
 
-    /// The delta matching what this entry actually is (spec 2026-07-18): a graded copy tracks its
-    /// grade, an ungraded copy its printing when that printing has a delta, else the raw market.
+    /// The delta matching what this entry actually is — resolved by the same ladder as its value
+    /// (`GroupStats.unitPrice`) so the change tracks the price the row shows, not the raw market.
     private func deltaRecord(_ entry: CollectionEntry) -> DeltaRecord? {
-        let records = model.deltasByCard[entry.cardId] ?? []
-        if let grade = entry.gradeValue {
-            return records.first { $0.kind == .psa && $0.key == String(grade.numeric) }
-        }
-        if let variant = entry.variantValue,
-           let printing = records.first(where: { $0.kind == .printing && variant.matches(printing: $0.key) }) {
-            return printing
-        }
-        return records.first { $0.kind == .raw }
+        GroupStats.unitDelta(entry, records: model.deltasByCard[entry.cardId] ?? [])
     }
 
     private func sortedAll(_ entries: [CollectionEntry]) -> [CollectionEntry] {
