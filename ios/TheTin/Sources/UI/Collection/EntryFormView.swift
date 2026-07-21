@@ -112,14 +112,22 @@ struct EntryFormView: View {
         .onAppear(perform: populate)
     }
 
-    /// Printings the picker offers: only the finishes the catalog's `price_by_variant` actually
-    /// names for this card — a card never sold as 1st Edition shouldn't offer it. The saved
-    /// entry's finish is always kept so editing never silently rewrites what the user recorded.
-    /// No variant rows at all ⇒ the full list (no data ≠ doesn't exist; minimal tiers).
-    static func validVariants(catalog: [VariantPrice], current: CardVariant?) -> [CardVariant] {
+    /// The finishes the catalog's `price_by_variant` actually names for this card — a card never
+    /// sold as 1st Edition shouldn't offer it. No variant rows at all ⇒ the full list (no data ≠
+    /// doesn't exist; minimal tiers). Unlike `validVariants` this does NOT fold in a current
+    /// selection, so callers can tell whether a given finish is genuinely offered.
+    static func offeredVariants(catalog: [VariantPrice]) -> [CardVariant] {
         let backed = CardVariant.allCases.filter { v in catalog.contains { v.matches(printing: $0.printing) } }
-        guard !backed.isEmpty else { return CardVariant.allCases }
-        return CardVariant.allCases.filter { backed.contains($0) || $0 == current }
+        return backed.isEmpty ? CardVariant.allCases : backed
+    }
+
+    /// Printings the picker offers: the offered finishes plus the saved/selected finish, so
+    /// editing never silently rewrites what the user recorded even if the catalog no longer
+    /// names it.
+    static func validVariants(catalog: [VariantPrice], current: CardVariant?) -> [CardVariant] {
+        let offered = offeredVariants(catalog: catalog)
+        guard let current else { return offered }
+        return CardVariant.allCases.filter { offered.contains($0) || $0 == current }
     }
 
     /// "Reverse Holo · $140" when that printing is priced, else just the finish name.

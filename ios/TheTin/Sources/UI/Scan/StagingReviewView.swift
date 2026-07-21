@@ -135,6 +135,16 @@ struct StagingReviewView: View {
         // Old-artifact fallback per store convention (matrix/graded reads throw pre-migration).
         matrixByCard = (try? store.matrixPrices(cardIds: ids)) ?? [:]
         gradedByPrintingByCard = (try? store.gradedPrintingPrices(cardIds: ids)) ?? [:]
+        // The scan-time variant is a blind defaultFor(rarity:) guess and can name a finish the
+        // card isn't actually printed in (Tomas, 2026-07-21: Tyranitar δ defaulted to Regular but
+        // only comes in Holo/Reverse Holo). Now that the real printings are loaded, snap any such
+        // draft to the first finish it IS offered in, so the row shows a real finish + real price.
+        for d in staging.drafts {
+            let offered = EntryFormView.offeredVariants(catalog: v[d.cardId] ?? [])
+            if !offered.contains(d.variant), let first = offered.first {
+                staging.updateVariant(id: d.id, first)
+            }
+        }
         pricesLoaded = true
         repriceAll()
     }
