@@ -51,6 +51,7 @@ final class ScanSession {
     private var missStreak = 0   // consecutive no-card frames (grace against transient dropouts)
     private var presentFrames = 0   // heavy frames since acquisition (drives the chooser deadline)
     private var suppressed: Set<String> = []
+    private var chooserPending = false   // a chooser is on screen — freeze all frames until resolved
 
     init(config: LockConfig = LockConfig()) { self.config = config }
 
@@ -59,7 +60,7 @@ final class ScanSession {
     /// Latch as if a lock occurred — used when the user manually resolves an `.ambiguous`
     /// chooser, so the same physical card cannot auto-lock again until it leaves the frame
     /// or a different card takes its place (swap release).
-    func acknowledge(cardId: String) { locked = true; lockedCardId = cardId }
+    func acknowledge(cardId: String) { locked = true; lockedCardId = cardId; chooserPending = false }
 
     /// "None of these — keep scanning": drop the frozen chooser and start over on whatever is
     /// under the camera. Deliberately does NOT suppress the shown options — a shown option may
@@ -69,17 +70,22 @@ final class ScanSession {
     private func resetAccumulation() {
         accum.removeAll(); leader = nil; leaderStreak = 0
         locked = false; lockedCardId = nil; swapStreak = 0; presentFrames = 0
+        chooserPending = false
     }
 
     /// Surface a frozen chooser: options must not reshuffle while the user decides, so every
     /// chooser latches like a lock (Tomas, 2026-07-15). The swap-release path frees the latch
     /// when the user moves on to a different card without picking.
     private func chooser(_ ranked: [(key: String, value: Int)]) -> ScanEvent {
-        locked = true; lockedCardId = ranked.first?.key
+        locked = true; lockedCardId = ranked.first?.key; chooserPending = true
         return .ambiguous(ranked.prefix(4).map { $0.key })
     }
 
     func ingest(_ obs: FrameObservation) -> ScanEvent {
+        // A chooser is modal (Tomas, 2026-07-21): once shown it must stay until the user picks a
+        // tile (acknowledge) or "None of these" (dismissChooser). Ignore every frame meanwhile so
+        // no swap-release / .guide / card-removal can dismiss it out from under the decision.
+        if chooserPending { return .idle }
         if !obs.cardPresent {
             // Tolerate brief detector dropouts: a hand-held card at live frame rate flickers
             // out of Vision's rectangle detector for the odd frame, and resetting on every

@@ -98,6 +98,25 @@ final class ScanSessionTests: XCTestCase {
         XCTAssertEqual(s.ingest(obs([("c", 60), ("a", 5)])), .idle)
     }
 
+    // A shown chooser is MODAL (Tomas, 2026-07-21): neither a sustained run of a DIFFERENT
+    // strong card (swap-release) nor the card leaving the frame (grace) may dismiss it — only
+    // the user picking a tile or "None of these" resolves it. Regression for the reported
+    // "chooser flashes up then vanishes before I can tap it".
+    func testChooserStaysModalUntilUserResolves() {
+        let s = ScanSession()
+        _ = s.ingest(obs([("a", 40), ("b", 38)]))
+        _ = s.ingest(obs([("a", 40), ("b", 38)]))
+        XCTAssertEqual(s.ingest(obs([("a", 40), ("b", 38)])), .ambiguous(["a", "b"]))
+        // A different strong card dominates well past stabilityK — old code swap-released here.
+        for _ in 0..<6 { XCTAssertEqual(s.ingest(obs([("c", 60)])), .idle) }
+        // Card leaves the frame well past graceMisses — must still not dismiss the chooser.
+        for _ in 0..<15 { XCTAssertEqual(s.ingest(obs([], 0.0, present: false)), .idle) }
+        // Only an explicit resolution frees it; scanning then resumes and can lock again.
+        s.dismissChooser()
+        _ = s.ingest(obs([("a", 40), ("b", 5)])); _ = s.ingest(obs([("a", 40), ("b", 5)]))
+        XCTAssertEqual(s.ingest(obs([("a", 40), ("b", 5)])), .lock(cardId: "a"))
+    }
+
     // ~7s without a lock (chooserDeadlineFrames heavy frames) forces the best-4 chooser and
     // freezes it — the user decides instead of the scanner spinning forever.
     func testScanDeadlineForcesChooserAndFreezes() {

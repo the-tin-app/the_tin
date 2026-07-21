@@ -27,6 +27,7 @@ struct StagingReviewView: View {
             Section {
                 ForEach(staging.drafts) { draft in
                     DraftRow(draft: draft, store: store,
+                             variantPrices: variantsByCard[draft.cardId] ?? [],
                              onVariant: { staging.updateVariant(id: draft.id, $0); repriceAll() },
                              onCondition: { staging.updateCondition(id: draft.id, $0); repriceAll() },
                              onRemove: { staging.remove(id: draft.id) },
@@ -158,6 +159,7 @@ struct StagingReviewView: View {
 private struct DraftRow: View {
     let draft: ScanDraft
     let store: CatalogStore
+    let variantPrices: [VariantPrice]   // card's real PPT printings — filters the finish picker
     let onVariant: (CardVariant) -> Void
     let onCondition: (CardCondition) -> Void
     let onRemove: () -> Void
@@ -182,7 +184,9 @@ private struct DraftRow: View {
                 // narrow rows; approved mockup option A, CTA wording "File in…".
                 HStack(spacing: 16) {
                     Menu {
-                        ForEach(CardVariant.allCases) { v in Button(v.label) { onVariant(v) } }
+                        ForEach(EntryFormView.validVariants(catalog: variantPrices, current: draft.variant)) {
+                            v in Button(v.label) { onVariant(v) }
+                        }
                     } label: { menuLabel(draft.variant.label) }
                     Menu {
                         ForEach(CardCondition.allCases) { c in Button(c.rawValue) { onCondition(c) } }
