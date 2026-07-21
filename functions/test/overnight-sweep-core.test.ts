@@ -27,6 +27,7 @@ function ledger(): OvernightLedger {
 }
 const pricesRaw = {
   primaryPrinting: "Holofoil",
+  low: 77,
   variants: {
     Holofoil: {
       "Near Mint": { price: 95 },
@@ -196,11 +197,46 @@ describe("runOvernightSweep", () => {
 
   it("no liquidity fields → no phantom write; empty ebay → no graded_sales rows", async () => {
     const db = freshDb();
-    const s = await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    // pricesRaw carries `low` (for the low_usd test below), so this "no liquidity fields" case
+    // needs its own pricesRaw with sellers/listings/low all absent.
+    const pricesRawNoLiquidity = { primaryPrinting: pricesRaw.primaryPrinting, variants: pricesRaw.variants };
+    const c = { ...client, getSetEnrichment: async () => {
+      const [row] = await client.getSetEnrichment();
+      return [{ ...row, pricesRaw: pricesRawNoLiquidity }];
+    } };
+    const s = await runOvernightSweep(db as any, c as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
     expect(s.liquidityRows).toBe(0);
     expect(s.gradedSalesRows).toBe(0);
-    const row = db.prepare("SELECT sellers, listings FROM price_latest WHERE card_id='base-4'").get() as any;
-    expect(row).toEqual({ sellers: null, listings: null });
+    const row = db.prepare("SELECT sellers, listings, low_usd FROM price_latest WHERE card_id='base-4'").get() as any;
+    expect(row).toEqual({ sellers: null, listings: null, low_usd: null });
     expect(db.prepare("SELECT COUNT(*) FROM graded_sales").pluck().get()).toBe(0);
+  });
+
+  it("writes prices.low into price_latest.low_usd", async () => {
+    const db = freshDb();
+    const s = await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(s.liquidityRows).toBeGreaterThan(0);
+    const low = db.prepare("SELECT low_usd FROM price_latest WHERE card_id='base-4'").pluck().get();
+    expect(low).toBe(77);
+  });
+
+  it("rolls up per-condition volume into price_by_condition.sales_count", async () => {
+    const db = freshDb();
+    const c = { ...client, getSetEnrichment: async () => ([{
+      tcgPlayerId: 111, cardNumber: "4", name: "Charizard",
+      priceHistory: { conditions: {
+        "Near Mint": { history: [
+          { date: "2026-07-02T00:00:00Z", market: 100, volume: 4 },
+          { date: "2026-06-20T00:00:00Z", market: 100, volume: 3 },
+          { date: "2026-01-01T00:00:00Z", market: 90,  volume: 50 }, // >90d before asOf 2026-07-08
+        ] },
+        "Damaged": { history: [{ date: "2026-07-01T00:00:00Z", market: 1, volume: 0 }] }, // 0 → no row update
+      } },
+      pricesRaw, gradedLatest: {}, gradedSeries: [], ebayRaw: {},
+    }]) };
+    const s = await runOvernightSweep(db as any, c as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(s.condSalesRows).toBe(1);
+    const nm = db.prepare("SELECT sales_count FROM price_by_condition WHERE card_id='base-4' AND condition='Near Mint'").pluck().get();
+    expect(nm).toBe(7);
   });
 });

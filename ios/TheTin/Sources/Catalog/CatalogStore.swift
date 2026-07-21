@@ -149,16 +149,18 @@ final class CatalogStore {
     /// Ungraded per-condition market prices for a card, returned in canonical NM→DMG order.
     /// Empty when the card has no `price_by_condition` rows (only ~20k cards are covered).
     func conditionPrices(cardId: String) throws -> [ConditionPrice] {
-        let byCond: [Condition: Double] = try dbQueue.read { db in
-            let rows = try Row.fetchAll(db, sql: "SELECT condition, usd FROM price_by_condition WHERE card_id = ?",
+        let byCond: [Condition: (Double, Int?)] = try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT * FROM price_by_condition WHERE card_id = ?",
                                         arguments: [cardId])
-            return Dictionary(uniqueKeysWithValues: rows.compactMap { row -> (Condition, Double)? in
+            return Dictionary(uniqueKeysWithValues: rows.compactMap { row -> (Condition, (Double, Int?))? in
                 guard let c = Condition(rawValue: row["condition"]) else { return nil }
                 let usd: Double = row["usd"]
-                return (c, usd)
+                return (c, (usd, row["sales_count"]))
             })
         }
-        return Condition.allCases.compactMap { c in byCond[c].map { ConditionPrice(condition: c, usd: $0) } }
+        return Condition.allCases.compactMap { c in
+            byCond[c].map { ConditionPrice(condition: c, usd: $0.0, salesCount: $0.1) }
+        }
     }
 
     /// Batch of `conditionPrices(cardId:)` keyed by card id, canonical NM→DMG order. Throws on a
@@ -167,16 +169,16 @@ final class CatalogStore {
         guard !cardIds.isEmpty else { return [:] }
         let marks = databaseQuestionMarks(count: cardIds.count)
         let rows = try dbQueue.read { db in
-            try Row.fetchAll(db, sql: "SELECT card_id, condition, usd FROM price_by_condition WHERE card_id IN (\(marks))",
+            try Row.fetchAll(db, sql: "SELECT * FROM price_by_condition WHERE card_id IN (\(marks))",
                              arguments: StatementArguments(cardIds))
         }
-        var byCard: [String: [Condition: Double]] = [:]
+        var byCard: [String: [Condition: (Double, Int?)]] = [:]
         for r in rows {
             guard let c = Condition(rawValue: r["condition"]) else { continue }
-            byCard[r["card_id"], default: [:]][c] = r["usd"]
+            byCard[r["card_id"], default: [:]][c] = (r["usd"], r["sales_count"])
         }
         return byCard.mapValues { byCond in
-            Condition.allCases.compactMap { c in byCond[c].map { ConditionPrice(condition: c, usd: $0) } }
+            Condition.allCases.compactMap { c in byCond[c].map { ConditionPrice(condition: c, usd: $0.0, salesCount: $0.1) } }
         }
     }
 
@@ -677,7 +679,7 @@ final class CatalogStore {
                     psa1: r["psa1"], psa2: r["psa2"], psa3: r["psa3"], psa4: r["psa4"],
                     psa5: r["psa5"], psa6: r["psa6"], psa7: r["psa7"], psa8: r["psa8"],
                     psa9: r["psa9"], psa10: r["psa10"],
-                    sellers: r["sellers"], listings: r["listings"], asOf: r["as_of"])
+                    sellers: r["sellers"], listings: r["listings"], lowUsd: r["low_usd"], asOf: r["as_of"])
     }
 }
 
