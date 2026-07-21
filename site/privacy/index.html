@@ -33,18 +33,24 @@
 <main class="doc">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p class="doc-date">Effective July 17, 2026 · Applies to The Tin for iOS</p>
+    <p class="doc-date">Effective July 20, 2026 · Applies to The Tin for iOS</p>
 
     <div class="callout">
       <p><strong>The short version:</strong> The Tin has no account, no analytics, and no
-      tracking. Your collection is stored on your device and never uploaded. The only
-      thing our servers ever see is an anonymous identifier used to deliver card data.
-      The app is open source, so all of this is verifiable, not just promised.</p>
+      tracking. Your collection is stored on your device and never uploaded. What leaves
+      your phone is an anonymous identifier used to deliver card data, and — if the app
+      crashes — an anonymous crash report so we can fix it. The app is open source, so
+      all of this is verifiable, not just promised.</p>
     </div>
 
     <h2>What we collect</h2>
-    <p>Three things, all of them technical necessities:</p>
+    <p>Four things, all of them technical necessities:</p>
     <ul>
+      <li><strong>Crash reports.</strong> If the app crashes, Firebase Crashlytics (a
+      Google service) sends us a report describing the crash: the stack trace, the model
+      of device, the iOS version, and how long the app had been running. It contains no
+      personal information and nothing about your collection — it describes the failure,
+      not you. We use it only to find and fix bugs.</li>
       <li><strong>An anonymous identifier.</strong> On first launch the app signs in
       anonymously with Firebase (a Google service) so it can download card data from a
       backup source. This identifier is a random string; it is not connected to your
@@ -65,7 +71,6 @@
       <li>No name, email address, or account of any kind.</li>
       <li>No analytics, usage statistics, or behavioral data.</li>
       <li>No advertising identifiers — there are no ads.</li>
-      <li>No crash-reporting service harvesting your device details.</li>
       <li><strong>No collection data.</strong> The cards you own, want, scan, or value
       are stored in a database on your device. They are never transmitted to us or to
       anyone else. Camera frames used by the scanner are processed on-device and never
@@ -77,7 +82,7 @@
     processes only the technical data described above:</p>
     <ul>
       <li><strong>Google Firebase</strong> (anonymous authentication, backup content
-      delivery, app integrity) — <a href="https://firebase.google.com/support/privacy">Firebase privacy documentation</a></li>
+      delivery, app integrity, crash reporting) — <a href="https://firebase.google.com/support/privacy">Firebase privacy documentation</a></li>
       <li><strong>Cloudflare</strong> (content delivery for card data) —
       <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare privacy policy</a></li>
       <li><strong>Apple</strong> (App Attest device integrity) —

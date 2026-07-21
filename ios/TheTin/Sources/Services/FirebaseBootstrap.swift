@@ -2,6 +2,7 @@ import Foundation
 import FirebaseAppCheck
 import FirebaseCore
 import FirebaseAuth
+import FirebaseCrashlytics
 
 enum FirebaseMode: Equatable {
     case production
@@ -62,6 +63,13 @@ enum FirebaseBootstrap {
         // Firestore is no longer used by the app (collection + wishlist are on-device; prices
         // ship in the downloaded catalog). Only Auth (anon token) + App Check gate the Storage
         // downloads. See funding-model-v2 migration.
+
+        // Crashlytics self-starts with FirebaseApp.configure() — the only wiring needed is
+        // turning it OFF for debug builds, which have a debugger attached and (in emulator
+        // mode) a fake googleAppID that would post to a project that doesn't exist.
+        #if DEBUG
+        Crashlytics.crashlytics().setCrashlyticsCollectionEnabled(false)
+        #endif
 
         mode = detected
         return detected
