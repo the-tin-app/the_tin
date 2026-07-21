@@ -40,10 +40,17 @@ struct CardRecord: Identifiable, Equatable {
     // attacks column (or non-Pokémon cards) simply have none.
     var attacks: [Attack] = []
 
-    /// Prefer the TCGdex asset base (+ webp variant, e.g. "/high.webp"); otherwise fall back to
-    /// the full mirrored image URL (a TCGplayer-CDN JPEG re-hosted in our bucket); else nil.
+    /// Prefer the TCGdex asset base (+ webp variant, e.g. "/high.webp"). When TCGdex has no art,
+    /// derive the public TCGplayer-CDN image straight from the product id — same CDN sealed products
+    /// use — so we serve nothing ourselves. `imageUrl` is a legacy last resort (older catalogs stored
+    /// a re-hosted URL there; those are dead now, but a non-tcgplayer value would still be honored).
     func imageURL(quality: String) -> URL? {
         if let imageBase { return URL(string: "\(imageBase)/\(quality).webp") }
+        if let tcgplayerId {
+            // ponytail: two proven sizes (200w for grids, 800x800 for detail); add more if needed.
+            let size = quality == "low" ? "200w" : "in_800x800"
+            return URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/\(tcgplayerId)_\(size).jpg")
+        }
         if let imageUrl { return URL(string: imageUrl) }
         return nil
     }
