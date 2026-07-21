@@ -151,7 +151,14 @@ final class ScanModel {
         }
     }
 
-    private func handle(_ event: ScanEvent) async {
+    func handle(_ event: ScanEvent) async {
+        // The chooser is modal (Tomas, 2026-07-21): once options are on screen, ONLY a user tap
+        // (chooseAmbiguous / dismissChooser) may clear them. Ignore every frame event meanwhile —
+        // critically the pipeline's quality-gate `.guide`, which is emitted WITHOUT passing through
+        // ScanSession, so the session's chooserPending latch never sees it. That stray `.guide`
+        // was wiping the chooser after a few blurry/glary frames ("the 4 options went away after
+        // 3-5s"). The first `.ambiguous` still gets through — `ambiguous` is empty at that point.
+        if !ambiguous.isEmpty { return }
         switch event {
         case .idle: break
         case .guide(let g): bestGuess = g; ambiguous = []; guidance = g == nil ? "Scanning…" : "Hold steady"

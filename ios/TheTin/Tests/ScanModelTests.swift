@@ -89,6 +89,39 @@ final class ScanModelTests: XCTestCase {
     /// still passes even if the pipeline forgets to compute+thread the consistency map at all
     /// (ScanSession falls back to visual-only lock when `consistency` is nil). Only a twin-in-
     /// pool assertion proves the map is genuinely threaded end-to-end.
+    // Once a chooser is on screen, NO frame event may clear it — only a user tap. The pipeline's
+    // quality-gate `.guide` is emitted WITHOUT going through ScanSession (so the session's
+    // chooserPending latch never sees it); it was wiping the chooser after a few blurry frames
+    // ("the 4 options went away after 3-5s"). Regression: handle must ignore stray guide/lock
+    // while options are up, and only dismissChooser / chooseAmbiguous clears them.
+    func testChooserIsModalAgainstStrayFrameEvents() async throws {
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(), staging: staging,
+                              store: catalog, fingerThrottle: 1)
+
+        // Put a chooser on screen (the first .ambiguous is allowed — ambiguous is empty here).
+        await model.handle(.ambiguous(["card_a"]))
+        XCTAssertEqual(model.ambiguous.map(\.id), ["card_a"])
+
+        // A quality-gate guide (the pipeline-bypass path) must NOT wipe the chooser…
+        await model.handle(.guide(bestGuess: nil))
+        XCTAssertEqual(model.ambiguous.map(\.id), ["card_a"], "a stray .guide must not dismiss the chooser")
+        // …nor may a stray lock stage a draft or clear it.
+        await model.handle(.lock(cardId: "card_a"))
+        XCTAssertEqual(model.ambiguous.map(\.id), ["card_a"], "a stray .lock must not dismiss the chooser")
+        XCTAssertTrue(staging.drafts.isEmpty, "nothing may stage while the chooser is up")
+
+        // Only a user action resolves it.
+        await model.dismissChooser()
+        XCTAssertTrue(model.ambiguous.isEmpty)
+    }
+
     func testTwinInPoolRoutesToChooserNotLock() async throws {
         let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
         let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
