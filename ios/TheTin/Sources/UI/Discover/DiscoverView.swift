@@ -30,6 +30,9 @@ struct DiscoverView: View {
                            store: store, wants: wants, collection: collection)
             }
         }
+        .navigationDestination(for: BrowseRoute.self) { _ in
+            DiscoverBrowseView(store: store, collection: collection, wants: wants)
+        }
         .task(id: tasteSignalKey) {
             let m = model ?? DiscoverModel(store: store)
             await m.load(ownedIds: (collection?.entries ?? []).map(\.cardId), wantedIds: wants?.wanted ?? [])
@@ -51,6 +54,16 @@ private struct DiscoverHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                NavigationLink(value: BrowseRoute()) {
+                    HStack {
+                        Label("Browse & filter", systemImage: "magnifyingglass")
+                            .font(.title3.bold())
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal)
                 ForEach(DiscoverModel.StreamKind.allCases, id: \.self) { kind in
                     let cards = model.previews[kind] ?? []
                     if !cards.isEmpty {

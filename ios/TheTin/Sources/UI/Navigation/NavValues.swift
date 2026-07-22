@@ -13,3 +13,6 @@ struct WantedRoute: Hashable {}
 
 /// Route to a stream's immersive "See all" page (destination added in Task 13).
 struct StreamRoute: Hashable { let kind: DiscoverModel.StreamKind }
+
+/// Route to the filterable Browse deck.
+struct BrowseRoute: Hashable {}
