@@ -75,4 +75,25 @@ final class PriceAlertsServiceTests: XCTestCase {
             body: "Charizard ex ↓18%, Umbreon VMAX ↑12%, Pikachu ↑10%, …")])
         XCTAssertFalse(alerts[0].body.contains("Snorlax"), "digest names only the top 3")
     }
+
+    // MARK: runAfterInstall (regression: new {id: WantEntry} wants.json format)
+
+    func testRunAfterInstallReadsNewFormatWantsJSON() async throws {
+        // wants.json in the CURRENT {cardId: WantEntry} object format (not the legacy bare id
+        // array) — proves runAfterInstall goes through LocalWantsRepository's shared,
+        // format-aware loader instead of a Set<String>-only decode that silently sees no ids.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let wantsURL = dir.appendingPathComponent("wants.json")
+        try JSONEncoder().encode([FixtureCatalog.knownCardId: WantEntry()]).write(to: wantsURL)
+
+        let snapshotURL = dir.appendingPathComponent("snapshot.json")
+        let service = PriceAlertsService(snapshotURL: snapshotURL, wantsURL: wantsURL)
+        await service.runAfterInstall(version: 1, dbPath: try FixtureCatalog.copyToTemp())
+
+        let snapshot = try JSONDecoder().decode(PriceAlertsService.Snapshot.self,
+                                                 from: Data(contentsOf: snapshotURL))
+        XCTAssertEqual(snapshot.prices[FixtureCatalog.knownCardId], 0.4,
+                       "wished card's price must be captured, proving its id was read from the new format")
+    }
 }

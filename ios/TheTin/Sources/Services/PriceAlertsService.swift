@@ -101,14 +101,14 @@ final class PriceAlertsService {
     /// snapshot is written even while alerts are OFF; only the notify step is gated. Opens its
     /// own read connection (GRDB DatabaseQueue, WAL) so it needs no live AppModel store.
     func runAfterInstall(version: Int, dbPath: String) async {
-        // wants.json is the file LocalWantsRepository maintains — read it directly so
-        // background-launched runs need no @MainActor repository.
-        let wanted = (try? Data(contentsOf: wantsURL))
-            .flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } ?? []
+        // wants.json is the file LocalWantsRepository maintains. Reuse its format-aware loader
+        // (current {id: WantEntry} object, legacy id array) so background runs stay correct
+        // without a @MainActor repository.
+        let wanted = Array(LocalWantsRepository.load(from: wantsURL).keys)
         guard let store = try? CatalogStore(path: dbPath) else { return }
         defer { try? store.close() }
 
-        let newPrices = ((try? store.prices(cardIds: Array(wanted))) ?? [:])
+        let newPrices = ((try? store.prices(cardIds: wanted)) ?? [:])
             .compactMapValues(\.rawUsd)
 
         if AppConfig.priceAlertsEnabled, let old = loadSnapshot() {

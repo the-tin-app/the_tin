@@ -26,7 +26,10 @@ final class LocalWantsRepository: WantsRepository {
     /// encoded). Try the object first, then fall back to the array and migrate each id to a
     /// default `WantEntry`. Missing/garbage file → empty. The two formats never collide: an
     /// array can't decode as a dictionary and vice-versa.
-    nonisolated private static func load(from url: URL) -> [String: WantEntry] {
+    ///
+    /// Shared on-disk wishlist decoder — internal (not `private`) so `PriceAlertsService` can
+    /// reuse it for background runs without a @MainActor repository instance.
+    nonisolated static func load(from url: URL) -> [String: WantEntry] {
         guard let data = try? Data(contentsOf: url) else { return [:] }
         if let dict = try? JSONDecoder().decode([String: WantEntry].self, from: data) { return dict }
         if let ids = try? JSONDecoder().decode([String].self, from: data) {
