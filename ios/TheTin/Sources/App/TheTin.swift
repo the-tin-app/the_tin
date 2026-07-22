@@ -46,6 +46,7 @@ struct TheTin: App {
             RootView(model: model)
                 .preferredColorScheme(appearance.colorScheme)
                 .task { await model.start() }
+                .onOpenURL { model.handleDeepLink($0) }
         }
         .onChange(of: scenePhase) {
             if scenePhase == .background { BackgroundRefresh.scheduleRefresh() }

@@ -30,6 +30,24 @@ final class AppModel {
     /// re-routes even if the first was already consumed.
     private(set) var wishlistRouteToken = 0
     func openWishlist() { wishlistRouteToken += 1 }
+
+    /// Inbound card deep link (`https://thetinapp.com/c/<id>`). RootView watches the token and
+    /// pushes `CardID(pendingCardId)` onto the Tin stack — same pattern as the wishlist route.
+    private(set) var cardRouteToken = 0
+    private(set) var pendingCardId: String?
+
+    func openCard(id: String) {
+        pendingCardId = id
+        cardRouteToken += 1
+    }
+
+    /// Parse a universal link. Only `/c/<id>` routes; anything else is ignored so the web
+    /// pages (home/privacy/support) keep opening in the browser.
+    func handleDeepLink(_ url: URL) {
+        let parts = url.pathComponents   // e.g. ["/", "c", "base1-4"]
+        guard parts.count >= 3, parts[1] == "c", !parts[2].isEmpty else { return }
+        openCard(id: parts[2])
+    }
     /// iCloud backup of the local collection/wishlist. nil in catalog-only unit tests
     /// (`skipFirebase`) — every consumer must tolerate nil.
     private(set) var backup: BackupService?
