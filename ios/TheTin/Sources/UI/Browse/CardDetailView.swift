@@ -21,6 +21,10 @@ final class CardDetailModel {
     private(set) var gradedByPrinting: [GradedPrintingPrice] = []
     let gradedSales: [GradedSale]
     private(set) var population: [PopulationRow] = []
+    /// Population grouped by grading company (PSA/CGC/Beckett/SGC) for the picker-driven section.
+    /// `population` above stays PSA-only — it backs the price-based "Grade it?" ROI, which has no
+    /// non-PSA equivalent (no non-PSA graded prices exist in the catalog).
+    private(set) var populationGroups: [GraderPopulation] = []
     private(set) var deltas: [DeltaRecord] = []
     private(set) var historyState: HistoryState = .loading
     /// The active catalog tier — drives how much price history the chart shows and its empty copy.
@@ -49,6 +53,7 @@ final class CardDetailModel {
         gradedByPrinting = (try? store.gradedPrintingPrices(cardId: card.id)) ?? []
         gradedSales = (try? store.gradedSales(cardId: card.id)) ?? []
         population = (try? store.population(cardId: card.id)) ?? []
+        populationGroups = (try? store.populationByGrader(cardId: card.id)) ?? []
         deltas = (try? store.deltas(cardId: card.id)) ?? []
         if tier == .expert {
             availableConditions = (try? store.availableConditions(cardId: card.id)) ?? []
@@ -106,6 +111,8 @@ struct CardDetailView: View {
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
     @FocusState private var gradingFeeFocused: Bool
     @State private var marketplaceURL: MarketplaceURL?
+    /// Selected grading company in the population section; nil resolves to the first group (PSA).
+    @State private var selectedGrader: String?
 
     /// Identifiable wrapper so `.sheet(item:)` can present a plain URL.
     private struct MarketplaceURL: Identifiable {
@@ -296,28 +303,42 @@ struct CardDetailView: View {
                     gradeItSection(roi)
                 }
 
-                // PSA population — collapsed by default at the bottom; most people don't dig into
-                // grade distributions. The "N graded · X% gem" summary stays on the collapsed row.
-                if !model.population.isEmpty {
+                // Graded population by company — collapsed by default at the bottom; most people
+                // don't dig into grade distributions. PSA/CGC/Beckett/SGC share one section via a
+                // company picker. The collapsed "N graded · X% gem" summary tracks the selection.
+                if !model.populationGroups.isEmpty {
+                    let selected = model.populationGroups.first { $0.grader == selectedGrader }
+                        ?? model.populationGroups[0]
                     DisclosureGroup {
-                        let maxCount = max(model.population.map(\.count).max() ?? 1, 1)
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(model.population) { row in
-                                PopulationBar(grade: row.displayGrade, count: row.count, maxCount: maxCount)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if model.populationGroups.count > 1 {
+                                Picker("Grader", selection: Binding(get: { selected.grader },
+                                                                    set: { selectedGrader = $0 })) {
+                                    ForEach(model.populationGroups) { g in
+                                        Text(Self.companyLabel(g.grader)).tag(g.grader)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
                             }
-                            if currentPrinting != nil {
-                                Text("Population counts are for the card overall — graders don't split printings here.")
-                                    .font(.caption2).foregroundStyle(.tertiary)
+                            let maxCount = max(selected.rows.map(\.count).max() ?? 1, 1)
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(selected.rows) { row in
+                                    PopulationBar(grade: row.displayGrade, count: row.count, maxCount: maxCount)
+                                }
+                                if currentPrinting != nil {
+                                    Text("Population counts are for the card overall — graders don't split printings here.")
+                                        .font(.caption2).foregroundStyle(.tertiary)
+                                }
                             }
                         }
                         .padding(.top, 6)
                     } label: {
                         HStack(spacing: 8) {
-                            Text("PSA Population").font(.headline)
-                            if let total = model.population.first?.totalPopulation {
+                            Text("Population").font(.headline)
+                            if let total = selected.totalPopulation {
                                 Text("\(total) graded").font(.caption).foregroundStyle(.secondary)
                             }
-                            if let gem = model.population.first?.gemRate {
+                            if let gem = selected.gemRate {
                                 Text("· \(gem, format: .percent.precision(.fractionLength(0))) gem")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
@@ -528,6 +549,12 @@ struct CardDetailView: View {
         let value: Double
         let isEstimate: Bool
         var id: String { label }
+    }
+
+    /// Display name for a grading company. The catalog stores "BECKETT" upper-cased; the rest
+    /// (PSA/CGC/SGC) are acronyms that already read correctly.
+    private static func companyLabel(_ grader: String) -> String {
+        grader == "BECKETT" ? "Beckett" : grader
     }
 
     private static func gradeRows(_ roi: GradingROI) -> [GradeRow] {
