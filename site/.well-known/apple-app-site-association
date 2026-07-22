@@ -1,0 +1,10 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["GXP2X83CRN.ai.reyes.thetin"],
+        "components": [{ "/": "/c/*" }]
+      }
+    ]
+  }
+}
