@@ -64,7 +64,7 @@ final class BackupServiceTests: XCTestCase {
         let gid = try await col.createGroup(name: "Binder")
         let entry = fixtureEntry(id: "e1", groupId: gid)
         try await col.addEntry(entry)
-        try await wants.setWanted(uid: "local", cardId: "sv1-25", wanted: true)
+        try await wants.save(uid: "local", entries: ["sv1-25": WantEntry()])
 
         let service = makeService(collection: col, wants: wants)
         await service.backUpNow()
@@ -117,7 +117,7 @@ final class BackupServiceTests: XCTestCase {
         let gid = try await colA.createGroup(name: "Binder")
         let entry = fixtureEntry(id: "e1", groupId: gid)
         try await colA.addEntry(entry)
-        try await wantsA.setWanted(uid: "local", cardId: "sv1-25", wanted: true)
+        try await wantsA.save(uid: "local", entries: ["sv1-25": WantEntry()])
         await makeService(collection: colA, wants: wantsA).backUpNow()
 
         // Empty "device B": the launch check offers the restore.
@@ -132,10 +132,10 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertNil(serviceB.restoreOffer)
         let groups = await firstValue(colB.groupsStream()) ?? []
         let entries = await firstValue(colB.entriesStream()) ?? []
-        let wanted = await firstValue(wantsB.stream(uid: "local")) ?? []
+        let wanted = await firstValue(wantsB.stream(uid: "local")) ?? [:]
         XCTAssertEqual(groups.map(\.id), [gid])
         XCTAssertEqual(entries, [entry])
-        XCTAssertEqual(wanted, ["sv1-25"])
+        XCTAssertEqual(Set(wanted.keys), ["sv1-25"])
 
         // Non-empty "device C0": never offered.
         let (colC0, wantsC0) = try makeRepos(sub: "deviceC0")

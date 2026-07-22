@@ -192,7 +192,7 @@ final class BackupService {
         var wanted: Set<String> = []
         for await v in collection.groupsStream() { groups = v; break }
         for await v in collection.entriesStream() { entries = v; break }
-        for await v in wants.stream(uid: uid) { wanted = v; break }
+        for await v in wants.stream(uid: uid) { wanted = Set(v.keys); break }
         return BackupSnapshot(exportedAt: now(), groups: groups, entries: entries,
                               wanted: wanted.sorted())
     }
@@ -266,7 +266,8 @@ final class BackupService {
     /// Throws BackupError so the manual Settings path can surface what went wrong.
     func performRestore(snapshot: BackupSnapshot) async throws {
         try await collection.replaceAll(groups: snapshot.groups, entries: snapshot.entries)
-        try await wants.replaceAll(uid: uid, wanted: Set(snapshot.wanted))
+        try await wants.save(uid: uid, entries:
+            Dictionary(uniqueKeysWithValues: snapshot.wanted.map { ($0, WantEntry()) }))
     }
 
     private func currentCounts() async -> (entries: Int, wants: Int) {
