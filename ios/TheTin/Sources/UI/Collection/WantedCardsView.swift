@@ -17,32 +17,44 @@ struct WantedCardsView: View {
 
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
 
-    private var allCards: [CardRecord] { (try? store.cards(ids: Array(wants.wanted))) ?? [] }
-    private var priceRecords: [String: PriceRecord] {
-        (try? store.prices(cardIds: allCards.map(\.id))) ?? [:]
+    /// Bundles every store-backed read resolved once per `body` evaluation, so search/sort/group
+    /// changes don't re-trigger O(N) SQLite reads per card.
+    private struct Resolved {
+        var allCards: [CardRecord]
+        var priceRecords: [String: PriceRecord]
+        var rawUsd: [String: Double]
+        var setsById: [String: SetRecord]
     }
-    // compactMapValues: a null raw_usd (EUR/graded only) is treated as unpriced, not $0.
-    private var rawUsd: [String: Double] { priceRecords.compactMapValues(\.rawUsd) }
-    private var setsById: [String: SetRecord] {
-        Dictionary(uniqueKeysWithValues: ((try? store.sets()) ?? []).map { ($0.id, $0) })
+
+    private var resolved: Resolved {
+        let allCards = (try? store.cards(ids: Array(wants.wanted))) ?? []
+        let priceRecords = (try? store.prices(cardIds: allCards.map(\.id))) ?? [:]
+        let setsById = Dictionary(uniqueKeysWithValues: ((try? store.sets()) ?? []).map { ($0.id, $0) })
+        // compactMapValues: a null raw_usd (EUR/graded only) is treated as unpriced, not $0.
+        return Resolved(allCards: allCards, priceRecords: priceRecords,
+                         rawUsd: priceRecords.compactMapValues(\.rawUsd), setsById: setsById)
     }
 
     /// Search filter, then chosen sort.
-    private var cards: [CardRecord] {
-        let base = search.isEmpty ? allCards
-            : allCards.filter { $0.name.localizedCaseInsensitiveContains(search) }
-        return WishlistGrid.sorted(cards: base, entries: wants.entries, prices: rawUsd,
-                                   setDates: setsById.mapValues { $0.releaseDate ?? "" }, by: sort)
+    private func displayed(_ r: Resolved) -> [CardRecord] {
+        let base = search.isEmpty ? r.allCards
+            : r.allCards.filter { $0.name.localizedCaseInsensitiveContains(search) }
+        return WishlistGrid.sorted(cards: base, entries: wants.entries, prices: r.rawUsd,
+                                   setDates: r.setsById.mapValues { $0.releaseDate ?? "" }, by: sort)
     }
 
-    private var totalUsd: Double { allCards.compactMap { rawUsd[$0.id] }.reduce(0, +) }
-    private var atTargetCount: Int {
-        allCards.filter { WishlistGrid.isOnSale($0, entry: wants.entry($0.id), price: rawUsd[$0.id]) }.count
+    private func totalUsd(_ r: Resolved) -> Double {
+        r.allCards.compactMap { r.rawUsd[$0.id] }.reduce(0, +)
+    }
+    private func atTargetCount(_ r: Resolved) -> Int {
+        r.allCards.filter { WishlistGrid.isOnSale($0, entry: wants.entry($0.id), price: r.rawUsd[$0.id]) }.count
     }
 
     var body: some View {
+        let r = resolved
+        let displayedCards = displayed(r)
         Group {
-            if allCards.isEmpty {
+            if r.allCards.isEmpty {
                 ContentUnavailableView {
                     Label { Text("Your wishlist is empty") }
                     icon: { Image(systemName: "heart").foregroundStyle(.pink) }
@@ -50,13 +62,17 @@ struct WantedCardsView: View {
                     Text("Tap the heart on any card to start hunting for it here.")
                 }
             } else {
-                ScrollView { content }
+                ScrollView { content(r, displayedCards) }
             }
         }
         .navigationTitle("Wishlist")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Search wishlist")
-        .toolbar { sortMenu; exportButton; printButton }
+        .toolbar {
+            sortMenu(disabled: r.allCards.isEmpty)
+            exportButton(r: r, cards: displayedCards)
+            printButton(cards: displayedCards, disabled: r.allCards.isEmpty)
+        }
         .fileExporter(isPresented: Binding(get: { exportDoc != nil },
                                            set: { if !$0 { exportDoc = nil } }),
                       document: exportDoc, contentType: .commaSeparatedText,
@@ -65,17 +81,17 @@ struct WantedCardsView: View {
         }
         .printSheetFlow($printRequest)
         .sheet(item: $editing) { card in
-            WishlistEditSheet(card: card, price: rawUsd[card.id], wants: wants)
+            WishlistEditSheet(card: card, price: r.rawUsd[card.id], wants: wants)
         }
     }
 
-    @ViewBuilder private var content: some View {
-        header
+    @ViewBuilder private func content(_ r: Resolved, _ cards: [CardRecord]) -> some View {
+        header(r)
         if groupBySet {
-            let grouped = groupedBySet(cards)
+            let grouped = groupedBySet(cards, setsById: r.setsById)
             ForEach(grouped, id: \.setId) { section in
                 Section {
-                    grid(section.cards)
+                    grid(section.cards, rawUsd: r.rawUsd)
                 } header: {
                     Text(section.name).font(.headline)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -83,18 +99,20 @@ struct WantedCardsView: View {
                 }
             }
         } else {
-            grid(cards)
+            grid(cards, rawUsd: r.rawUsd)
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
+    private func header(_ r: Resolved) -> some View {
+        let total = totalUsd(r)
+        let atTarget = atTargetCount(r)
+        return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Text("\(allCards.count) cards")
+                Text("\(r.allCards.count) cards")
                 Text("·").foregroundStyle(.secondary)
-                Text(totalUsd, format: .currency(code: "USD")).monospacedDigit()
-                if atTargetCount > 0 {
-                    Text("· \(atTargetCount) at target")
+                Text(total, format: .currency(code: "USD")).monospacedDigit()
+                if atTarget > 0 {
+                    Text("· \(atTarget) at target")
                         .foregroundStyle(.green).font(.caption).bold()
                 }
             }
@@ -105,7 +123,7 @@ struct WantedCardsView: View {
         .padding(.horizontal).padding(.top, 8)
     }
 
-    private func grid(_ cards: [CardRecord]) -> some View {
+    private func grid(_ cards: [CardRecord], rawUsd: [String: Double]) -> some View {
         LazyVGrid(columns: columns, spacing: 12) {
             ForEach(cards) { card in
                 NavigationLink(value: CardID(raw: card.id)) {
@@ -124,7 +142,7 @@ struct WantedCardsView: View {
         }.padding()
     }
 
-    private func groupedBySet(_ cards: [CardRecord]) -> [(setId: String, name: String, cards: [CardRecord])] {
+    private func groupedBySet(_ cards: [CardRecord], setsById: [String: SetRecord]) -> [(setId: String, name: String, cards: [CardRecord])] {
         var order: [String] = []
         var byId: [String: [CardRecord]] = [:]
         for c in cards {
@@ -134,7 +152,7 @@ struct WantedCardsView: View {
         return order.map { ($0, setsById[$0]?.name ?? $0, byId[$0] ?? []) }
     }
 
-    @ToolbarContentBuilder private var sortMenu: some ToolbarContent {
+    @ToolbarContentBuilder private func sortMenu(disabled: Bool) -> some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Menu {
                 Picker("Sort", selection: $sort) {
@@ -144,27 +162,27 @@ struct WantedCardsView: View {
             } label: {
                 Label("Sort", systemImage: "arrow.up.arrow.down")
             }
-            .disabled(allCards.isEmpty)
+            .disabled(disabled)
         }
     }
 
-    @ToolbarContentBuilder private var exportButton: some ToolbarContent {
+    @ToolbarContentBuilder private func exportButton(r: Resolved, cards: [CardRecord]) -> some ToolbarContent {
         ToolbarItem {
             Button {
                 exportDoc = CSVDocument(data: CollectionCSV.exportWishlist(
-                    cards: cards, sets: setsById, prices: priceRecords, entries: wants.entries))
+                    cards: cards, sets: r.setsById, prices: r.priceRecords, entries: wants.entries))
             } label: { Image(systemName: "square.and.arrow.up") }
             .accessibilityLabel("Export wishlist (CSV)")
-            .disabled(allCards.isEmpty)
+            .disabled(r.allCards.isEmpty)
         }
     }
 
-    @ToolbarContentBuilder private var printButton: some ToolbarContent {
+    @ToolbarContentBuilder private func printButton(cards: [CardRecord], disabled: Bool) -> some ToolbarContent {
         ToolbarItem {
             Button { printRequest = PrintSheet.wantRequest(cards: cards, store: store) } label: {
                 Label("Print want list…", systemImage: "printer")
             }
-            .disabled(allCards.isEmpty)
+            .disabled(disabled)
         }
     }
 }
