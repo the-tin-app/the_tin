@@ -26,6 +26,7 @@ final class CatalogStoreBrowseTests: XCTestCase {
             INSERT INTO price_latest VALUES ('swsh1-1',25.0,20.0,'2026-07-06');
             INSERT INTO price_delta VALUES ('sv1-2','raw','',-2.0,-12.0,-20.0); -- a deal (7d < -5)
             INSERT INTO price_delta VALUES ('sv1-1','raw','',1.0,3.0,4.0);       -- not a deal
+            INSERT INTO price_delta VALUES ('swsh1-1','raw','',-1.0,NULL,-5.0); -- has raw delta row but NULL 7d
             """)
         }
         try q.close()
@@ -90,5 +91,13 @@ final class CatalogStoreBrowseTests: XCTestCase {
     func testDistinctErasNewestFirst() throws {
         let store = try makeStore()
         XCTAssertEqual(try store.distinctEras(), ["Scarlet & Violet", "Sword & Shield"]) // 2023 before 2020
+    }
+
+    func testBiggestDropExcludesNull7d() throws {
+        let store = try makeStore()
+        var c = BrowseCriteria(); c.sort = .biggestDrop
+        let ids = try store.browse(criteria: c, ownedIds: [], offset: 0, limit: 50).map(\.id)
+        XCTAssertFalse(ids.contains("swsh1-1"), "cards with NULL pct_7d must not rank in biggest-drop")
+        XCTAssertEqual(ids.first, "sv1-2", "most-negative pct_7d ranks first")
     }
 }

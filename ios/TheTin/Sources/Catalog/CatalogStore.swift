@@ -629,6 +629,7 @@ final class CatalogStore {
         if let minP = criteria.minPrice { wheres.append("p.raw_usd >= ?"); args.append(minP) }
         if let maxP = criteria.maxPrice { wheres.append("p.raw_usd <= ?"); args.append(maxP) }
         if criteria.dealsOnly { wheres.append("d.pct_7d < ?"); args.append(DiscoverConstants.dealsMaxPct7d) }
+        if criteria.sort == .biggestDrop { wheres.append("d.pct_7d IS NOT NULL") }
         if criteria.hideOwned, !ownedIds.isEmpty {
             wheres.append("c.id NOT IN (\(databaseQuestionMarks(count: ownedIds.count)))")
             args.append(contentsOf: ownedIds.map { $0 })
