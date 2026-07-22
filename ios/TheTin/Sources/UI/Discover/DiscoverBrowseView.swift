@@ -37,7 +37,7 @@ struct DiscoverBrowseView: View {
             }
     }
 
-    /// "Rarity · Generation" under each card, whichever parts exist.
+    /// "Rarity · Series" under each card, whichever parts exist.
     private func caption(_ card: CardRecord) -> String? {
         let era = (try? store.set(id: card.setId))?.era
         let parts = [card.rarity, era].compactMap { $0 }.filter { !$0.isEmpty }

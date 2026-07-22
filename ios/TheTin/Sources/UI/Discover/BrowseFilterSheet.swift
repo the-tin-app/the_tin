@@ -46,7 +46,8 @@ struct BrowseFilterSheet: View {
                     Toggle("Hide cards I own", isOn: $criteria.hideOwned)
                 }
 
-                multiSelect("Generation", options: eras, selection: $criteria.eras)
+                multiSelect("Series", options: eras, selection: $criteria.eras)
+                regionSelect()
                 multiSelect("Rarity", options: rarityOptions, selection: $criteria.rarities)
                 multiSelect("Type", options: DiscoverConstants.energyTypes, selection: $criteria.types)
 
@@ -121,6 +122,27 @@ struct BrowseFilterSheet: View {
                         Text(option).foregroundStyle(.primary)
                         Spacer()
                         if selection.wrappedValue.contains(option) {
+                            Image(systemName: "checkmark").foregroundStyle(.tint)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Region multi-select, backed by a `Set<Int>` of generation numbers (checkmark = selected).
+    /// Parallel to `multiSelect` but Int-keyed, since regions persist by generation not by name.
+    private func regionSelect() -> some View {
+        Section("Region") {
+            ForEach(PokemonRegion.all) { region in
+                Button {
+                    if criteria.regions.contains(region.gen) { criteria.regions.remove(region.gen) }
+                    else { criteria.regions.insert(region.gen) }
+                } label: {
+                    HStack {
+                        Text(region.label).foregroundStyle(.primary)
+                        Spacer()
+                        if criteria.regions.contains(region.gen) {
                             Image(systemName: "checkmark").foregroundStyle(.tint)
                         }
                     }

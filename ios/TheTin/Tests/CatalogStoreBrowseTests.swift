@@ -13,6 +13,7 @@ final class CatalogStoreBrowseTests: XCTestCase {
             CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT, number TEXT, name TEXT, hp INTEGER, types TEXT, rarity TEXT, artist TEXT, image_base TEXT, image_url TEXT, tcgplayer_id INTEGER, attacks TEXT);
             CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL, as_of TEXT);
             CREATE TABLE price_delta(card_id TEXT, kind TEXT, key TEXT, pct_1d REAL, pct_7d REAL, pct_30d REAL);
+            CREATE TABLE card_dex(card_id TEXT, dex_id INTEGER);
             INSERT INTO set_info VALUES ('sv1','Scarlet Base','2023-03-31',200,'Scarlet & Violet','sv1-1');
             INSERT INTO set_info VALUES ('swsh1','Sword Base','2020-02-07',200,'Sword & Shield','swsh1-1');
             -- id, set, num, name, hp, types, rarity, artist, image_base, image_url, tcgId, attacks
@@ -27,6 +28,11 @@ final class CatalogStoreBrowseTests: XCTestCase {
             INSERT INTO price_delta VALUES ('sv1-2','raw','',-2.0,-12.0,-20.0); -- a deal (7d < -5)
             INSERT INTO price_delta VALUES ('sv1-1','raw','',1.0,3.0,4.0);       -- not a deal
             INSERT INTO price_delta VALUES ('swsh1-1','raw','',-1.0,NULL,-5.0); -- has raw delta row but NULL 7d
+            INSERT INTO card_dex VALUES ('sv1-1',906); -- Sprigatito, Paldea (gen 9)
+            INSERT INTO card_dex VALUES ('sv1-2',6);   -- Charizard, Kanto (gen 1)
+            INSERT INTO card_dex VALUES ('sv1-2',906); -- 2nd species on same card → matches Kanto OR Paldea
+            INSERT INTO card_dex VALUES ('sv1-3',129); -- Magikarp, Kanto (gen 1)
+            INSERT INTO card_dex VALUES ('swsh1-1',810); -- Grookey, Galar (gen 8)
             """)
         }
         try q.close()
@@ -99,5 +105,26 @@ final class CatalogStoreBrowseTests: XCTestCase {
         let ids = try store.browse(criteria: c, ownedIds: [], offset: 0, limit: 50).map(\.id)
         XCTAssertFalse(ids.contains("swsh1-1"), "cards with NULL pct_7d must not rank in biggest-drop")
         XCTAssertEqual(ids.first, "sv1-2", "most-negative pct_7d ranks first")
+    }
+
+    func testRegionFilterKanto() throws {
+        let store = try makeStore()
+        var c = BrowseCriteria(); c.regions = [1] // Kanto 1–151: Charizard(6) + Magikarp(129)
+        XCTAssertEqual(try store.browse(criteria: c, ownedIds: [], offset: 0, limit: 50).map(\.id).sorted(),
+                       ["sv1-2", "sv1-3"])
+    }
+
+    func testRegionFilterMatchesAnyDexOnCard() throws {
+        let store = try makeStore()
+        var c = BrowseCriteria(); c.regions = [9] // Paldea 906–1025: Sprigatito, and sv1-2 via its 2nd dex
+        XCTAssertEqual(try store.browse(criteria: c, ownedIds: [], offset: 0, limit: 50).map(\.id).sorted(),
+                       ["sv1-1", "sv1-2"])
+    }
+
+    func testRegionFilterOrsMultipleRegions() throws {
+        let store = try makeStore()
+        var c = BrowseCriteria(); c.regions = [1, 8] // Kanto OR Galar
+        XCTAssertEqual(try store.browse(criteria: c, ownedIds: [], offset: 0, limit: 50).map(\.id).sorted(),
+                       ["sv1-2", "sv1-3", "swsh1-1"])
     }
 }

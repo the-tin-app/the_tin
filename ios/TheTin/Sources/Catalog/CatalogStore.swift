@@ -645,6 +645,12 @@ final class CatalogStore {
             wheres.append("(\(ors))")
             args.append(contentsOf: criteria.types.map { "%,\($0),%" })
         }
+        if !criteria.regions.isEmpty {
+            let regions = PokemonRegion.all.filter { criteria.regions.contains($0.gen) }
+            let ranges = regions.map { _ in "cd.dex_id BETWEEN ? AND ?" }.joined(separator: " OR ")
+            wheres.append("EXISTS (SELECT 1 FROM card_dex cd WHERE cd.card_id = c.id AND (\(ranges)))")
+            for r in regions { args.append(r.lo); args.append(r.hi) }
+        }
         if let minP = criteria.minPrice { wheres.append("p.raw_usd >= ?"); args.append(minP) }
         if let maxP = criteria.maxPrice { wheres.append("p.raw_usd <= ?"); args.append(maxP) }
         if criteria.dealsOnly { wheres.append("d.pct_7d < ?"); args.append(DiscoverConstants.dealsMaxPct7d) }
