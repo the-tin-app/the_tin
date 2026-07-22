@@ -221,6 +221,17 @@ struct PopulationRow: Identifiable, Equatable {
     }
 }
 
+/// One grading company's population for a card — its per-grade `rows` (highest grade first) plus
+/// the company-wide `totalPopulation`/`gemRate` that repeat across those rows. Drives the
+/// company picker in the card-detail population section (PSA / CGC / Beckett / SGC).
+struct GraderPopulation: Identifiable, Equatable {
+    let grader: String
+    let rows: [PopulationRow]
+    var id: String { grader }
+    var totalPopulation: Int? { rows.first?.totalPopulation }
+    var gemRate: Double? { rows.first?.gemRate }
+}
+
 struct PriceRecord: Equatable {
     let cardId: String
     let rawUsd: Double?

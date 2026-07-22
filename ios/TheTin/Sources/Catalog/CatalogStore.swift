@@ -140,6 +140,25 @@ final class CatalogStore {
         }
     }
 
+    /// Graded population grouped by grading company. PSA is pinned first (it's the price-backed
+    /// grader and what most collectors reach for); the rest follow by total population desc.
+    /// Zero-count grades are dropped so a company's half-grade and specialty rows it never
+    /// actually graded don't render as a wall of empty bars. Highest grade first within a company.
+    /// Throws (→ `[]` via `try?`) on a catalog with no `population` table.
+    func populationByGrader(cardId: String) throws -> [GraderPopulation] {
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM population WHERE card_id = ? AND count > 0
+                ORDER BY CAST(REPLACE(grade, 'g', '') AS REAL) DESC
+                """, arguments: [cardId]).map(Self.populationRow)
+        }
+        let byGrader = Dictionary(grouping: rows, by: \.grader)  // preserves grade-desc order per key
+        return byGrader.keys.sorted { a, b in
+            if a == "PSA" || b == "PSA" { return a == "PSA" }
+            return (byGrader[a]?.first?.totalPopulation ?? 0) > (byGrader[b]?.first?.totalPopulation ?? 0)
+        }.map { GraderPopulation(grader: $0, rows: byGrader[$0] ?? []) }
+    }
+
     private static func populationRow(_ row: Row) -> PopulationRow {
         PopulationRow(grader: row["grader"], grade: row["grade"], count: row["count"] ?? 0,
                       gemRate: row["gem_rate"], totalPopulation: row["total_population"])

@@ -16,6 +16,8 @@ final class CatalogStorePopulationTests: XCTestCase {
                 INSERT INTO population VALUES ('c1','PSA','10',2100,0.42,5000,'2026-07-11');
                 INSERT INTO population VALUES ('c1','PSA','9.5',3,0.42,5000,'2026-07-11');
                 INSERT INTO population VALUES ('c1','BGS','10',12,NULL,60,'2026-07-11');
+                INSERT INTO population VALUES ('c1','BGS','9',0,NULL,60,'2026-07-11');
+                INSERT INTO population VALUES ('c1','CGC','10',500,0.6,9000,'2026-07-11');
                 """)
             } else {
                 try db.execute(sql: "CREATE TABLE card(id TEXT PRIMARY KEY);")
@@ -33,6 +35,25 @@ final class CatalogStorePopulationTests: XCTestCase {
         XCTAssertEqual(top.count, 2100)
         XCTAssertEqual(top.gemRate, 0.42)
         XCTAssertEqual(top.totalPopulation, 5000)
+    }
+
+    func testPopulationByGrader_groupsCompanies_psaFirst_dropsZeroCounts() throws {
+        let store = try makeStore(withTable: true)
+        let groups = try store.populationByGrader(cardId: "c1")
+        // PSA pinned first; remaining companies by total population desc (CGC 9000 > BGS 60).
+        XCTAssertEqual(groups.map(\.grader), ["PSA", "CGC", "BGS"])
+        // Highest grade first within a company.
+        XCTAssertEqual(groups[0].rows.map(\.grade), ["10", "9.5", "9"])
+        XCTAssertEqual(groups[0].totalPopulation, 5000)
+        XCTAssertEqual(groups[0].gemRate, 0.42)
+        // Zero-count grades dropped so companies don't render empty half-grade bars.
+        let bgs = try XCTUnwrap(groups.first { $0.grader == "BGS" })
+        XCTAssertEqual(bgs.rows.map(\.grade), ["10"])
+    }
+
+    func testPopulationByGrader_missingTable_throws_soCallSitesGetEmpty() throws {
+        let store = try makeStore(withTable: false)
+        XCTAssertNil(try? store.populationByGrader(cardId: "c1"))
     }
 
     func testPopulation_missingTable_throws_soCallSitesGetEmpty() throws {
