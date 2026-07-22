@@ -48,6 +48,7 @@ private struct MainTabView: View {
     /// Path for the Tin tab's stack, so a notification tap can push WantedRoute programmatically.
     @State private var tinPath = NavigationPath()
     @State private var consumedRouteToken = 0
+    @State private var consumedCardToken = 0
 
     var body: some View {
         TabView(selection: $selection) {
@@ -106,8 +107,10 @@ private struct MainTabView: View {
         .task {
             if searchModel == nil { searchModel = SearchModel(store: store) }
             consumeWishlistRoute() // cold launch from a tap: token bumped before we appeared
+            consumeCardRoute()
         }
         .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
+        .onChange(of: model.cardRouteToken) { consumeCardRoute() }
         // Collection writes can fail from any tab (card detail lives under Browse/Search too),
         // so the failure alert hangs off the TabView, not the Tin stack.
         .alert("Save failed", isPresented: Binding(
@@ -125,6 +128,17 @@ private struct MainTabView: View {
         consumedRouteToken = model.wishlistRouteToken
         selection = .tin
         tinPath.append(WantedRoute())
+    }
+
+    private func consumeCardRoute() {
+        guard model.cardRouteToken > consumedCardToken, let id = model.pendingCardId else { return }
+        consumedCardToken = model.cardRouteToken
+        // A deep link can carry an unknown id (garbage link, or a card missing from an older
+        // local catalog). The CardID destination has no not-found branch, so pushing it would
+        // land on a blank screen — only navigate when the card actually resolves.
+        guard (try? store.card(id: id)) != nil else { return }
+        selection = .tin
+        tinPath.append(CardID(raw: id))
     }
 }
 
