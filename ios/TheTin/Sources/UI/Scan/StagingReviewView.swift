@@ -11,6 +11,7 @@ struct StagingReviewView: View {
     @State private var routing: ScanDraft?     // draft being routed
     @State private var newGroupName = ""
     @State private var showingNewGroup: ScanDraft?
+    @State private var showingClearConfirm = false
     @State private var commitError = false
     // Batch-fetched once on open (same tables the collection UI uses); drive draft repricing.
     @State private var prices: [String: PriceRecord] = [:]
@@ -55,8 +56,17 @@ struct StagingReviewView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Clear all", role: .destructive) { staging.clear() }
+                // Confirm before wiping the whole tray. Anchored on the button, NOT the root view:
+                // a second .confirmationDialog stacked on the root (already carries the routing one
+                // + two alerts) is the case SwiftUI silently drops — the "tap twice, no prompt" bug.
+                Button("Clear all", role: .destructive) { showingClearConfirm = true }
                     .disabled(staging.drafts.isEmpty)
+                    .confirmationDialog("Clear all staged cards?", isPresented: $showingClearConfirm,
+                                        titleVisibility: .visible) {
+                        Button("Clear ^[\(staging.drafts.count) card](inflect: true)",
+                               role: .destructive) { staging.clear() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { Text("This removes every scan from the review list. It can't be undone.") }
             }
         }
         .confirmationDialog("File this card in…", isPresented: routingIsPresented, titleVisibility: .visible) {
@@ -135,6 +145,16 @@ struct StagingReviewView: View {
         // Old-artifact fallback per store convention (matrix/graded reads throw pre-migration).
         matrixByCard = (try? store.matrixPrices(cardIds: ids)) ?? [:]
         gradedByPrintingByCard = (try? store.gradedPrintingPrices(cardIds: ids)) ?? [:]
+        // The scan-time variant is a blind defaultFor(rarity:) guess and can name a finish the
+        // card isn't actually printed in (Tomas, 2026-07-21: Tyranitar δ defaulted to Regular but
+        // only comes in Holo/Reverse Holo). Now that the real printings are loaded, snap any such
+        // draft to the first finish it IS offered in, so the row shows a real finish + real price.
+        for d in staging.drafts {
+            let offered = EntryFormView.offeredVariants(catalog: v[d.cardId] ?? [])
+            if !offered.contains(d.variant), let first = offered.first {
+                staging.updateVariant(id: d.id, first)
+            }
+        }
         pricesLoaded = true
         repriceAll()
     }
