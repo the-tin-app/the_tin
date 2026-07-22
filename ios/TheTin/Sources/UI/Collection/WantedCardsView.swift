@@ -11,9 +11,11 @@ struct WantedCardsView: View {
     @State private var sort: WishlistSort = .priority
     @State private var search = ""
     @State private var groupBySet = false
+    @State private var priorityFilter: WantPriority? = nil   // nil = All priorities
     @State private var editing: CardRecord?
     @State private var printRequest: PrintSheetRequest?
     @State private var exportDoc: CSVDocument?
+    @State private var exportName = "the-tin-wishlist"
 
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
 
@@ -35,10 +37,14 @@ struct WantedCardsView: View {
                          rawUsd: priceRecords.compactMapValues(\.rawUsd), setsById: setsById)
     }
 
-    /// Search filter, then chosen sort.
+    /// Effective priority of a wanted card — a bare-hearted card (no entry) is Normal.
+    private func priority(_ id: String) -> WantPriority { wants.entries[id]?.priority ?? .normal }
+
+    /// Search filter → priority filter → chosen sort.
     private func displayed(_ r: Resolved) -> [CardRecord] {
-        let base = search.isEmpty ? r.allCards
+        var base = search.isEmpty ? r.allCards
             : r.allCards.filter { $0.name.localizedCaseInsensitiveContains(search) }
+        if let pf = priorityFilter { base = base.filter { priority($0.id) == pf } }
         return WishlistGrid.sorted(cards: base, entries: wants.entries, prices: r.rawUsd,
                                    setDates: r.setsById.mapValues { $0.releaseDate ?? "" }, by: sort)
     }
@@ -70,13 +76,12 @@ struct WantedCardsView: View {
         .searchable(text: $search, prompt: "Search wishlist")
         .toolbar {
             sortMenu(disabled: r.allCards.isEmpty)
-            exportButton(r: r, cards: displayedCards)
-            printButton(cards: displayedCards, disabled: r.allCards.isEmpty)
+            shareMenu(r: r, disabled: r.allCards.isEmpty)
         }
         .fileExporter(isPresented: Binding(get: { exportDoc != nil },
                                            set: { if !$0 { exportDoc = nil } }),
                       document: exportDoc, contentType: .commaSeparatedText,
-                      defaultFilename: CollectionCSV.filename("the-tin-wishlist")) { _ in
+                      defaultFilename: CollectionCSV.filename(exportName)) { _ in
             exportDoc = nil
         }
         .printSheetFlow($printRequest)
@@ -92,15 +97,28 @@ struct WantedCardsView: View {
             ForEach(grouped, id: \.setId) { section in
                 Section {
                     grid(section.cards, rawUsd: r.rawUsd)
-                } header: {
-                    Text(section.name).font(.headline)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal).padding(.top, 8)
+                } header: { sectionHeader(section.name) }
+            }
+        } else if sort == .priority && priorityFilter == nil {
+            // Default view: dividers between High / Normal / Low. `cards` is already
+            // priority-sorted, so filtering per group preserves the in-group price order.
+            ForEach(WantPriority.allCases) { p in
+                let group = cards.filter { priority($0.id) == p }
+                if !group.isEmpty {
+                    Section {
+                        grid(group, rawUsd: r.rawUsd)
+                    } header: { sectionHeader("\(p.label) priority") }
                 }
             }
         } else {
             grid(cards, rawUsd: r.rawUsd)
         }
+    }
+
+    private func sectionHeader(_ text: String) -> some View {
+        Text(text).font(.headline)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal).padding(.top, 8)
     }
 
     private func header(_ r: Resolved) -> some View {
@@ -158,6 +176,10 @@ struct WantedCardsView: View {
                 Picker("Sort", selection: $sort) {
                     ForEach(WishlistSort.allCases) { Text($0.label).tag($0) }
                 }
+                Picker("Priority", selection: $priorityFilter) {
+                    Text("All priorities").tag(WantPriority?.none)
+                    ForEach(WantPriority.allCases) { Text($0.label).tag(WantPriority?.some($0)) }
+                }
                 Toggle("Group by set", isOn: $groupBySet)
             } label: {
                 Label("Sort", systemImage: "arrow.up.arrow.down")
@@ -166,24 +188,43 @@ struct WantedCardsView: View {
         }
     }
 
-    @ToolbarContentBuilder private func exportButton(r: Resolved, cards: [CardRecord]) -> some ToolbarContent {
+    /// Export (CSV data) and Print (PDF sheet) under one share icon. The section titles say what
+    /// each produces, so the difference is visible before tapping.
+    @ToolbarContentBuilder private func shareMenu(r: Resolved, disabled: Bool) -> some ToolbarContent {
         ToolbarItem {
-            Button {
-                exportDoc = CSVDocument(data: CollectionCSV.exportWishlist(
-                    cards: cards, sets: r.setsById, prices: r.priceRecords, entries: wants.entries))
+            Menu {
+                Section("Export as CSV (spreadsheet)") {
+                    Button("All cards") { exportCSV(r, priority: nil) }
+                    ForEach(WantPriority.allCases) { p in
+                        Button("\(p.label) priority only") { exportCSV(r, priority: p) }
+                    }
+                }
+                Section("Print (PDF of card images)") {
+                    Button("All cards") { printSheet(r, priority: nil) }
+                    ForEach(WantPriority.allCases) { p in
+                        Button("\(p.label) priority only") { printSheet(r, priority: p) }
+                    }
+                }
             } label: { Image(systemName: "square.and.arrow.up") }
-            .accessibilityLabel("Export wishlist (CSV)")
-            .disabled(r.allCards.isEmpty)
+            .accessibilityLabel("Share wishlist")
+            .disabled(disabled)
         }
     }
 
-    @ToolbarContentBuilder private func printButton(cards: [CardRecord], disabled: Bool) -> some ToolbarContent {
-        ToolbarItem {
-            Button { printRequest = PrintSheet.wantRequest(cards: cards, store: store) } label: {
-                Label("Print want list…", systemImage: "printer")
-            }
-            .disabled(disabled)
-        }
+    /// The whole wishlist, or just one priority tier. Ignores the on-screen search — "Low priority
+    /// only" means the low list, full stop — so Export/Print subsets match their menu labels.
+    private func subset(_ r: Resolved, priority p: WantPriority?) -> [CardRecord] {
+        p == nil ? r.allCards : r.allCards.filter { priority($0.id) == p }
+    }
+
+    private func exportCSV(_ r: Resolved, priority p: WantPriority?) {
+        exportName = p.map { "the-tin-wishlist-\($0.label.lowercased())" } ?? "the-tin-wishlist"
+        exportDoc = CSVDocument(data: CollectionCSV.exportWishlist(
+            cards: subset(r, priority: p), sets: r.setsById, prices: r.priceRecords, entries: wants.entries))
+    }
+
+    private func printSheet(_ r: Resolved, priority p: WantPriority?) {
+        printRequest = PrintSheet.wantRequest(cards: subset(r, priority: p), store: store)
     }
 }
 
