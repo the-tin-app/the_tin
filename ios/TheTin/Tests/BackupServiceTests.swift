@@ -71,11 +71,12 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(service.status, .backedUp(fixedNow))
 
         let snapshot = try await service.loadBackup()
-        XCTAssertEqual(snapshot.schemaVersion, 1)
+        XCTAssertEqual(snapshot.schemaVersion, 2)
         XCTAssertEqual(snapshot.exportedAt, fixedNow)
         XCTAssertEqual(snapshot.groups.map(\.id), [gid])
         XCTAssertEqual(snapshot.entries, [entry])   // full Codable round-trip, field by field
         XCTAssertEqual(snapshot.wanted, ["sv1-25"])
+        XCTAssertNotNil(snapshot.wantEntries?["sv1-25"])
 
         // Two-slot rotation: a second write moves the previous snapshot to the .prev slot.
         await service.backUpNow()
@@ -117,7 +118,8 @@ final class BackupServiceTests: XCTestCase {
         let gid = try await colA.createGroup(name: "Binder")
         let entry = fixtureEntry(id: "e1", groupId: gid)
         try await colA.addEntry(entry)
-        try await wantsA.save(uid: "local", entries: ["sv1-25": WantEntry()])
+        try await wantsA.save(uid: "local", entries:
+            ["sv1-25": WantEntry(priority: .high, targetUsd: 25, notes: "grail")])
         await makeService(collection: colA, wants: wantsA).backUpNow()
 
         // Empty "device B": the launch check offers the restore.
@@ -136,6 +138,11 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(groups.map(\.id), [gid])
         XCTAssertEqual(entries, [entry])
         XCTAssertEqual(Set(wanted.keys), ["sv1-25"])
+        // Rich fields (priority/target/notes) survive the encode → decode → restore round trip,
+        // not just the id.
+        XCTAssertEqual(wanted["sv1-25"]?.priority, .high)
+        XCTAssertEqual(wanted["sv1-25"]?.targetUsd, 25)
+        XCTAssertEqual(wanted["sv1-25"]?.notes, "grail")
 
         // Non-empty "device C0": never offered.
         let (colC0, wantsC0) = try makeRepos(sub: "deviceC0")
@@ -168,6 +175,27 @@ final class BackupServiceTests: XCTestCase {
         await serviceC.acceptRestore(serviceC.restoreOffer!)
         let replacedC = await firstValue(colC.entriesStream()) ?? []
         XCTAssertEqual(replacedC.map(\.id), ["e1"])   // NOT ["e1", "e2"]
+    }
+
+    /// A v1 backup file predates `wantEntries` — the decoded snapshot has it as nil (the field's
+    /// default). Restoring must still land the ids, with fresh default `WantEntry` values.
+    func testRestoreFallsBackToDefaultsForV1BackupWithoutWantEntries() async throws {
+        let (col, wants) = try makeRepos(sub: "deviceV1")
+        let service = makeService(collection: col, wants: wants)
+        let v1Snapshot = BackupSnapshot(exportedAt: fixedNow, groups: [], entries: [],
+                                        wanted: ["a1", "b2"], wantEntries: nil)
+
+        try await service.performRestore(snapshot: v1Snapshot)
+
+        let wanted = await firstValue(wants.stream(uid: "local")) ?? [:]
+        XCTAssertEqual(Set(wanted.keys), ["a1", "b2"])
+        // WantEntry() stamps `addedAt: Date()` at construction, so compare fields rather than
+        // the whole struct (two independently-constructed defaults never compare equal).
+        for id in ["a1", "b2"] {
+            XCTAssertEqual(wanted[id]?.priority, .normal)
+            XCTAssertNil(wanted[id]?.targetUsd)
+            XCTAssertEqual(wanted[id]?.notes, "")
+        }
     }
 
     func testAutoBackupDebouncesAndSkipsInitialEmissions() async throws {
