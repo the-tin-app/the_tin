@@ -447,6 +447,7 @@ struct CardDetailView: View {
                     Spacer()
                     if model.tier == .expert { overlayPickers }
                 }
+                Text("Weekly market price").font(.caption).foregroundStyle(.secondary)
                 PriceHistoryChart(series: series)
                 if currentPrinting != nil {
                     Text("History is for the card overall — PPT has no per-printing history.")
