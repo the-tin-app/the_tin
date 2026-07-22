@@ -368,6 +368,20 @@ struct CardDetailView: View {
                     .accessibilityLabel("Save to collection")
             }
         }
+        ToolbarItem {
+            ShareLink(
+                item: CardShareLink.url(card: model.card, setName: model.setName),
+                subject: Text(model.card.name),
+                message: Text("Check out this card on The Tin"),
+                preview: SharePreview(
+                    model.setName.map { "\(model.card.name) · \($0)" } ?? model.card.name,
+                    image: Image(systemName: "rectangle.portrait.on.rectangle.portrait")
+                )
+            ) {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .accessibilityLabel("Share card")
+        }
         ToolbarItemGroup(placement: .keyboard) {
             Spacer()
             Button("Done") { gradingFeeFocused = false }
