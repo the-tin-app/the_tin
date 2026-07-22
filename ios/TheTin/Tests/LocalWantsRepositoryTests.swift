@@ -8,32 +8,30 @@ final class LocalWantsRepositoryTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return WantsPaths(fileURL: dir.appendingPathComponent("wants.json"))
     }
-
     private func firstValue<T>(_ stream: AsyncStream<T>) async -> T? {
         for await v in stream { return v }
         return nil
     }
 
-    func testSetWantedAddsAndRemoves() async throws {
-        let repo = LocalWantsRepository(paths: try tempPaths())
-        try await repo.setWanted(uid: "ignored", cardId: "ex6-58", wanted: true)
-        var set = await firstValue(repo.stream(uid: "ignored")) ?? []
-        XCTAssertEqual(set, ["ex6-58"])
-
-        try await repo.setWanted(uid: "ignored", cardId: "ex6-58", wanted: false)
-        set = await firstValue(repo.stream(uid: "ignored")) ?? []
-        XCTAssertTrue(set.isEmpty)
-    }
-
-    func testPersistsAcrossInstancesOfflineNoAuth() async throws {
+    func testSaveAddsAndPersistsAcrossInstances() async throws {
         let paths = try tempPaths()
         let a = LocalWantsRepository(paths: paths)
-        // uid is ignored — wants are per-device, auth-independent.
-        try await a.setWanted(uid: "u", cardId: "ex8-63", wanted: true)
-        try await a.setWanted(uid: "u", cardId: "hgss3-39", wanted: true)
+        try await a.save(uid: "u", entries: ["ex8-63": WantEntry(priority: .high),
+                                             "hgss3-39": WantEntry()])
+        let b = LocalWantsRepository(paths: paths)   // fresh instance, same file
+        let got = await firstValue(b.stream(uid: "x")) ?? [:]
+        XCTAssertEqual(Set(got.keys), ["ex8-63", "hgss3-39"])
+        XCTAssertEqual(got["ex8-63"]?.priority, .high)
+    }
 
-        let b = LocalWantsRepository(paths: paths) // fresh instance, same file
-        let set = await firstValue(b.stream(uid: "different-uid")) ?? []
-        XCTAssertEqual(set, ["ex8-63", "hgss3-39"])
+    func testMigratesLegacyIdArray() async throws {
+        let paths = try tempPaths()
+        // Legacy format: a bare JSON array of ids (what Set<String> encoded to).
+        try Data("[\"a-1\",\"b-2\"]".utf8).write(to: paths.fileURL)
+        let repo = LocalWantsRepository(paths: paths)
+        let got = await firstValue(repo.stream(uid: "x")) ?? [:]
+        XCTAssertEqual(Set(got.keys), ["a-1", "b-2"])
+        XCTAssertEqual(got["a-1"]?.priority, .normal)   // migrated to defaults
+        XCTAssertEqual(got["a-1"]?.notes, "")
     }
 }
