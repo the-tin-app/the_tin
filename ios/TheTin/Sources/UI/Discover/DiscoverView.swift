@@ -24,8 +24,14 @@ struct DiscoverView: View {
         }
         .navigationDestination(for: StreamRoute.self) { route in
             if let model {
-                StreamView(kind: route.kind, model: model, wants: wants, collection: collection)
+                StreamView(title: route.kind.title,
+                           stream: model.makeStream(route.kind),
+                           caption: { model.caption(for: $0, kind: route.kind) },
+                           store: store, wants: wants, collection: collection)
             }
+        }
+        .navigationDestination(for: BrowseRoute.self) { _ in
+            DiscoverBrowseView(store: store, collection: collection, wants: wants)
         }
         .task(id: tasteSignalKey) {
             let m = model ?? DiscoverModel(store: store)
@@ -48,6 +54,16 @@ private struct DiscoverHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                NavigationLink(value: BrowseRoute()) {
+                    HStack {
+                        Label("Browse & filter", systemImage: "magnifyingglass")
+                            .font(.title3.bold())
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal)
                 ForEach(DiscoverModel.StreamKind.allCases, id: \.self) { kind in
                     let cards = model.previews[kind] ?? []
                     if !cards.isEmpty {
