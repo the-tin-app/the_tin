@@ -15,7 +15,11 @@ enum CardShareLink {
         c.path = "/c/\(card.id)"
         var items = [URLQueryItem(name: "n", value: card.name)]
         if let setName { items.append(URLQueryItem(name: "set", value: setName)) }
-        if let img = card.imageURL(quality: "high")?.absoluteString {
+        // og:image must render in iMessage / WhatsApp previews — webp support there is spotty,
+        // so prefer a PNG (tcgdex serves high.png); the legacy imageUrl fallback is already a JPEG.
+        if let base = card.imageBase {
+            items.append(URLQueryItem(name: "img", value: "\(base)/high.png"))
+        } else if let img = card.imageUrl {
             items.append(URLQueryItem(name: "img", value: img))
         }
         c.queryItems = items

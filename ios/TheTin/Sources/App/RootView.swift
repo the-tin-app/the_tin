@@ -133,6 +133,10 @@ private struct MainTabView: View {
     private func consumeCardRoute() {
         guard model.cardRouteToken > consumedCardToken, let id = model.pendingCardId else { return }
         consumedCardToken = model.cardRouteToken
+        // A deep link can carry an unknown id (garbage link, or a card missing from an older
+        // local catalog). The CardID destination has no not-found branch, so pushing it would
+        // land on a blank screen — only navigate when the card actually resolves.
+        guard (try? store.card(id: id)) != nil else { return }
         selection = .tin
         tinPath.append(CardID(raw: id))
     }

@@ -16,7 +16,7 @@ final class ShareURLTests: XCTestCase {
         let items = Dictionary(uniqueKeysWithValues: (comps.queryItems ?? []).map { ($0.name, $0.value) })
         XCTAssertEqual(items["n"], "Charizard & Friends")            // decoded value round-trips
         XCTAssertEqual(items["set"], "Base Set")
-        XCTAssertEqual(items["img"], "https://assets.tcgdex.net/en/base/base1/4/high.webp")
+        XCTAssertEqual(items["img"], "https://assets.tcgdex.net/en/base/base1/4/high.png")
         // The raw string must percent-encode the space and ampersand
         XCTAssertTrue(url.absoluteString.contains("n=Charizard%20%26%20Friends")
                       || url.absoluteString.contains("n=Charizard+%26+Friends"))
