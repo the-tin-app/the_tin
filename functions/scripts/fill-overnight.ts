@@ -15,6 +15,7 @@ import { resolvePptSetName } from "../src/pipeline/ppt-setmap";
 import { runProbe, ProbeResult } from "../src/pipeline/overnight-probe";
 import { runOvernightSweep, OvernightSet, OvernightLedger } from "../src/pipeline/overnight-sweep-core";
 import { publishCatalog, StoragePort } from "../src/pipeline/publish";
+import { recomputeRepresentatives } from "../src/pipeline/catalog";
 import { isRateLimitStop, haltGate } from "../src/pipeline/overnight-halt";
 
 class LocalStorage implements StoragePort {
@@ -171,7 +172,10 @@ async function main() {
   const popRemaining = sc.probe.populationEnabled ? Math.ceil(idCount / 50) - popBatchesDone.size : 0;
   if (setsRemaining > 0 || popRemaining > 0) { console.log(`[overnight] ${setsRemaining} sets / ${popRemaining} pop batches remain — re-run to continue. NOT publishing.`); process.exitCode = 2; return; }
 
-  console.log(`[overnight] all phases complete — publishing catalog v${version} to ${resolvedOut}/catalog/ …`);
+  console.log(`[overnight] all phases complete — re-picking set/Pokémon covers against enriched prices …`);
+  recomputeRepresentatives(db as any);
+
+  console.log(`[overnight] publishing catalog v${version} to ${resolvedOut}/catalog/ …`);
   const manifest = await publishCatalog(dbPath, version, new LocalStorage(resolvedOut), new Date());
   console.log(`[overnight] published v${manifest.version} · ${manifest.sizeBytes.toLocaleString()} gz bytes · sha256 ${manifest.sha256}`);
   console.log(`[overnight] upload (HOLD for owner go): gcloud storage cp ${resolvedOut}/catalog/{manifest.json,${manifest.path.split("/").pop()}} gs://${process.env.FIREBASE_STORAGE_BUCKET ?? "<your-bucket>"}/catalog/`);
