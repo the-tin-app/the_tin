@@ -14,7 +14,7 @@ enum BrowseSort: String, Codable, CaseIterable, Hashable {
 }
 
 /// The full window-shopper filter. Empty sets / nil bounds / false toggles = unconstrained on
-/// that axis. `Hashable` so `BrowseView` can key the deck on it; `Codable` so presets persist.
+/// that axis. `Hashable` so `DiscoverBrowseView` can key the deck on it; `Codable` so presets persist.
 struct BrowseCriteria: Hashable, Codable {
     var eras: Set<String> = []
     var rarities: Set<String> = []

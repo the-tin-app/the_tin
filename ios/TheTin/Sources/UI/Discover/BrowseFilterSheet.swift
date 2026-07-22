@@ -42,16 +42,17 @@ struct BrowseFilterSheet: View {
 
                 Section("Presets") {
                     ForEach(presets.presets) { preset in
-                        Button(preset.name) { criteria = preset.criteria }
+                        Button(preset.name) { criteria = preset.criteria; syncPriceText() }
                     }
                     .onDelete { idx in idx.map { presets.presets[$0] }.forEach(presets.remove) }
                     HStack {
                         TextField("Save current as…", text: $newPresetName)
                         Button("Save") {
-                            guard !newPresetName.isEmpty else { return }
-                            presets.save(name: newPresetName, criteria: criteria)
+                            let name = newPresetName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !name.isEmpty else { return }
+                            presets.save(name: name, criteria: criteria)
                             newPresetName = ""
-                        }.disabled(newPresetName.isEmpty)
+                        }.disabled(newPresetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
             }
@@ -63,7 +64,15 @@ struct BrowseFilterSheet: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
+            .onAppear { syncPriceText() }
         }
+    }
+
+    /// Mirror the numeric price bounds back into the editable text fields (on open, and after a
+    /// preset replaces `criteria` wholesale). Typing flows the other way via the fields' onChange.
+    private func syncPriceText() {
+        minText = criteria.minPrice.map { String($0) } ?? ""
+        maxText = criteria.maxPrice.map { String($0) } ?? ""
     }
 
     /// A section of tap-to-toggle rows backed by a `Set<String>` binding (checkmark = selected).
