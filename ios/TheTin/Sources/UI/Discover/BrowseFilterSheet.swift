@@ -10,6 +10,14 @@ struct BrowseFilterSheet: View {
     @State private var minText = ""
     @State private var maxText = ""
     @State private var newPresetName = ""
+    /// Bumped each time a preset is applied, to fire a selection haptic (the tactile half of the
+    /// "preset loaded" feedback; the checkmark is the visual half).
+    @State private var appliedBump = 0
+    @FocusState private var focusedField: Field?
+
+    /// The three text inputs — tracked so a single keyboard-toolbar "Done" dismisses whichever is
+    /// active (the decimal pad has no return key of its own).
+    private enum Field: Hashable { case min, max, preset }
 
     /// Rarity tiers offered, in display order (verified full-art set + the base tiers).
     private let rarityOptions = ["Illustration rare", "Special illustration rare",
@@ -26,8 +34,10 @@ struct BrowseFilterSheet: View {
 
                 Section("Price (USD)") {
                     TextField("Min", text: $minText).keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .min)
                         .onChange(of: minText) { criteria.minPrice = Double(minText) }
                     TextField("Max", text: $maxText).keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .max)
                         .onChange(of: maxText) { criteria.maxPrice = Double(maxText) }
                 }
 
@@ -42,11 +52,26 @@ struct BrowseFilterSheet: View {
 
                 Section("Presets") {
                     ForEach(presets.presets) { preset in
-                        Button(preset.name) { criteria = preset.criteria; syncPriceText() }
+                        Button {
+                            criteria = preset.criteria; syncPriceText(); appliedBump += 1
+                        } label: {
+                            HStack {
+                                Text(preset.name).foregroundStyle(.primary)
+                                Spacer()
+                                // Checkmark marks the preset whose criteria matches the current
+                                // filter — i.e. the one just applied (until you tweak a filter).
+                                if preset.criteria == criteria {
+                                    Image(systemName: "checkmark").foregroundStyle(.tint)
+                                }
+                            }
+                        }
                     }
                     .onDelete { idx in idx.map { presets.presets[$0] }.forEach(presets.remove) }
                     HStack {
                         TextField("Save current as…", text: $newPresetName)
+                            .focused($focusedField, equals: .preset)
+                            .submitLabel(.done)
+                            .onSubmit { focusedField = nil }
                         Button("Save") {
                             let name = newPresetName.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !name.isEmpty else { return }
@@ -63,7 +88,15 @@ struct BrowseFilterSheet: View {
                     Button("Clear all") { criteria = BrowseCriteria(); minText = ""; maxText = "" }
                 }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                // Decimal pad + plain text fields have no return key; this is the only way to
+                // dismiss the keyboard.
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }
+                }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .sensoryFeedback(.selection, trigger: appliedBump)
             .onAppear { syncPriceText() }
         }
     }
