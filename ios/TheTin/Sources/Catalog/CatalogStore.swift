@@ -581,6 +581,76 @@ final class CatalogStore {
         }
     }
 
+    /// Distinct set eras that actually have cards, newest era first — populates the Browse filter.
+    func distinctEras() throws -> [String] {
+        try dbQueue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT era FROM set_info s
+                WHERE era IS NOT NULL AND era <> ''
+                  AND EXISTS (SELECT 1 FROM card WHERE card.set_id = s.id)
+                GROUP BY era ORDER BY MAX(release_date) DESC
+                """)
+        }
+    }
+
+    /// Window-shopper browse: one parameterized query assembled from the non-empty `criteria`
+    /// axes. Joins `set_info` only for an era filter, `price_latest` for a price band/sort
+    /// (which also drops null-priced cards), `price_delta` for deals/biggest-drop. `LIMIT/OFFSET`
+    /// pages in SQL; `ORDER BY … , c.id` keeps paging deterministic.
+    func browse(criteria: BrowseCriteria, ownedIds: [String], offset: Int, limit: Int) throws -> [CardRecord] {
+        var joins = ""
+        var wheres: [String] = []
+        var args: [(any DatabaseValueConvertible)?] = []
+
+        let needsPriceJoin = criteria.minPrice != nil || criteria.maxPrice != nil
+            || criteria.sort == .priceAsc || criteria.sort == .priceDesc
+        let needsDeltaJoin = criteria.dealsOnly || criteria.sort == .biggestDrop
+
+        if !criteria.eras.isEmpty {
+            joins += " JOIN set_info s ON s.id = c.set_id"
+            wheres.append("s.era IN (\(databaseQuestionMarks(count: criteria.eras.count)))")
+            args.append(contentsOf: criteria.eras.map { $0 })
+        }
+        if needsPriceJoin {
+            joins += " JOIN price_latest p ON p.card_id = c.id AND p.raw_usd IS NOT NULL"
+        }
+        if needsDeltaJoin {
+            joins += " JOIN price_delta d ON d.card_id = c.id AND d.kind = 'raw' AND d.key = ''"
+        }
+        if !criteria.rarities.isEmpty {
+            wheres.append("c.rarity IN (\(databaseQuestionMarks(count: criteria.rarities.count)))")
+            args.append(contentsOf: criteria.rarities.map { $0 })
+        }
+        if !criteria.types.isEmpty {
+            let ors = criteria.types.map { _ in "(',' || c.types || ',') LIKE ?" }.joined(separator: " OR ")
+            wheres.append("(\(ors))")
+            args.append(contentsOf: criteria.types.map { "%,\($0),%" })
+        }
+        if let minP = criteria.minPrice { wheres.append("p.raw_usd >= ?"); args.append(minP) }
+        if let maxP = criteria.maxPrice { wheres.append("p.raw_usd <= ?"); args.append(maxP) }
+        if criteria.dealsOnly { wheres.append("d.pct_7d < ?"); args.append(DiscoverConstants.dealsMaxPct7d) }
+        if criteria.hideOwned, !ownedIds.isEmpty {
+            wheres.append("c.id NOT IN (\(databaseQuestionMarks(count: ownedIds.count)))")
+            args.append(contentsOf: ownedIds.map { $0 })
+        }
+
+        let orderBy: String
+        switch criteria.sort {
+        case .relevance:   orderBy = "c.id"
+        case .priceAsc:    orderBy = "p.raw_usd ASC, c.id"
+        case .priceDesc:   orderBy = "p.raw_usd DESC, c.id"
+        case .biggestDrop: orderBy = "d.pct_7d ASC, c.id"
+        }
+
+        let whereSQL = wheres.isEmpty ? "" : " WHERE " + wheres.joined(separator: " AND ")
+        let sql = "SELECT c.* FROM card c\(joins)\(whereSQL) ORDER BY \(orderBy) LIMIT ? OFFSET ?"
+        args.append(limit); args.append(offset)
+
+        return try dbQueue.read { db in
+            try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args)).map(Self.cardRecord)
+        }
+    }
+
     /// Cards belonging to a curated gallery subset (Trainer/Galarian Gallery), grouped by
     /// "<setId>/<prefix>". Empty when the catalog carries no gallery-prefixed numbers.
     func galleryCards() throws -> [String: [CardRecord]] {
