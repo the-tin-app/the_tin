@@ -24,7 +24,10 @@ struct DiscoverView: View {
         }
         .navigationDestination(for: StreamRoute.self) { route in
             if let model {
-                StreamView(kind: route.kind, model: model, wants: wants, collection: collection)
+                StreamView(title: route.kind.title,
+                           stream: model.makeStream(route.kind),
+                           caption: { model.caption(for: $0, kind: route.kind) },
+                           store: store, wants: wants, collection: collection)
             }
         }
         .task(id: tasteSignalKey) {

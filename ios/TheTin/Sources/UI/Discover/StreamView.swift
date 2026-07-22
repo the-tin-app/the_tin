@@ -11,8 +11,10 @@ import SwiftUI
 /// lazy, appendable content and doesn't fight the pan. Want is a DOUBLE tap so a single-tap
 /// recognizer can't compete with the swipe either.
 struct StreamView: View {
-    let kind: DiscoverModel.StreamKind
-    let model: DiscoverModel
+    let title: String
+    let stream: CardStream
+    let caption: (CardRecord) -> String?
+    let store: CatalogStore
     var wants: WantsModel?
     var collection: CollectionModel?
 
@@ -40,15 +42,19 @@ struct StreamView: View {
                 .scrollPosition(id: $currentIndex)
                 .scrollIndicators(.hidden)
                 .overlay { chevrons } // fixed affordance — never scrolls with a page, never doubles
+            } else if let pager, pager.isEmptyResult {
+                ContentUnavailableView("No cards match",
+                                       systemImage: "line.3.horizontal.decrease.circle",
+                                       description: Text("Loosen your filters to see more."))
             } else {
-                TinLoadingView(label: "Loading \(kind.title)…")
+                TinLoadingView(label: "Loading \(title)…")
             }
         }
-        .navigationTitle(kind.title)
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             if pager == nil {
-                pager = StreamPager(stream: model.makeStream(kind))
+                pager = StreamPager(stream: stream)
                 await pager?.loadNextPage()
                 prefetchAround(0)
             }
@@ -108,8 +114,8 @@ struct StreamView: View {
 
             VStack(spacing: 4) {
                 Text(card.name).font(.title3.bold()).multilineTextAlignment(.center)
-                PriceLabel(value: try? model.store.price(cardId: card.id)?.rawUsd)
-                if let why = model.caption(for: card, kind: kind) {
+                PriceLabel(value: try? store.price(cardId: card.id)?.rawUsd)
+                if let why = caption(card) {
                     Text(why).font(.footnote).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
