@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCatalog, pickRepresentative } from "../src/pipeline/catalog";
+import { buildCatalog, pickRepresentative, recomputeRepresentatives } from "../src/pipeline/catalog";
 import type { TcgdexCard, TcgdexSet } from "../src/upstream/tcgdex";
 import type { PptPrice } from "../src/upstream/ppt";
 
@@ -155,7 +155,37 @@ describe("pickRepresentative", () => {
     ]);
     expect(pickRepresentative(["a-1", "a-2"], p, cards)).toBe("a-2");
   });
+  it("skips a higher-priced imageless card in favor of a cheaper one with art", () => {
+    const p = new Map([["a-2", { rawUsd: 5, rawEur: null }], ["a-3", { rawUsd: 99, rawEur: null }]]);
+    expect(pickRepresentative(["a-2", "a-3"], p, cards)).toBe("a-2"); // a-3 is priciest but imageBase=null
+  });
   it("returns null when nothing qualifies", () => {
     expect(pickRepresentative(["a-3"], new Map(), cards)).toBeNull();
+  });
+});
+
+describe("recomputeRepresentatives (post-enrichment)", () => {
+  // Pitch-black repro: at build time only the cheap #107 common has a raw price, so it wins the
+  // cover. Enrichment then lands the $350 SIR (#116) as a Near-Mint condition price. Recompute
+  // must flip the cover to the SIR.
+  const pbSet: TcgdexSet = { id: "pb", name: "Pitch Black", releaseDate: "2026-01-01", cardCountTotal: 120, printedTotal: 116, serie: "Test" };
+  const pbCards: TcgdexCard[] = [
+    { id: "pb-107", localId: "107", name: "Common", hp: 60, types: ["Water"], rarity: "Common", artist: "x", text: "", imageBase: "https://x/107", rawUsd: 2, rawEur: null },
+    { id: "pb-116", localId: "116", name: "SIR Chase", hp: 220, types: ["Dragon"], rarity: "Special Illustration Rare", artist: "y", text: "", imageBase: "https://x/116", rawUsd: null, rawEur: null },
+  ];
+
+  it("flips a set cover to a chase card whose value only appears after enrichment", () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), "cat-pb-")), "catalog.sqlite");
+    buildCatalog({ sets: [pbSet], cardsBySet: new Map([["pb", pbCards]]), prices: new Map(), scenes: [], asOf: "2026-01-02", dexByCard: new Map([["pb-116", [999]]]), pokemonNames: new Map([[999, "Chasemon"]]) }, dbPath);
+
+    const db = new Database(dbPath);
+    expect(db.prepare("SELECT rep_card_id FROM set_info WHERE id='pb'").get()).toEqual({ rep_card_id: "pb-107" }); // pre-enrichment: cheap common wins
+    // Simulate enrichment: SIR gets a $350 Near-Mint condition price (no raw price).
+    db.prepare("INSERT INTO price_by_condition(card_id, condition, usd, as_of) VALUES (?,?,?,?)").run("pb-116", "Near Mint", 350, "2026-01-02");
+
+    recomputeRepresentatives(db);
+    expect(db.prepare("SELECT rep_card_id FROM set_info WHERE id='pb'").get()).toEqual({ rep_card_id: "pb-116" });
+    expect(db.prepare("SELECT rep_card_id FROM pokemon WHERE dex_id=999").get()).toEqual({ rep_card_id: "pb-116" });
+    db.close();
   });
 });

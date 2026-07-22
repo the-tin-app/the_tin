@@ -71,6 +71,7 @@ export function pickRepresentative(
   let bestUsd: { id: string; v: number } | null = null;
   let bestEur: { id: string; v: number } | null = null;
   for (const id of cardIds) {
+    if (cards.get(id)?.imageBase == null) continue; // never feature an imageless card as the cover
     const p = prices.get(id);
     if (p?.rawUsd != null && (!bestUsd || p.rawUsd > bestUsd.v)) bestUsd = { id, v: p.rawUsd };
     if (p?.rawEur != null && (!bestEur || p.rawEur > bestEur.v)) bestEur = { id, v: p.rawEur };
@@ -83,6 +84,50 @@ export function pickRepresentative(
   const priced = withImg.filter((id) => prices.get(id)?.priced);
   const pool = priced.length ? priced : withImg;
   return pool.sort((a, b) => (parseInt(cards.get(a)!.number) || 0) - (parseInt(cards.get(b)!.number) || 0))[0] ?? null;
+}
+
+/// Re-pick every set's and Pokémon's `rep_card_id` against the FULLY ENRICHED db, run as the last
+/// step of the nightly after `fill-overnight` has written PPT raw prices + the condition matrix.
+/// buildCatalog picks reps from base prices only, so a chase card whose real value (e.g. a $350
+/// SIR) lands during enrichment would never win the cover — a cheap base-priced sibling does.
+/// Value here mirrors what the app displays (previewPrices): raw_usd, else Near-Mint, else the
+/// best per-condition price; graded slabs are excluded. Image is still required via pickRepresentative.
+export function recomputeRepresentatives(db: Database.Database): void {
+  const psaOr = PSA_COLUMNS.map((c) => `pl.${c} IS NOT NULL`).join(" OR ");
+  const cardRows = db.prepare(`
+    SELECT c.id AS id, c.set_id AS setId, c.number AS number, c.image_base AS img,
+           pl.raw_usd AS rawUsd, pl.raw_eur AS rawEur,
+           CASE WHEN pl.raw_usd IS NOT NULL OR pl.raw_eur IS NOT NULL OR ${psaOr} THEN 1 ELSE 0 END AS pricedLatest
+    FROM card c LEFT JOIN price_latest pl ON pl.card_id = c.id`).all() as
+    { id: string; setId: string; number: string; img: string | null; rawUsd: number | null; rawEur: number | null; pricedLatest: number }[];
+  const cond = db.prepare(`
+    SELECT card_id AS id, MAX(usd) AS best, MAX(CASE WHEN condition = 'Near Mint' THEN usd END) AS nm
+    FROM price_by_condition GROUP BY card_id`).all() as { id: string; best: number | null; nm: number | null }[];
+  const condById = new Map(cond.map((r) => [r.id, r]));
+
+  const prices = new Map<string, { rawUsd: number | null; rawEur: number | null; priced: boolean }>();
+  const cards = new Map<string, { number: string; imageBase: string | null }>();
+  const bySet = new Map<string, string[]>();
+  for (const r of cardRows) {
+    const c = condById.get(r.id);
+    const usdVal = r.rawUsd ?? c?.nm ?? c?.best ?? null; // same precedence as previewPrices
+    prices.set(r.id, { rawUsd: usdVal, rawEur: r.rawEur, priced: r.pricedLatest === 1 || c != null });
+    cards.set(r.id, { number: r.number, imageBase: r.img });
+    (bySet.get(r.setId) ?? bySet.set(r.setId, []).get(r.setId)!).push(r.id);
+  }
+  const byDex = new Map<number, string[]>();
+  for (const r of db.prepare("SELECT dex_id AS dex, card_id AS id FROM card_dex").all() as { dex: number; id: string }[]) {
+    (byDex.get(r.dex) ?? byDex.set(r.dex, []).get(r.dex)!).push(r.id);
+  }
+
+  const upSet = db.prepare("UPDATE set_info SET rep_card_id = ? WHERE id = ?");
+  const upMon = db.prepare("UPDATE pokemon SET rep_card_id = ? WHERE dex_id = ?");
+  db.transaction(() => {
+    for (const [setId, ids] of bySet) upSet.run(pickRepresentative(ids, prices, cards), setId);
+    for (const [dex, ids] of byDex) upMon.run(pickRepresentative(ids, prices, cards), dex);
+  })();
+  // publishCatalog gzips the raw .sqlite file, so flush WAL into it before it reads bytes.
+  db.pragma("wal_checkpoint(TRUNCATE)");
 }
 
 export function buildCatalog(input: CatalogInput, outPath: string): void {
