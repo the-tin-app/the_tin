@@ -4,11 +4,14 @@ import Observation
 /// One backup file's contents: the whole owned collection + wishlist, reusing the models'
 /// existing Codable conformances verbatim. `schemaVersion` gates future migrations.
 struct BackupSnapshot: Codable, Equatable {
-    var schemaVersion: Int = 1
+    var schemaVersion: Int = 2
     var exportedAt: Date
     var groups: [CardGroup]
     var entries: [CollectionEntry]
     var wanted: [String]
+    /// v2: the full per-card wishlist data. Optional + defaulted so a v1 backup (no such key)
+    /// still decodes, with this nil — `performRestore` falls back to `wanted`-only defaults.
+    var wantEntries: [String: WantEntry]? = nil
 }
 
 /// Why a backup read failed. Manual restore surfaces these; auto-restore treats all as absent.
@@ -189,12 +192,12 @@ final class BackupService {
     private func currentSnapshot() async -> BackupSnapshot {
         var groups: [CardGroup] = []
         var entries: [CollectionEntry] = []
-        var wanted: Set<String> = []
+        var wantMap: [String: WantEntry] = [:]
         for await v in collection.groupsStream() { groups = v; break }
         for await v in collection.entriesStream() { entries = v; break }
-        for await v in wants.stream(uid: uid) { wanted = v; break }
+        for await v in wants.stream(uid: uid) { wantMap = v; break }
         return BackupSnapshot(exportedAt: now(), groups: groups, entries: entries,
-                              wanted: wanted.sorted())
+                              wanted: wantMap.keys.sorted(), wantEntries: wantMap)
     }
 
     // MARK: Reading
@@ -266,7 +269,9 @@ final class BackupService {
     /// Throws BackupError so the manual Settings path can surface what went wrong.
     func performRestore(snapshot: BackupSnapshot) async throws {
         try await collection.replaceAll(groups: snapshot.groups, entries: snapshot.entries)
-        try await wants.replaceAll(uid: uid, wanted: Set(snapshot.wanted))
+        let restoredWants = snapshot.wantEntries
+            ?? Dictionary(uniqueKeysWithValues: snapshot.wanted.map { ($0, WantEntry()) })
+        try await wants.save(uid: uid, entries: restoredWants)
     }
 
     private func currentCounts() async -> (entries: Int, wants: Int) {

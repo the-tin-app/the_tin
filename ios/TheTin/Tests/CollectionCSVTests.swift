@@ -58,8 +58,8 @@ final class CollectionCSVTests: XCTestCase {
         let data = CollectionCSV.exportWishlist(cards: [card], sets: [set.id: set],
                                                 prices: [card.id: price])
         let out = lines(data)
-        XCTAssertEqual(out[0], "card_id,name,set_id,set_name,number,market_usd,as_of")
-        XCTAssertEqual(out[1], "swsh7-215,Rayquaza VMAX,swsh7,Evolving Skies,215,92.50,2026-07-13")
+        XCTAssertEqual(out[0], "card_id,name,set_id,set_name,number,market_usd,as_of,priority,target_usd,notes")
+        XCTAssertEqual(out[1], "swsh7-215,Rayquaza VMAX,swsh7,Evolving Skies,215,92.50,2026-07-13,,,")
     }
 
     func testFilenameStampsDate() {

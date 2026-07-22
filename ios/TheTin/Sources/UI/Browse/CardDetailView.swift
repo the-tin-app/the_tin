@@ -101,6 +101,7 @@ struct CardDetailView: View {
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
     @State private var showingAddSheet = false
+    @State private var editingWishlist = false
     @State private var selectedPrinting: String?
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
     @FocusState private var gradingFeeFocused: Bool
@@ -348,6 +349,20 @@ struct CardDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $editingWishlist) {
+            wishlistEditSheet
+        }
+    }
+
+    // Split out of the `.sheet` modifier for the same reason as `detailToolbar` below — keeps
+    // the surrounding modifier chain's expression small enough for the type checker.
+    @ViewBuilder private var wishlistEditSheet: some View {
+        if let wants {
+            WishlistEditSheet(
+                card: model.card,
+                price: (try? store.prices(cardIds: [model.card.id]))?[model.card.id]?.rawUsd,
+                wants: wants)
+        }
     }
 
     // Broken out of `body` — combined with the rest of the modifier chain it pushed the type
@@ -360,6 +375,14 @@ struct CardDetailView: View {
                 }
                 .accessibilityLabel(wants.isWanted(model.card.id)
                                     ? "Remove from wishlist" : "Add to wishlist")
+            }
+            if wants.isWanted(model.card.id) {
+                ToolbarItem {
+                    Button { editingWishlist = true } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .accessibilityLabel("Edit wishlist details")
+                }
             }
         }
         if collection != nil {

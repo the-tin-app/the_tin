@@ -8,36 +8,45 @@ struct WantsPaths {
     }
 }
 
-/// On-device, offline-only wishlist (wanted card ids). Replaces `FirestoreWantsRepository`
-/// per the local-only decision — hearting a card never leaves the device and needs no auth.
-/// The `uid` parameter is ignored: wants are per-device state, so it satisfies the
-/// `WantsRepository` contract without keying on identity. Mirrors `LocalCollectionRepository`'s
-/// atomic-JSON-file + stream/notify pattern; read/write failures degrade to in-memory
-/// (never crash). NOTE: existing cloud wants do not migrate, and wants no longer sync
-/// across devices.
+/// On-device, offline-only wishlist. Stores `{cardId: WantEntry}` as one atomic JSON file.
+/// The `uid` parameter is ignored (wants are per-device). Mirrors `LocalCollectionRepository`'s
+/// atomic-file + stream/notify pattern; read/write failures degrade to in-memory (never crash).
 @MainActor
 final class LocalWantsRepository: WantsRepository {
-    private var wanted: Set<String>
+    private var entries: [String: WantEntry]
     private let fileURL: URL
-    private var continuations: [UUID: AsyncStream<Set<String>>.Continuation] = [:]
+    private var continuations: [UUID: AsyncStream<[String: WantEntry]>.Continuation] = [:]
 
-    // nonisolated so it can be built from AppModel's default-argument closure; it only
-    // assigns stored state (matches LocalCollectionRepository's init).
     nonisolated init(paths: WantsPaths = .default()) {
         self.fileURL = paths.fileURL
-        self.wanted = (try? Data(contentsOf: paths.fileURL))
-            .flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } ?? []
+        self.entries = Self.load(from: paths.fileURL)
+    }
+
+    /// Current format is a JSON object; the legacy format was a bare id array (`Set<String>`
+    /// encoded). Try the object first, then fall back to the array and migrate each id to a
+    /// default `WantEntry`. Missing/garbage file → empty. The two formats never collide: an
+    /// array can't decode as a dictionary and vice-versa.
+    ///
+    /// Shared on-disk wishlist decoder — internal (not `private`) so `PriceAlertsService` can
+    /// reuse it for background runs without a @MainActor repository instance.
+    nonisolated static func load(from url: URL) -> [String: WantEntry] {
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        if let dict = try? JSONDecoder().decode([String: WantEntry].self, from: data) { return dict }
+        if let ids = try? JSONDecoder().decode([String].self, from: data) {
+            return Dictionary(uniqueKeysWithValues: ids.map { ($0, WantEntry()) })
+        }
+        return [:]
     }
 
     private func persist() {
         try? FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let encoded = try? JSONEncoder().encode(wanted) {
+        if let encoded = try? JSONEncoder().encode(entries) {
             try? encoded.write(to: fileURL, options: .atomic)
         }
     }
 
-    nonisolated func stream(uid: String) -> AsyncStream<Set<String>> {
+    nonisolated func stream(uid: String) -> AsyncStream<[String: WantEntry]> {
         AsyncStream { continuation in
             Task { @MainActor in
                 let key = UUID()
@@ -45,20 +54,14 @@ final class LocalWantsRepository: WantsRepository {
                 continuation.onTermination = { _ in
                     Task { @MainActor in self.continuations[key] = nil }
                 }
-                continuation.yield(self.wanted)
+                continuation.yield(self.entries)
             }
         }
     }
 
-    func setWanted(uid: String, cardId: String, wanted: Bool) async throws {
-        if wanted { self.wanted.insert(cardId) } else { self.wanted.remove(cardId) }
+    func save(uid: String, entries: [String: WantEntry]) async throws {
+        self.entries = entries
         persist()
-        for c in continuations.values { c.yield(self.wanted) }
-    }
-
-    func replaceAll(uid: String, wanted: Set<String>) async throws {
-        self.wanted = wanted
-        persist()
-        for c in continuations.values { c.yield(self.wanted) }
+        for c in continuations.values { c.yield(self.entries) }
     }
 }

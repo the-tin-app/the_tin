@@ -70,15 +70,18 @@ enum CollectionCSV {
     }
 
     static let wishlistHeader = ["card_id", "name", "set_id", "set_name", "number",
-                                 "market_usd", "as_of"]
+                                 "market_usd", "as_of", "priority", "target_usd", "notes"]
 
-    /// Wishlist export: one row per wanted card, raw (ungraded) market price.
+    /// Wishlist export: one row per wanted card, raw (ungraded) market price + wishlist metadata.
     static func exportWishlist(cards: [CardRecord], sets: [String: SetRecord],
-                               prices: [String: PriceRecord]) -> Data {
+                               prices: [String: PriceRecord],
+                               entries: [String: WantEntry] = [:]) -> Data {
         let rows = cards.map { c -> [String] in
             let p = prices[c.id]
+            let e = entries[c.id]
             return [c.id, c.name, c.setId, sets[c.setId]?.name ?? "", c.number,
-                    money(p?.rawUsd), p?.rawUsd == nil ? "" : (p?.asOf ?? "")]
+                    money(p?.rawUsd), p?.rawUsd == nil ? "" : (p?.asOf ?? ""),
+                    e.map { $0.priority.label } ?? "", money(e?.targetUsd), e?.notes ?? ""]
         }
         return data([wishlistHeader] + rows)
     }
