@@ -74,9 +74,9 @@ struct PokedexListView: View {
             }
             .padding()
         }
-        .navigationTitle("Pokédex")
+        .navigationTitle("Dex")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, prompt: "Search Pokémon")
+        .searchable(text: $query, prompt: "Search cards")
         .toolbar {
             Menu {
                 Picker("Sort", selection: $sort) {

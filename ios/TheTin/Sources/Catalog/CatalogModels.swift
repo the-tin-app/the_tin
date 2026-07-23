@@ -60,7 +60,7 @@ enum Grade: String, CaseIterable, Identifiable {
     // Declared ascending — code relies on allCases order for "lowest grade first" scans.
     case psa1, psa2, psa3, psa4, psa5, psa6, psa7, psa8, psa9, psa10
     var id: String { rawValue }
-    var label: String { "PSA \(rawValue.dropFirst(3))" }
+    var label: String { "Grade \(rawValue.dropFirst(3))" }
     var numeric: Int { Int(rawValue.dropFirst(3))! }
     init?(numeric: Int) { self.init(rawValue: "psa\(numeric)") }
 }

@@ -133,7 +133,7 @@ struct BrowseFilterSheet: View {
     /// Region multi-select, backed by a `Set<Int>` of generation numbers (checkmark = selected).
     /// Parallel to `multiSelect` but Int-keyed, since regions persist by generation not by name.
     private func regionSelect() -> some View {
-        Section("Region") {
+        Section("Generation") {
             ForEach(PokemonRegion.all) { region in
                 Button {
                     if criteria.regions.contains(region.gen) { criteria.regions.remove(region.gen) }
