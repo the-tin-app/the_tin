@@ -249,7 +249,7 @@ struct CardDetailView: View {
                         // per-printing row always also has a card-level column set.
                         let graded = Grade.allCases.filter { price.gradedOnly($0) != nil }
                         if !graded.isEmpty {
-                            Text("Graded (PSA)").font(.subheadline.bold())
+                            Text("Graded").font(.subheadline.bold())
                             LazyVGrid(columns: Self.priceColumns, spacing: 8) {
                                 ForEach(graded) { grade in
                                     let perPrinting = printingGraded.first { $0.grade == grade.rawValue }?.usd
@@ -492,12 +492,12 @@ struct CardDetailView: View {
             }
             if !model.availableGrades.isEmpty {
                 Menu {
-                    Picker("PSA grade", selection: $model.overlayGrade) {
+                    Picker("Grade", selection: $model.overlayGrade) {
                         Text("Off").tag(Grade?.none)
                         ForEach(model.availableGrades) { Text($0.label).tag(Grade?.some($0)) }
                     }
                 } label: {
-                    overlayChip(model.overlayGrade?.label ?? "PSA",
+                    overlayChip(model.overlayGrade?.label ?? "Grade",
                                 dot: model.overlayGrade != nil ? .orange : nil)
                 }
             }
@@ -568,7 +568,7 @@ struct CardDetailView: View {
         guard tail.count >= 2 else { return (head + tail).map(row) }
         let p = tail.reduce(0) { $0 + $1.probability }
         let v = tail.reduce(0) { $0 + $1.probability * $1.price }
-        return head.map(row) + [GradeRow(label: "PSA ≤5", probability: p, price: p > 0 ? v / p : 0,
+        return head.map(row) + [GradeRow(label: "Grade ≤5", probability: p, price: p > 0 ? v / p : 0,
                                          value: v, isEstimate: tail.contains(where: \.isEstimate))]
     }
 
@@ -695,7 +695,7 @@ struct CardDetailView: View {
                 }
                 Text("Estimate only — not what this specific copy will cost. Once you grade it, record the actual fee on the entry for accurate cost-basis and insurance reports.")
                     .font(.caption2).foregroundStyle(.tertiary)
-                Text("Odds use the full PSA population (\(roi.totalPopulation) graded) — copies people chose to grade; your card's odds depend on its condition.")
+                Text("Odds use the full graded population (\(roi.totalPopulation) graded) — copies people chose to grade; your card's odds depend on its condition.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         } label: {
@@ -722,7 +722,7 @@ private struct PopulationBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text("PSA \(grade)")
+            Text("Grade \(grade)")
                 .font(.subheadline.monospacedDigit())
                 .frame(width: 68, alignment: .leading)
             GeometryReader { geo in

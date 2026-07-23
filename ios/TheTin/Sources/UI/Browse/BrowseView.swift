@@ -6,7 +6,7 @@ enum BrowseAxis: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .set: return "By Set"
-        case .pokedex: return "By Pokédex"
+        case .pokedex: return "By Dex"
         case .sealed: return "Sealed"
         }
     }
