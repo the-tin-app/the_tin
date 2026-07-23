@@ -133,9 +133,9 @@ describe("buildCatalog", () => {
 
 describe("pickRepresentative", () => {
   const cards = new Map([
-    ["a-1", { number: "1", imageBase: "img/a1" }],
-    ["a-2", { number: "2", imageBase: "img/a2" }],
-    ["a-3", { number: "3", imageBase: null }],
+    ["a-1", { number: "1", hasImage: true }],
+    ["a-2", { number: "2", hasImage: true }],
+    ["a-3", { number: "3", hasImage: false }],
   ]);
   it("picks highest raw_usd", () => {
     const p = new Map([["a-1", { rawUsd: 5, rawEur: null }], ["a-2", { rawUsd: 9, rawEur: 1 }]]);
@@ -157,7 +157,7 @@ describe("pickRepresentative", () => {
   });
   it("skips a higher-priced imageless card in favor of a cheaper one with art", () => {
     const p = new Map([["a-2", { rawUsd: 5, rawEur: null }], ["a-3", { rawUsd: 99, rawEur: null }]]);
-    expect(pickRepresentative(["a-2", "a-3"], p, cards)).toBe("a-2"); // a-3 is priciest but imageBase=null
+    expect(pickRepresentative(["a-2", "a-3"], p, cards)).toBe("a-2"); // a-3 is priciest but hasImage=false
   });
   it("returns null when nothing qualifies", () => {
     expect(pickRepresentative(["a-3"], new Map(), cards)).toBeNull();
@@ -165,18 +165,25 @@ describe("pickRepresentative", () => {
 });
 
 describe("recomputeRepresentatives (post-enrichment)", () => {
-  // Pitch-black repro: at build time only the cheap #107 common has a raw price, so it wins the
-  // cover. Enrichment then lands the $350 SIR (#116) as a Near-Mint condition price. Recompute
-  // must flip the cover to the SIR.
+  // Pitch-black (me05) repro: a brand-new set with NO TCGdex art — every card is displayable
+  // only through its tcgplayer_id (TCGplayer CDN), image_base is null throughout. At build only
+  // the cheap #107 common has a raw price, so it wins the cover; enrichment then lands the $350
+  // SIR (#116) as a Near-Mint condition price. Recompute must flip the cover to the SIR — and must
+  // NOT treat the image_base-less cards as imageless (they have a tcgplayer_id).
   const pbSet: TcgdexSet = { id: "pb", name: "Pitch Black", releaseDate: "2026-01-01", cardCountTotal: 120, printedTotal: 116, serie: "Test" };
   const pbCards: TcgdexCard[] = [
-    { id: "pb-107", localId: "107", name: "Common", hp: 60, types: ["Water"], rarity: "Common", artist: "x", text: "", imageBase: "https://x/107", rawUsd: 2, rawEur: null },
-    { id: "pb-116", localId: "116", name: "SIR Chase", hp: 220, types: ["Dragon"], rarity: "Special Illustration Rare", artist: "y", text: "", imageBase: "https://x/116", rawUsd: null, rawEur: null },
+    { id: "pb-107", localId: "107", name: "Common", hp: 60, types: ["Water"], rarity: "Common", artist: "x", text: "", imageBase: null, rawUsd: 2, rawEur: null },
+    { id: "pb-116", localId: "116", name: "SIR Chase", hp: 220, types: ["Dragon"], rarity: "Special Illustration Rare", artist: "y", text: "", imageBase: null, rawUsd: null, rawEur: null },
   ];
+  // Both cards have a tcgplayer_id (the only image source), supplied via the prices map.
+  const pbPrices = new Map<string, PptPrice>([
+    ["pb-107", { tcgPlayerId: 111, setName: "Pitch Black", cardNumber: "107", name: "Common", raw: 2, graded: {} }],
+    ["pb-116", { tcgPlayerId: 704873, setName: "Pitch Black", cardNumber: "116", name: "SIR Chase", raw: null, graded: {} }],
+  ]);
 
   it("flips a set cover to a chase card whose value only appears after enrichment", () => {
     const dbPath = join(mkdtempSync(join(tmpdir(), "cat-pb-")), "catalog.sqlite");
-    buildCatalog({ sets: [pbSet], cardsBySet: new Map([["pb", pbCards]]), prices: new Map(), scenes: [], asOf: "2026-01-02", dexByCard: new Map([["pb-116", [999]]]), pokemonNames: new Map([[999, "Chasemon"]]) }, dbPath);
+    buildCatalog({ sets: [pbSet], cardsBySet: new Map([["pb", pbCards]]), prices: pbPrices, scenes: [], asOf: "2026-01-02", dexByCard: new Map([["pb-116", [999]]]), pokemonNames: new Map([[999, "Chasemon"]]) }, dbPath);
 
     const db = new Database(dbPath);
     expect(db.prepare("SELECT rep_card_id FROM set_info WHERE id='pb'").get()).toEqual({ rep_card_id: "pb-107" }); // pre-enrichment: cheap common wins

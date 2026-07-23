@@ -66,12 +66,14 @@ CREATE INDEX idx_sealed_product_set ON sealed_product(set_id);
 export function pickRepresentative(
   cardIds: string[],
   prices: Map<string, { rawUsd: number | null; rawEur: number | null; priced?: boolean }>,
-  cards: Map<string, { number: string; imageBase: string | null }>,
+  // `hasImage` must mirror the app's CardRecord.imageURL(): a card is displayable when it has a
+  // TCGdex image_base OR a tcgplayer_id (TCGplayer CDN) OR a legacy image_url — NOT image_base alone.
+  cards: Map<string, { number: string; hasImage: boolean }>,
 ): string | null {
   let bestUsd: { id: string; v: number } | null = null;
   let bestEur: { id: string; v: number } | null = null;
   for (const id of cardIds) {
-    if (cards.get(id)?.imageBase == null) continue; // never feature an imageless card as the cover
+    if (!cards.get(id)?.hasImage) continue; // never feature an imageless card as the cover
     const p = prices.get(id);
     if (p?.rawUsd != null && (!bestUsd || p.rawUsd > bestUsd.v)) bestUsd = { id, v: p.rawUsd };
     if (p?.rawEur != null && (!bestEur || p.rawEur > bestEur.v)) bestEur = { id, v: p.rawEur };
@@ -80,7 +82,7 @@ export function pickRepresentative(
   if (bestEur) return bestEur.id;
   // Fallback for cards with no raw price: prefer one that still has SOME price (e.g. graded-only,
   // so it's in price_latest) over a genuinely unpriced sibling; then lowest card number with an image.
-  const withImg = cardIds.filter((id) => cards.get(id)?.imageBase != null);
+  const withImg = cardIds.filter((id) => cards.get(id)?.hasImage);
   const priced = withImg.filter((id) => prices.get(id)?.priced);
   const pool = priced.length ? priced : withImg;
   return pool.sort((a, b) => (parseInt(cards.get(a)!.number) || 0) - (parseInt(cards.get(b)!.number) || 0))[0] ?? null;
@@ -95,24 +97,25 @@ export function pickRepresentative(
 export function recomputeRepresentatives(db: Database.Database): void {
   const psaOr = PSA_COLUMNS.map((c) => `pl.${c} IS NOT NULL`).join(" OR ");
   const cardRows = db.prepare(`
-    SELECT c.id AS id, c.set_id AS setId, c.number AS number, c.image_base AS img,
+    SELECT c.id AS id, c.set_id AS setId, c.number AS number,
+           CASE WHEN c.image_base IS NOT NULL OR c.tcgplayer_id IS NOT NULL OR c.image_url IS NOT NULL THEN 1 ELSE 0 END AS hasImage,
            pl.raw_usd AS rawUsd, pl.raw_eur AS rawEur,
            CASE WHEN pl.raw_usd IS NOT NULL OR pl.raw_eur IS NOT NULL OR ${psaOr} THEN 1 ELSE 0 END AS pricedLatest
     FROM card c LEFT JOIN price_latest pl ON pl.card_id = c.id`).all() as
-    { id: string; setId: string; number: string; img: string | null; rawUsd: number | null; rawEur: number | null; pricedLatest: number }[];
+    { id: string; setId: string; number: string; hasImage: number; rawUsd: number | null; rawEur: number | null; pricedLatest: number }[];
   const cond = db.prepare(`
     SELECT card_id AS id, MAX(usd) AS best, MAX(CASE WHEN condition = 'Near Mint' THEN usd END) AS nm
     FROM price_by_condition GROUP BY card_id`).all() as { id: string; best: number | null; nm: number | null }[];
   const condById = new Map(cond.map((r) => [r.id, r]));
 
   const prices = new Map<string, { rawUsd: number | null; rawEur: number | null; priced: boolean }>();
-  const cards = new Map<string, { number: string; imageBase: string | null }>();
+  const cards = new Map<string, { number: string; hasImage: boolean }>();
   const bySet = new Map<string, string[]>();
   for (const r of cardRows) {
     const c = condById.get(r.id);
     const usdVal = r.rawUsd ?? c?.nm ?? c?.best ?? null; // same precedence as previewPrices
     prices.set(r.id, { rawUsd: usdVal, rawEur: r.rawEur, priced: r.pricedLatest === 1 || c != null });
-    cards.set(r.id, { number: r.number, imageBase: r.img });
+    cards.set(r.id, { number: r.number, hasImage: r.hasImage === 1 });
     (bySet.get(r.setId) ?? bySet.set(r.setId, []).get(r.setId)!).push(r.id);
   }
   const byDex = new Map<number, string[]>();
@@ -152,17 +155,19 @@ export function buildCatalog(input: CatalogInput, outPath: string): void {
     // set_info rows (which need rep_card_id) can be inserted before card rows, satisfying the
     // card.set_id -> set_info(id) foreign key (better-sqlite3 enforces FKs by default).
     const priceLookup = new Map<string, { rawUsd: number | null; rawEur: number | null; priced: boolean }>();
-    const cardLookup = new Map<string, { number: string; imageBase: string | null }>();
+    const cardLookup = new Map<string, { number: string; hasImage: boolean }>();
     const cardIdsBySet = new Map<string, string[]>();
     const cardIdsByDex = new Map<number, string[]>();
 
     for (const [setId, cards] of input.cardsBySet) {
       for (const c of cards) {
-        const g = input.prices.get(c.id)?.graded;
+        const pp = input.prices.get(c.id);
+        const g = pp?.graded;
         const priced = c.rawUsd != null || c.rawEur != null ||
           (g != null && PSA_COLUMNS.some((col) => g[col] != null));
         priceLookup.set(c.id, { rawUsd: c.rawUsd, rawEur: c.rawEur, priced });
-        cardLookup.set(c.id, { number: c.localId, imageBase: c.imageBase });
+        // Mirror CardRecord.imageURL(): displayable via image_base OR tcgplayer_id OR image_url.
+        cardLookup.set(c.id, { number: c.localId, hasImage: c.imageBase != null || pp?.tcgPlayerId != null || c.imageUrl != null });
         (cardIdsBySet.get(setId) ?? cardIdsBySet.set(setId, []).get(setId)!).push(c.id);
         for (const dex of input.dexByCard.get(c.id) ?? []) {
           (cardIdsByDex.get(dex) ?? cardIdsByDex.set(dex, []).get(dex)!).push(c.id);
