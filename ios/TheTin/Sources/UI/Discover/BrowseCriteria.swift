@@ -9,7 +9,8 @@ struct PokemonRegion: Identifiable, Hashable {
     let lo: Int
     let hi: Int
     var id: Int { gen }
-    var label: String { "\(name) · Gen \(gen)" }
+    /// Generic, franchise-neutral label (`name` stays as internal gen↔region documentation).
+    var label: String { "Gen \(gen) · #\(lo)–\(hi)" }
 
     static let all: [PokemonRegion] = [
         .init(gen: 1, name: "Kanto",  lo: 1,   hi: 151),
