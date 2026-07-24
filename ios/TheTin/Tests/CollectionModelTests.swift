@@ -238,4 +238,55 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertNil(snap.sparkline)
         XCTAssertNil(snap.delta7d)
     }
+
+    // MARK: adding a card you already own
+
+    private func plainEntry(_ cardId: String, qty: Int = 1, groupId: String = "",
+                            pricePaid: Double? = nil, acquiredFrom: String? = nil) -> CollectionEntry {
+        CollectionEntry(id: UUID().uuidString, cardId: cardId, groupId: groupId, qty: qty,
+                        condition: "NM", grade: nil, pricePaid: pricePaid, acquiredAt: nil,
+                        acquiredFrom: acquiredFrom, addedAt: Date(), variant: "regular")
+    }
+
+    func testSavingAnIdenticalPlainCopyBumpsQuantity() async throws {
+        await model.saveEntry(plainEntry("swsh7-215"))
+        await waitForStreams()
+        await model.saveEntry(plainEntry("swsh7-215", qty: 2))
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.count, 1)
+        XCTAssertEqual(model.entries.first?.qty, 3)
+    }
+
+    func testCopiesThatDifferStayTheirOwnRows() async throws {
+        await model.saveEntry(plainEntry("swsh7-215"))
+        await waitForStreams()
+        // A recorded acquisition is its own cost basis — folding it in would destroy it.
+        await model.saveEntry(plainEntry("swsh7-215", pricePaid: 400, acquiredFrom: "card show"))
+        // Different sleeve details are different copies.
+        var graded = plainEntry("swsh7-215")
+        graded.grade = "psa10"
+        await model.saveEntry(graded)
+        var reverse = plainEntry("swsh7-215")
+        reverse.variant = "reverseHolo"
+        await model.saveEntry(reverse)
+        await model.saveEntry(plainEntry("swsh7-215", groupId: "elsewhere"))
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.count, 5)
+        XCTAssertTrue(model.entries.allSatisfy { $0.qty == 1 })
+    }
+
+    func testCommitScanFoldsIntoAnIdenticalPlainCopy() async throws {
+        await model.saveEntry(plainEntry("ex6-58"))
+        await waitForStreams()
+        let ok = await model.commitScan(
+            ScanDraft(id: "dup", cardId: "ex6-58", variant: .regular, condition: .nm,
+                      qty: 1, addedAt: Date(), priceUsdSnapshot: nil), to: .tin)
+        await waitForStreams()
+
+        XCTAssertTrue(ok)
+        XCTAssertEqual(model.entries.count, 1)
+        XCTAssertEqual(model.entries.first?.qty, 2)
+    }
 }

@@ -86,4 +86,23 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     var gradeValue: Grade? { grade.flatMap(Grade.init(rawValue:)) }
     var variantValue: CardVariant? { variant.flatMap(CardVariant.init(rawValue:)) }
     var conditionValue: CardCondition? { condition.flatMap(CardCondition.init(rawValue:)) }
+
+    /// Nothing recorded about *how this copy was acquired* — so one such row is
+    /// interchangeable with another and folding them into a quantity loses nothing.
+    var hasAcquisitionDetail: Bool {
+        pricePaid != nil || gradingFeeUsd != nil || acquiredAt != nil
+            || !(acquiredFrom ?? "").isEmpty
+    }
+
+    /// True when `other` is the *same copy* as this one: same card, same divider, same printing,
+    /// condition and grade — and neither side records how it was acquired. Adding a card you
+    /// already own should become "×2", not a second indistinguishable ×1 row; but a copy with a
+    /// price paid, a date, or a source is its own acquisition and stays its own row (merging it
+    /// would silently destroy cost basis).
+    func isSameCopy(as other: CollectionEntry) -> Bool {
+        cardId == other.cardId && groupId == other.groupId
+            && condition == other.condition && grade == other.grade
+            && variantValue == other.variantValue
+            && !hasAcquisitionDetail && !other.hasAcquisitionDetail
+    }
 }
