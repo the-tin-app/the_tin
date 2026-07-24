@@ -50,7 +50,7 @@ final class SheetPDFTests: XCTestCase {
         XCTAssertEqual(items.map(\.id), ["big", "cheap", "none"])   // entry value desc, unpriced last
         XCTAssertEqual(items[0].unitPrice, 500)                     // UNIT price, not ×3
         XCTAssertEqual(items[0].qty, 3)
-        XCTAssertEqual(items[0].chips, ["NM", "PSA 10", "×3"])      // only what's set; ×qty when >1
+        XCTAssertEqual(items[0].chips, ["NM", "Grade 10", "×3"])    // only what's set; ×qty when >1
         XCTAssertEqual(items[0].setName, "Evolving Skies")
         XCTAssertEqual(items[1].chips, ["NM"])                      // qty 1 → no ×qty chip
         XCTAssertNil(items[2].unitPrice)                            // prints "—"
