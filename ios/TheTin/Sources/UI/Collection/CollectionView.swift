@@ -222,7 +222,20 @@ final class CollectionModel {
         if entries.contains(where: { $0.id == entry.id }) {
             await write("save the card") { try await repository.updateEntry(entry) }
         } else {
-            await write("save the card") { try await repository.addEntry(entry) }
+            await write("save the card") { try await addOrIncrement(entry) }
+        }
+    }
+
+    /// The one place a *new* entry lands, so every add path behaves the same: an identical plain
+    /// copy already in the tin gets its quantity bumped instead of gaining a second ×1 row it
+    /// can't be told apart from (see `CollectionEntry.isSameCopy`). CSV import is deliberately
+    /// not routed here — it's append-only into its own divider by design.
+    private func addOrIncrement(_ entry: CollectionEntry) async throws {
+        if var twin = entries.first(where: { $0.isSameCopy(as: entry) }) {
+            twin.qty += entry.qty
+            try await repository.updateEntry(twin)
+        } else {
+            try await repository.addEntry(entry)
         }
     }
 
@@ -258,7 +271,10 @@ final class CollectionModel {
                                     qty: draft.qty, condition: draft.condition.rawValue, grade: nil,
                                     pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date(),
                                     variant: draft.variant.rawValue)
-        do { try await repository.addEntry(entry); return true }
+        // Same merge rule as every other add path, but this one keeps its own error handling:
+        // the review screen re-presents the failure and keeps the draft, so `write`'s global
+        // alert would double up on it.
+        do { try await addOrIncrement(entry); return true }
         catch { return false }
     }
 }
