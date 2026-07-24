@@ -14,14 +14,8 @@ struct SetsListView: View {
     private var rawTotals: [String: Double] { (try? store.setRawTotals()) ?? [:] }
 
     private var ownedCounts: [String: Int] {
-        var counts: [String: Int] = [:]
-        for entry in entries {
-            let cardId = entry.cardId
-            guard let dash = cardId.lastIndex(of: "-") else { continue }
-            let setId = String(cardId[..<dash])
-            counts[setId, default: 0] += 1
-        }
-        return counts
+        let ids = Array(Set(entries.map(\.cardId)))
+        return SetsListModel.ownedCounts(ownedCards: (try? store.cards(ids: ids)) ?? [])
     }
 
     private func repCard(_ set: SetRecord) -> CardRecord? {
@@ -34,7 +28,10 @@ struct SetsListView: View {
             VStack(spacing: 4) {
                 CardImageView(card: repCard(set), quality: "low")
                 Text(set.name).font(.caption).lineLimit(2).multilineTextAlignment(.center)
-                Text("\(ownedCounts[set.id] ?? 0)/\(set.total)").font(.caption2).foregroundStyle(.secondary)
+                // Capped like GroupStats.setCompletion: secret rares push a set's card list past
+                // its printed total, and "104/102 collected" reads as a bug.
+                Text("\(min(ownedCounts[set.id] ?? 0, set.total))/\(set.total)")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
         .buttonStyle(.plain)

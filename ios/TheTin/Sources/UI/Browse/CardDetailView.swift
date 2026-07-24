@@ -106,6 +106,7 @@ struct CardDetailView: View {
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
     @State private var showingAddSheet = false
+    @State private var editingEntry: CollectionEntry?
     @State private var editingWishlist = false
     @State private var selectedPrinting: String?
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
@@ -149,6 +150,8 @@ struct CardDetailView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                     if let hp = model.card.hp { Text("HP \(hp)").font(.subheadline).foregroundStyle(.secondary) }
                 }
+
+                ownedSection
 
                 if let price = model.price {
                     VStack(alignment: .leading, spacing: 10) {
@@ -430,6 +433,76 @@ struct CardDetailView: View {
             Spacer()
             Button("Done") { gradingFeeFocused = false }
         }
+    }
+
+    /// Every copy of this card already in the tin, newest first. Empty when the screen has no
+    /// collection (Discover-only contexts) or the card isn't owned.
+    private var ownedEntries: [CollectionEntry] {
+        (collection?.entries ?? [])
+            .filter { $0.cardId == model.card.id }
+            .sorted { $0.addedAt > $1.addedAt }
+    }
+
+    /// "In your tin" — the card-shop answer to *do I already own this?*. Without it the only
+    /// ownership signal lived on the grids you tapped through, never on the card itself, so the
+    /// question could only be answered by leaving the screen and searching the tin. Each copy
+    /// says what it is and where it's filed, and taps through to its edit sheet.
+    @ViewBuilder private var ownedSection: some View {
+        let entries = ownedEntries
+        if !entries.isEmpty {
+            let copies = entries.cardCount
+            VStack(alignment: .leading, spacing: 6) {
+                Label("In your tin — ^[\(copies) copy](inflect: true)", systemImage: "checkmark.seal.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.tint)
+                ForEach(entries) { entry in
+                    Button { editingEntry = entry } label: {
+                        HStack(spacing: 6) {
+                            Text(sleeveText(entry)).font(.caption)
+                            Text("·").font(.caption).foregroundStyle(.tertiary)
+                            Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Edit this copy")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+            // Anchored here, not on the root: the root already stacks three presentations
+            // (marketplace, add, wishlist) and stacked presentations on one view are exactly
+            // what SwiftUI silently drops (see StagingReviewView's "tap twice, no prompt").
+            .sheet(item: $editingEntry) { entry in
+                if let collection {
+                    NavigationStack {
+                        EntryFormView(card: model.card, groups: collection.groups, existing: entry,
+                                      variants: model.variants, conditions: model.conditions,
+                                      matrix: model.matrix) { updated in
+                            await collection.saveEntry(updated)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// "×2 · Reverse Holo · NM" — what the user recorded about this copy, same vocabulary as
+    /// `CollectionEntryRow` so a copy reads identically wherever it's shown.
+    private func sleeveText(_ entry: CollectionEntry) -> String {
+        var parts = ["×\(entry.qty)"]
+        if let v = entry.variantValue { parts.append(v.label) }
+        if let g = entry.gradeValue { parts.append(g.label) }
+        else if let c = entry.condition { parts.append(c) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func dividerName(_ entry: CollectionEntry) -> String {
+        entry.groupId.isEmpty ? "No divider"
+            : (collection?.groups.first { $0.id == entry.groupId }?.name ?? "No divider")
     }
 
     /// Price-history area of the detail screen. Loaded → interactive chart. Empty on the casual
