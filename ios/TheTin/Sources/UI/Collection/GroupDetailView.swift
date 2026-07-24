@@ -89,7 +89,7 @@ struct GroupDetailView: View {
         // and "Select cards to move" says what to do before anything is ticked.
         .navigationTitle(isSelecting
                          ? (selection.isEmpty ? "Select cards to move"
-                            : "^[\(selection.count) card](inflect: true) selected")
+                            : "\(Self.cardCount(selection.count)) selected")
                          : title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.entries) {
@@ -101,7 +101,7 @@ struct GroupDetailView: View {
         }
         .environment(\.editMode, $editMode)
         .toolbar { detailToolbar }
-        .confirmationDialog("Move ^[\(selection.count) card](inflect: true) to…",
+        .confirmationDialog("Move \(Self.cardCount(selection.count)) to…",
                             isPresented: $choosingDestination, titleVisibility: .visible) {
             destinationDialogActions
         }
@@ -184,6 +184,12 @@ struct GroupDetailView: View {
             }
         }
     }
+
+    /// "1 card" / "3 cards". Spelled out rather than `^[…](inflect: true)`: that markup only
+    /// resolves where SwiftUI takes a LocalizedStringKey, and dialog titles / navigationTitle
+    /// take a plain String — they render the raw markup instead. Matches how the rest of the
+    /// app (TinRiffleRow, the delete dialogs) writes counts.
+    private static func cardCount(_ n: Int) -> String { "\(n) \(n == 1 ? "card" : "cards")" }
 
     private var isSelecting: Bool { editMode == .active }
     private var allSelected: Bool { !scope.isEmpty && selection.count == scope.count }
