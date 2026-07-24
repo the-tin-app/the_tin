@@ -30,6 +30,11 @@ struct StorageFingerprintRemote: FingerprintRemote {
         try JSONDecoder().decode(FingerprintManifest.self, from: try await fetchData(path: "fingerprint/manifest.json"))
     }
 
+    func fetchPartsManifest() async throws -> FingerprintPartsManifest {
+        try JSONDecoder().decode(FingerprintPartsManifest.self,
+                                 from: try await fetchData(path: "fingerprint/parts/manifest.json"))
+    }
+
     func fetchData(path: String) async throws -> Data {
         try await storage.reference(withPath: path).data(maxSize: maxSize)
     }

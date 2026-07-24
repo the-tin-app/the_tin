@@ -65,10 +65,10 @@ final class ScanGateModel {
     }
 
     /// Monotonic whole-percent sink (fractions can hop to the main actor out of order).
-    private func progressSink() -> @MainActor @Sendable (Double) -> Void {
-        { [weak self] fraction in
+    private func progressSink() -> @MainActor @Sendable (FingerprintDownloadProgress) -> Void {
+        { [weak self] progress in
             guard let self else { return }
-            let pct = Int(fraction * 100)
+            let pct = Int(progress.fraction * 100)
             if pct > self.downloadPercent { self.downloadPercent = pct }
         }
     }
