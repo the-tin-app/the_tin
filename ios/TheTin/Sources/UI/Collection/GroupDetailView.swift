@@ -56,9 +56,15 @@ struct GroupDetailView: View {
     @State private var deletingEntry: CollectionEntry?
     var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
     @State private var searchIndex = CardSearchIndex()
+    // Bulk refiling — stock List multi-select, the same gesture Photos and Files use.
+    @State private var editMode: EditMode = .inactive
+    @State private var selection = Set<String>()
+    @State private var choosingDestination = false
+    @State private var showingNewDivider = false
+    @State private var newDividerName = ""
 
     var body: some View {
-        List {
+        List(selection: $selection) {
             if searchText.isEmpty {
                 if scope.isEmpty {
                     emptyState   // instead of a "$0.00 · Priced 0 of 0" ledger for nothing
@@ -86,17 +92,14 @@ struct GroupDetailView: View {
                                           matrixByCard: model.matrixByCard,
                                           gradedByPrintingByCard: model.gradedByPrintingByCard)
         }
-        .toolbar {
-            Menu {
-                Picker("Sort", selection: $sort) {
-                    ForEach(EntrySort.allCases) { Text($0.rawValue).tag($0) }
-                }
-            } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
-            if let group {
-                Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
-                    label: { Label("Print sheet…", systemImage: "printer") }
-                    .disabled(model.entries(in: group.id).isEmpty)
-            }
+        .environment(\.editMode, $editMode)
+        .toolbar { detailToolbar }
+        .confirmationDialog("Move ^[\(selection.count) card](inflect: true) to…",
+                            isPresented: $choosingDestination, titleVisibility: .visible) {
+            destinationDialogActions
+        }
+        .alert("New divider", isPresented: $showingNewDivider) {
+            newDividerAlertActions
         }
         .printSheetFlow($printRequest)
         .onChange(of: model.catalogGeneration) { searchIndex.clear() }
@@ -126,6 +129,80 @@ struct GroupDetailView: View {
 
     private var scope: [CollectionEntry] {
         group.map { model.entries(in: $0.id) } ?? model.entries
+    }
+
+    // Broken out of `body` for the same reason as CardDetailView's toolbar: inline, the whole
+    // modifier chain blows the type checker's time budget.
+    @ToolbarContentBuilder private var detailToolbar: some ToolbarContent {
+        ToolbarItem {
+            Menu {
+                Picker("Sort", selection: $sort) {
+                    ForEach(EntrySort.allCases) { Text($0.rawValue).tag($0) }
+                }
+            } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
+        }
+        if let group {
+            ToolbarItem {
+                Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
+                    label: { Label("Print sheet…", systemImage: "printer") }
+                    .disabled(model.entries(in: group.id).isEmpty)
+            }
+        }
+        if !scope.isEmpty {
+            ToolbarItem {
+                Button(editMode == .active ? "Done" : "Select") {
+                    selection.removeAll()
+                    editMode = editMode == .active ? .inactive : .active
+                }
+            }
+        }
+        if editMode == .active {
+            ToolbarItem(placement: .bottomBar) {
+                Button("Move to divider…") { choosingDestination = true }
+                    .disabled(selection.isEmpty)
+            }
+        }
+    }
+
+    @ViewBuilder private var destinationDialogActions: some View {
+        Button("No divider") { move(to: "") }
+        ForEach(model.groups.filter { $0.id != group?.id }) { g in
+            Button(g.name) { move(to: g.id) }
+        }
+        Button("New divider…") { showingNewDivider = true }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    @ViewBuilder private var newDividerAlertActions: some View {
+        TextField("Name", text: $newDividerName)
+        Button("Create") {
+            let name = newDividerName.trimmingCharacters(in: .whitespaces)
+            newDividerName = ""
+            guard !name.isEmpty else { return }
+            let moving = selection
+            Task {
+                let id = await model.createGroup(name: name)
+                guard !id.isEmpty else { return }   // creation failed; it already alerted
+                await model.moveEntries(ids: moving, toGroup: id)
+                finishMoving()
+            }
+        }
+        Button("Cancel", role: .cancel) { newDividerName = "" }
+    }
+
+    private func move(to groupId: String) {
+        let moving = selection
+        Task {
+            await model.moveEntries(ids: moving, toGroup: groupId)
+            finishMoving()
+        }
+    }
+
+    /// Leave selection mode after a move — the moved rows are gone from this list (or folded
+    /// into another row), so keeping stale ids selected only invites a second wrong move.
+    private func finishMoving() {
+        selection.removeAll()
+        editMode = .inactive
     }
 
     /// Any owned card carries change data — gates the period picker (empty on the casual tier).

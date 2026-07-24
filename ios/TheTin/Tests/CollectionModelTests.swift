@@ -277,6 +277,58 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertTrue(model.entries.allSatisfy { $0.qty == 1 })
     }
 
+    // MARK: bulk refiling
+
+    func testMoveEntriesRefilesEveryCardInOneWrite() async throws {
+        await model.createGroup(name: "Binder")
+        await waitForStreams()
+        let gid = try XCTUnwrap(model.groups.first).id
+        for card in ["swsh7-215", "swsh7-12", "sv1-25"] {
+            await model.saveEntry(plainEntry(card, pricePaid: 1))   // distinct rows, no folding
+        }
+        await waitForStreams()
+
+        await model.moveEntries(ids: Set(model.entries.map(\.id)), toGroup: gid)
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries(in: gid).count, 3)
+        XCTAssertTrue(model.ungroupedEntries.isEmpty)
+    }
+
+    func testMoveEntriesFoldIntoIdenticalCopiesAtTheDestination() async throws {
+        await model.createGroup(name: "Binder")
+        await waitForStreams()
+        let gid = try XCTUnwrap(model.groups.first).id
+        // One plain copy already behind the divider, two more arriving from the tin.
+        await model.saveEntry(plainEntry("swsh7-215", groupId: gid))
+        await model.saveEntry(plainEntry("swsh7-215"))
+        await waitForStreams()
+        await model.saveEntry(plainEntry("swsh7-215"))   // folds into the ungrouped copy → ×2
+        await waitForStreams()
+
+        await model.moveEntries(ids: Set(model.ungroupedEntries.map(\.id)), toGroup: gid)
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.count, 1)
+        XCTAssertEqual(model.entries.first?.qty, 3)
+        XCTAssertEqual(model.entries.first?.groupId, gid)
+    }
+
+    func testMoveEntriesKeepsCopiesThatRecordAnAcquisition() async throws {
+        await model.createGroup(name: "Binder")
+        await waitForStreams()
+        let gid = try XCTUnwrap(model.groups.first).id
+        await model.saveEntry(plainEntry("swsh7-215", groupId: gid))
+        await model.saveEntry(plainEntry("swsh7-215", pricePaid: 400, acquiredFrom: "card show"))
+        await waitForStreams()
+
+        await model.moveEntries(ids: Set(model.ungroupedEntries.map(\.id)), toGroup: gid)
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries(in: gid).count, 2)
+        XCTAssertEqual(model.entries(in: gid).map(\.qty), [1, 1])
+    }
+
     func testCommitScanFoldsIntoAnIdenticalPlainCopy() async throws {
         await model.saveEntry(plainEntry("ex6-58"))
         await waitForStreams()
