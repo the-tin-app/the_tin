@@ -1,0 +1,7 @@
+# Adds a "Sponsor" button to the repo. Left dormant on purpose: The Tin's stance
+# is no funding pitch until the channel is actually live (matches the in-app
+# "coming soon" support bar). Uncomment a line below the moment it's approved.
+
+# github: the-tin-app          # ← uncomment when GitHub Sponsors for the org is approved
+# open_collective: the-tin     # ← uncomment when the Open Collective is live
+# custom: ["https://thetinapp.com/support"]
