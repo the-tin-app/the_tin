@@ -134,6 +134,20 @@ final class LocalCollectionRepository: CollectionRepository {
         }
     }
 
+    func applyEntryEdits(updated: [CollectionEntry], deletedIds: [String]) async throws {
+        let deleted = Set(deletedIds)
+        try mutate { snapshot in
+            snapshot.entries.removeAll { deleted.contains($0.id) }
+            for entry in updated {
+                if let i = snapshot.entries.firstIndex(where: { $0.id == entry.id }) {
+                    snapshot.entries[i] = entry
+                } else {
+                    snapshot.entries.append(entry)
+                }
+            }
+        }
+    }
+
     func deleteEntry(id: String) async throws {
         try mutate { $0.entries.removeAll { $0.id == id } }
     }

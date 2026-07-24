@@ -251,6 +251,34 @@ final class CollectionModel {
         await saveEntry(moved)
     }
 
+    /// Refile many cards behind one divider in a single write — the answer to a CSV import that
+    /// landed 500 cards in one place. Arrivals fold into an identical plain copy already there,
+    /// exactly as a single add does (`CollectionEntry.isSameCopy`), so bulk refiling can't
+    /// re-create the duplicate rows that rule exists to prevent.
+    func moveEntries(ids: Set<String>, toGroup groupId: String) async {
+        let moving = entries.filter { ids.contains($0.id) && $0.groupId != groupId }
+        guard !moving.isEmpty else { return }
+        // Rows already behind the destination divider, plus each arrival as it lands — so two
+        // moved copies of the same card fold into each other, not just into a pre-existing row.
+        var pool = entries.filter { $0.groupId == groupId && !ids.contains($0.id) }
+        let quantityBefore = Dictionary(uniqueKeysWithValues: pool.map { ($0.id, $0.qty) })
+        var deletedIds: [String] = []
+        for var entry in moving {
+            entry.groupId = groupId
+            if let i = pool.firstIndex(where: { $0.isSameCopy(as: entry) }) {
+                pool[i].qty += entry.qty
+                deletedIds.append(entry.id)
+            } else {
+                pool.append(entry)
+            }
+        }
+        // Write back arrivals (no prior quantity) and absorbers that grew; leave the rest alone.
+        let updated = pool.filter { quantityBefore[$0.id] != $0.qty }
+        await write("move the cards") {
+            try await repository.applyEntryEdits(updated: updated, deletedIds: deletedIds)
+        }
+    }
+
     func deleteEntry(id: String) async {
         await write("remove the card") { try await repository.deleteEntry(id: id) }
     }

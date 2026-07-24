@@ -56,14 +56,22 @@ struct GroupDetailView: View {
     @State private var deletingEntry: CollectionEntry?
     var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
     @State private var searchIndex = CardSearchIndex()
+    // Bulk refiling — stock List multi-select, the same gesture Photos and Files use.
+    @State private var editMode: EditMode = .inactive
+    @State private var selection = Set<String>()
+    @State private var choosingDestination = false
+    @State private var showingNewDivider = false
+    @State private var newDividerName = ""
 
     var body: some View {
-        List {
+        List(selection: $selection) {
             if searchText.isEmpty {
                 if scope.isEmpty {
                     emptyState   // instead of a "$0.00 · Priced 0 of 0" ledger for nothing
                 } else {
-                statsSection
+                // While selecting, the cards ARE the screen: the plaque + performance chart push
+                // the first row below the fold, which reads as "there's nothing here to tick".
+                if !isSelecting { statsSection }
                 if let group {
                     entriesSection(sortedAll(model.entries(in: group.id)), header: nil, showDivider: false)
                 } else {
@@ -77,7 +85,12 @@ struct GroupDetailView: View {
             }
         }
         .searchable(text: $searchText, prompt: group == nil ? "Search by name, set, or number" : "Search this divider")
-        .navigationTitle(title)
+        // The title carries the selection state — the count is the feedback that ticking worked,
+        // and "Select cards to move" says what to do before anything is ticked.
+        .navigationTitle(isSelecting
+                         ? (selection.isEmpty ? "Select cards to move"
+                            : "\(Self.cardCount(selection.count)) selected")
+                         : title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.entries) {
             await model.portfolio.refresh(entries: model.entries, prices: model.prices,
@@ -86,17 +99,14 @@ struct GroupDetailView: View {
                                           matrixByCard: model.matrixByCard,
                                           gradedByPrintingByCard: model.gradedByPrintingByCard)
         }
-        .toolbar {
-            Menu {
-                Picker("Sort", selection: $sort) {
-                    ForEach(EntrySort.allCases) { Text($0.rawValue).tag($0) }
-                }
-            } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
-            if let group {
-                Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
-                    label: { Label("Print sheet…", systemImage: "printer") }
-                    .disabled(model.entries(in: group.id).isEmpty)
-            }
+        .environment(\.editMode, $editMode)
+        .toolbar { detailToolbar }
+        .confirmationDialog("Move \(Self.cardCount(selection.count)) to…",
+                            isPresented: $choosingDestination, titleVisibility: .visible) {
+            destinationDialogActions
+        }
+        .alert("New divider", isPresented: $showingNewDivider) {
+            newDividerAlertActions
         }
         .printSheetFlow($printRequest)
         .onChange(of: model.catalogGeneration) { searchIndex.clear() }
@@ -126,6 +136,103 @@ struct GroupDetailView: View {
 
     private var scope: [CollectionEntry] {
         group.map { model.entries(in: $0.id) } ?? model.entries
+    }
+
+    // Broken out of `body` for the same reason as CardDetailView's toolbar: inline, the whole
+    // modifier chain blows the type checker's time budget.
+    /// Selection mode replaces the whole toolbar rather than adding to it: Sort and Print don't
+    /// apply to a selection, and the actions that DO have to be the obvious things on screen.
+    /// Nothing lives in `.bottomBar` — this view is inside a TabView, where the tab bar owns that
+    /// space and a bottom-bar item is easily missed or not shown at all.
+    @ToolbarContentBuilder private var detailToolbar: some ToolbarContent {
+        if isSelecting {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Move…") { choosingDestination = true }
+                    .disabled(selection.isEmpty)
+                    .fontWeight(.semibold)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") { finishMoving() }
+            }
+            ToolbarItem(placement: .bottomBar) {
+                Button(allSelected ? "Deselect All" : "Select All") {
+                    selection = allSelected ? [] : Set(scope.map(\.id))
+                }
+            }
+        } else {
+            ToolbarItem {
+                Menu {
+                    Picker("Sort", selection: $sort) {
+                        ForEach(EntrySort.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
+            }
+            if let group {
+                ToolbarItem {
+                    Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
+                        label: { Label("Print sheet…", systemImage: "printer") }
+                        .disabled(model.entries(in: group.id).isEmpty)
+                }
+            }
+            if !scope.isEmpty {
+                ToolbarItem {
+                    Button("Select") {
+                        selection.removeAll()
+                        editMode = .active
+                    }
+                }
+            }
+        }
+    }
+
+    /// "1 card" / "3 cards". Spelled out rather than `^[…](inflect: true)`: that markup only
+    /// resolves where SwiftUI takes a LocalizedStringKey, and dialog titles / navigationTitle
+    /// take a plain String — they render the raw markup instead. Matches how the rest of the
+    /// app (TinRiffleRow, the delete dialogs) writes counts.
+    private static func cardCount(_ n: Int) -> String { "\(n) \(n == 1 ? "card" : "cards")" }
+
+    private var isSelecting: Bool { editMode == .active }
+    private var allSelected: Bool { !scope.isEmpty && selection.count == scope.count }
+
+    @ViewBuilder private var destinationDialogActions: some View {
+        Button("No divider") { move(to: "") }
+        ForEach(model.groups.filter { $0.id != group?.id }) { g in
+            Button(g.name) { move(to: g.id) }
+        }
+        Button("New divider…") { showingNewDivider = true }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    @ViewBuilder private var newDividerAlertActions: some View {
+        TextField("Name", text: $newDividerName)
+        Button("Create") {
+            let name = newDividerName.trimmingCharacters(in: .whitespaces)
+            newDividerName = ""
+            guard !name.isEmpty else { return }
+            let moving = selection
+            Task {
+                let id = await model.createGroup(name: name)
+                guard !id.isEmpty else { return }   // creation failed; it already alerted
+                await model.moveEntries(ids: moving, toGroup: id)
+                finishMoving()
+            }
+        }
+        Button("Cancel", role: .cancel) { newDividerName = "" }
+    }
+
+    private func move(to groupId: String) {
+        let moving = selection
+        Task {
+            await model.moveEntries(ids: moving, toGroup: groupId)
+            finishMoving()
+        }
+    }
+
+    /// Leave selection mode after a move — the moved rows are gone from this list (or folded
+    /// into another row), so keeping stale ids selected only invites a second wrong move.
+    private func finishMoving() {
+        selection.removeAll()
+        editMode = .inactive
     }
 
     /// Any owned card carries change data — gates the period picker (empty on the casual tier).
@@ -259,16 +366,26 @@ struct GroupDetailView: View {
 
     // Tap shows the card — the app-wide "open a card" verb (the cards are the hero);
     // editing is the deliberate second gesture, on leading swipe + long-press.
+    @ViewBuilder
     private func row(_ entry: CollectionEntry, showDivider: Bool) -> some View {
-        NavigationLink(value: CardID(raw: entry.cardId)) {
-            CollectionEntryRow(
-                card: try? store.card(id: entry.cardId),
-                entry: entry,
-                dividerName: showDivider
-                    ? model.groups.first(where: { $0.id == entry.groupId })?.name : nil,
-                value: model.entryValue(entry),
-                delta: deltaRecord(entry))
+        let content = CollectionEntryRow(
+            card: try? store.card(id: entry.cardId),
+            entry: entry,
+            dividerName: showDivider
+                ? model.groups.first(where: { $0.id == entry.groupId })?.name : nil,
+            value: model.entryValue(entry),
+            delta: deltaRecord(entry))
+        // A NavigationLink row owns its own tap, so in selection mode it eats the tick instead of
+        // toggling — the row has to be a plain, selectable row while selecting. `.tag` pins the
+        // selection identity either way rather than leaving it to be inferred.
+        Group {
+            if isSelecting {
+                content
+            } else {
+                NavigationLink(value: CardID(raw: entry.cardId)) { content }
+            }
         }
+        .tag(entry.id)
         .swipeActions {
             Button("Remove", role: .destructive) { deletingEntry = entry }
         }
