@@ -111,8 +111,12 @@ final class ScanSessionTests: XCTestCase {
         for _ in 0..<6 { XCTAssertEqual(s.ingest(obs([("c", 60)])), .idle) }
         // Card leaves the frame well past graceMisses — must still not dismiss the chooser.
         for _ in 0..<15 { XCTAssertEqual(s.ingest(obs([], 0.0, present: false)), .idle) }
-        // Only an explicit resolution frees it; scanning then resumes and can lock again.
+        // Only an explicit resolution frees it. Dismiss suppresses the shown tiles for the current
+        // card, so they keep guiding (not locking)…
         s.dismissChooser()
+        for _ in 0..<3 { XCTAssertEqual(s.ingest(obs([("a", 40), ("b", 5)])), .guide(bestGuess: nil)) }
+        // …until the card leaves the frame, which clears the per-card suppression and lets it lock.
+        for _ in 0..<13 { _ = s.ingest(obs([], 0.0, present: false)) }
         _ = s.ingest(obs([("a", 40), ("b", 5)])); _ = s.ingest(obs([("a", 40), ("b", 5)]))
         XCTAssertEqual(s.ingest(obs([("a", 40), ("b", 5)])), .lock(cardId: "a"))
     }
@@ -138,19 +142,42 @@ final class ScanSessionTests: XCTestCase {
         XCTAssertEqual(event, .guide(bestGuess: nil))
     }
 
-    // "None of these — keep scanning": dismissing a chooser resumes scanning with a clean
-    // slate — nothing suppressed (a shown option may still be the truth of a LATER card, e.g.
-    // binder duplicates), and the same card can re-lock once evidence rebuilds.
-    func testDismissChooserResumesScanning() {
+    // "None of these — keep scanning": the rejected tiles are suppressed for the CURRENT card,
+    // so re-scanning the same card must not re-offer or re-lock them (the collector already said
+    // it's none of these). Suppression is card-scoped — once the card leaves the frame the same
+    // ids can lock again (a later binder duplicate, or a re-aim at a mis-framed card).
+    func testDismissChooserSuppressesShownTilesForCurrentCard() {
         let s = ScanSession()
         _ = s.ingest(obs([("a", 40), ("b", 38)]))
         _ = s.ingest(obs([("a", 40), ("b", 38)]))
         XCTAssertEqual(s.ingest(obs([("a", 40), ("b", 38)])), .ambiguous(["a", "b"]))
         s.dismissChooser()
-        _ = s.ingest(obs([("a", 40), ("b", 5)]))
-        _ = s.ingest(obs([("a", 40), ("b", 5)]))
-        XCTAssertEqual(s.ingest(obs([("a", 40), ("b", 5)])), .lock(cardId: "a"),
-                       "dismiss must resume scanning without suppressing the shown options")
+        // Same card still under the camera → a and b are suppressed → they must not re-lock.
+        for _ in 0..<5 {
+            XCTAssertEqual(s.ingest(obs([("a", 40), ("b", 5)])), .guide(bestGuess: nil),
+                           "rejected tiles must stay suppressed while the same card is scanned")
+        }
+        // Card leaves the frame past graceMisses → suppression clears → the same id can lock again.
+        for _ in 0..<13 { _ = s.ingest(obs([], 0.0, present: false)) }
+        _ = s.ingest(obs([("a", 40)]))
+        _ = s.ingest(obs([("a", 40)]))
+        XCTAssertEqual(s.ingest(obs([("a", 40)])), .lock(cardId: "a"),
+                       "once the card changes, a previously-rejected id is no longer suppressed")
+    }
+
+    // Manual "Reset": unlike "None of these", it clears suppression too — a card rejected via a
+    // chooser can lock again immediately after a reset, with no card-gone gap in between.
+    func testResetClearsSuppressionImmediately() {
+        let s = ScanSession()
+        _ = s.ingest(obs([("a", 40), ("b", 38)]))
+        _ = s.ingest(obs([("a", 40), ("b", 38)]))
+        XCTAssertEqual(s.ingest(obs([("a", 40), ("b", 38)])), .ambiguous(["a", "b"]))
+        s.dismissChooser()                                                   // suppresses a, b
+        XCTAssertEqual(s.ingest(obs([("a", 40)])), .guide(bestGuess: nil))    // a is suppressed
+        s.reset()                                                            // clean slate incl. suppression
+        _ = s.ingest(obs([("a", 40)])); _ = s.ingest(obs([("a", 40)]))
+        XCTAssertEqual(s.ingest(obs([("a", 40)])), .lock(cardId: "a"),
+                       "reset must clear suppression, so a previously-rejected id can lock at once")
     }
 
     func testRejectSuppressesId() {
