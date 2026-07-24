@@ -42,7 +42,7 @@ final class BrowseCriteriaTests: XCTestCase {
     }
 
     func testRegionLabel() {
-        XCTAssertEqual(PokemonRegion.all.first?.label, "Kanto · Gen 1")
+        XCTAssertEqual(PokemonRegion.all.first?.label, "Gen 1 · #1–151")
     }
 
     func testRegionsAxisAffectsIsDefaultAndRoundTrips() throws {
