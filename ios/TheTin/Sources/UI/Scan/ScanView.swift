@@ -20,6 +20,20 @@ struct ScanView: View {
                 .aspectRatio(0.717, contentMode: .fit)
                 .padding(28)
             VStack {
+                HStack {
+                    Spacer()
+                    // Escape hatch: clears the scanner to a clean slate (votes, lock, chooser, and
+                    // any rejected-card suppression). Does NOT drop staged cards. Available in every
+                    // state, including while a chooser is frozen.
+                    Button { Task { await model.reset() } } label: {
+                        Label("Reset", systemImage: "arrow.clockwise")
+                            .font(.footnote.weight(.medium)).foregroundStyle(.primary)
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Clears the current scan and looks again")
+                }
                 Spacer()
                 VStack(spacing: 8) {
                     CoverageRing(value: model.coverage)

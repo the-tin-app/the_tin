@@ -55,22 +55,38 @@ final class ScanSession {
 
     init(config: LockConfig = LockConfig()) { self.config = config }
 
-    func reject(cardId: String) { suppressed.insert(cardId); resetAccumulation() }
+    func reject(cardId: String) { resetAccumulation(); suppressed.insert(cardId) }
 
     /// Latch as if a lock occurred — used when the user manually resolves an `.ambiguous`
     /// chooser, so the same physical card cannot auto-lock again until it leaves the frame
     /// or a different card takes its place (swap release).
     func acknowledge(cardId: String) { locked = true; lockedCardId = cardId; chooserPending = false }
 
-    /// "None of these — keep scanning": drop the frozen chooser and start over on whatever is
-    /// under the camera. Deliberately does NOT suppress the shown options — a shown option may
-    /// be the truth of a LATER card (binder duplicates), and the user may simply have mis-aimed.
-    func dismissChooser() { resetAccumulation() }
+    /// "None of these — keep scanning": drop the frozen chooser and suppress the tiles that were
+    /// shown, so re-scanning the SAME card surfaces fresh candidates instead of the rejected four
+    /// (Tomas, 2026-07-23 — collector already told us it's none of these). Suppression is scoped to
+    /// the current card: resetAccumulation clears it, so once the card leaves the frame or a
+    /// different card takes over, a genuine later binder duplicate — or a re-aim at a mis-framed
+    /// card — can still lock.
+    // ponytail: an immediately-adjacent binder duplicate of a just-rejected card (no no-card gap,
+    // no other card locking in between) stays suppressed until such a gap; per-card suppression is
+    // the simple win. Track shown ids per-card with an explicit "card generation" id if that ever bites.
+    func dismissChooser() {
+        let shown = accum.sorted { $0.value > $1.value }.prefix(4).map(\.key)
+        resetAccumulation()            // clears the old suppression along with the votes…
+        suppressed.formUnion(shown)    // …then re-suppresses just the tiles the user rejected
+    }
+
+    /// Manual "Reset" from the scan screen: wipe the recognition state to a clean slate — votes,
+    /// lock, frozen chooser, AND suppression — so the scanner looks again with no memory. Unlike
+    /// dismissChooser it suppresses nothing; it's the user's escape hatch when scanning gets stuck.
+    func reset() { resetAccumulation() }
 
     private func resetAccumulation() {
         accum.removeAll(); leader = nil; leaderStreak = 0
         locked = false; lockedCardId = nil; swapStreak = 0; presentFrames = 0
         chooserPending = false
+        suppressed.removeAll()   // card-scoped: a new card (swap/removal) starts with nothing suppressed
     }
 
     /// Surface a frozen chooser: options must not reshuffle while the user decides, so every

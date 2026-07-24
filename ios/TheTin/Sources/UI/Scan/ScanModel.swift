@@ -91,6 +91,7 @@ actor ScanPipeline {
 
     func acknowledgeChoice(cardId: String) { session.acknowledge(cardId: cardId) }
     func dismissChooser() { session.dismissChooser() }
+    func reset() { session.reset() }
     func reject(cardId: String) { session.reject(cardId: cardId) }
 }
 
@@ -202,6 +203,15 @@ final class ScanModel {
         ambiguous = []
         guidance = "Scanning…"
         await pipeline.dismissChooser()
+    }
+
+    /// Manual "Reset": wipe the scanner back to a clean slate (votes, lock, chooser, and the
+    /// per-card suppression). Leaves the staging tray of already-captured cards untouched.
+    func reset() async {
+        ambiguous = []
+        bestGuess = nil
+        guidance = "Frame the card inside the box"
+        await pipeline.reset()
     }
     func reject(_ draft: ScanDraft) async {
         await pipeline.reject(cardId: draft.cardId)
