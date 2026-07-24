@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Immersive full-screen "See all" deck for a Discover stream. A horizontal paging `ScrollView`
-/// swipes one big card at a time; a double tap toggles Want, press-and-hold offers "Add to
-/// group…", and the deck prefetches more pages as you near the end. The nav-bar back button is
+/// swipes one big card at a time; a double tap toggles Want, press-and-hold offers "Save to
+/// tin…", and the deck prefetches more pages as you near the end. The nav-bar back button is
 /// automatic (this is a pushed view).
 ///
 /// Uses a paging `ScrollView` + `LazyHStack` rather than `TabView(.page)`: the deck is a dynamic,
@@ -20,7 +20,6 @@ struct StreamView: View {
 
     @State private var pager: StreamPager?
     @State private var currentIndex: Int?
-    @State private var sheetCard: CardRecord?
     @State private var prefetcher = CardImagePrefetcher()
     @State private var wantBump = 0 // bumped on each double-tap to fire the haptic
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -66,17 +65,6 @@ struct StreamView: View {
                 Task { await pager.loadNextPage(); prefetchAround(i) }
             }
         }
-        .sheet(item: $sheetCard) { card in
-            if let collection {
-                NavigationStack {
-                    EntryFormView(card: card, groups: collection.groups, existing: nil,
-                                  matrix: collection.matrixByCard[card.id] ?? [],
-                                  onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
-                        await collection.saveEntry(entry)
-                    }
-                }
-            }
-        }
     }
 
     /// Warm the next several cards' high-res art so it's cached before the swipe reaches them.
@@ -102,15 +90,9 @@ struct StreamView: View {
                     wantBump += 1
                 }
                 .sensoryFeedback(.impact, trigger: wantBump)
-                .contextMenu {
-                    if collection != nil {
-                        Button {
-                            sheetCard = card
-                        } label: {
-                            Label("Save to tin…", systemImage: "plus.square.on.square")
-                        }
-                    }
-                }
+                // Wanted is already the double tap + heart here, so the shared menu is used for
+                // its save sheet only — passing `wants: nil` keeps the long-press to one action.
+                .cardQuickActions(card: card, wants: nil, collection: collection, store: store)
 
             VStack(spacing: 4) {
                 Text(card.name).font(.title3.bold()).multilineTextAlignment(.center)

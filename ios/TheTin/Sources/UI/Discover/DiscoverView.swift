@@ -67,11 +67,13 @@ private struct DiscoverHomeView: View {
                 ForEach(DiscoverModel.StreamKind.allCases, id: \.self) { kind in
                     let cards = model.previews[kind] ?? []
                     if !cards.isEmpty {
-                        StreamPreviewRow(kind: kind, cards: cards, store: store, wants: wants)
+                        StreamPreviewRow(kind: kind, cards: cards, store: store,
+                                         wants: wants, collection: collection)
                     }
                 }
                 if !model.connections.isEmpty {
-                    ConnectionsRow(connections: model.connections, store: store, wants: wants)
+                    ConnectionsRow(connections: model.connections, store: store,
+                                   wants: wants, collection: collection)
                 }
             }
             .padding(.vertical)
@@ -85,6 +87,7 @@ private struct StreamPreviewRow: View {
     let cards: [CardRecord]
     let store: CatalogStore
     var wants: WantsModel?
+    var collection: CollectionModel?
 
     var body: some View {
         // Preview price = raw market, falling back to the NM condition price (a separate feed)
@@ -102,7 +105,8 @@ private struct StreamPreviewRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(cards) { card in
-                        DiscoverTile(card: card, value: prices[card.id], wants: wants)
+                        DiscoverTile(card: card, value: prices[card.id], wants: wants,
+                                     collection: collection, store: store)
                     }
                 }
                 .padding(.horizontal)
@@ -116,6 +120,7 @@ private struct ConnectionsRow: View {
     let connections: [Connection]
     let store: CatalogStore
     var wants: WantsModel?
+    var collection: CollectionModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -129,7 +134,8 @@ private struct ConnectionsRow: View {
                             Text(connection.title).font(.caption.bold()).foregroundStyle(.secondary)
                             HStack(spacing: 8) {
                                 ForEach(cards) { card in
-                                    DiscoverTile(card: card, value: prices[card.id], wants: wants)
+                                    DiscoverTile(card: card, value: prices[card.id], wants: wants,
+                                                 collection: collection, store: store)
                                 }
                             }
                         }
@@ -145,6 +151,8 @@ private struct DiscoverTile: View {
     let card: CardRecord
     let value: Double?
     var wants: WantsModel?
+    var collection: CollectionModel?
+    var store: CatalogStore?
 
     var body: some View {
         NavigationLink(value: CardID(raw: card.id)) {
@@ -157,7 +165,7 @@ private struct DiscoverTile: View {
             .frame(width: 120)
         }
         .buttonStyle(.plain)
-        .cardQuickActions(cardId: card.id, wants: wants)
+        .cardQuickActions(card: card, wants: wants, collection: collection, store: store)
         .overlay(alignment: .topTrailing) {
             if let wants {
                 Button {

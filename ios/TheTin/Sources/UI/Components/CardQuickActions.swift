@@ -1,26 +1,48 @@
 import SwiftUI
 
-/// Long-press quick actions for any card tile: toggle Wanted, or open the save sheet.
+/// Long-press quick actions for any card tile or page: toggle Wanted, or save a copy to the tin.
+/// The save sheet lives here rather than at each call site so every grid gets the same form —
+/// with the card's real printings/conditions loaded from the catalog (not `CollectionModel`,
+/// which only caches the cards you already own, so a brand-new card would get a price-less,
+/// unfiltered printing picker).
 struct CardQuickActions: ViewModifier {
-    let cardId: String
+    let card: CardRecord
     var wants: WantsModel?
-    var onAddToGroup: (() -> Void)?
+    var collection: CollectionModel?
+    var store: CatalogStore?
+    @State private var saving = false
 
     func body(content: Content) -> some View {
-        content.contextMenu {
-            if let wants {
-                Button {
-                    wants.toggle(cardId)
-                } label: {
-                    Label(wants.isWanted(cardId) ? "Remove from Wishlist" : "Add to Wishlist",
-                          systemImage: wants.isWanted(cardId) ? "heart.slash" : "heart")
+        content
+            .contextMenu {
+                if let wants {
+                    Button {
+                        wants.toggle(card.id)
+                    } label: {
+                        Label(wants.isWanted(card.id) ? "Remove from Wishlist" : "Add to Wishlist",
+                              systemImage: wants.isWanted(card.id) ? "heart.slash" : "heart")
+                    }
+                }
+                if collection != nil {
+                    Button {
+                        saving = true
+                    } label: {
+                        Label("Save to tin…", systemImage: "plus.square.on.square")
+                    }
                 }
             }
-            if let onAddToGroup {
-                Button {
-                    onAddToGroup()
-                } label: {
-                    Label("Save to tin…", systemImage: "folder.badge.plus")
+            .sheet(isPresented: $saving) { saveSheet }
+    }
+
+    @ViewBuilder private var saveSheet: some View {
+        if let collection {
+            NavigationStack {
+                EntryFormView(card: card, groups: collection.groups, existing: nil,
+                              variants: (try? store?.variantPrices(cardId: card.id)) ?? [],
+                              conditions: (try? store?.conditionPrices(cardId: card.id)) ?? [],
+                              matrix: (try? store?.matrixPrices(cardId: card.id)) ?? [],
+                              onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
+                    await collection.saveEntry(entry)
                 }
             }
         }
@@ -28,8 +50,9 @@ struct CardQuickActions: ViewModifier {
 }
 
 extension View {
-    func cardQuickActions(cardId: String, wants: WantsModel?,
-                          onAddToGroup: (() -> Void)? = nil) -> some View {
-        modifier(CardQuickActions(cardId: cardId, wants: wants, onAddToGroup: onAddToGroup))
+    func cardQuickActions(card: CardRecord, wants: WantsModel?,
+                          collection: CollectionModel? = nil,
+                          store: CatalogStore? = nil) -> some View {
+        modifier(CardQuickActions(card: card, wants: wants, collection: collection, store: store))
     }
 }

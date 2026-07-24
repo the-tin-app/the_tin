@@ -31,6 +31,19 @@ final class SetsListModel {
         "Trainer kits", "McDonald's Collection", "POP", "Pokémon TCG Pocket",
     ]
 
+    /// Distinct cards owned per set — the grid's "N/total collected". Counts each card ONCE
+    /// however many entries hold it (a raw copy + a graded copy of the same card is one card
+    /// collected), matching `GroupStats.setCompletion` on the set screen; counting entries made
+    /// the two screens disagree. Keyed off `CardRecord.setId`, not a split of the card id.
+    nonisolated static func ownedCounts(ownedCards: [CardRecord]) -> [String: Int] {
+        var seen = Set<String>()
+        var counts: [String: Int] = [:]
+        for card in ownedCards where seen.insert(card.id).inserted {
+            counts[card.setId, default: 0] += 1
+        }
+        return counts
+    }
+
     nonisolated static func category(of set: SetRecord) -> SetCategory {
         guard let era = set.era, otherEras.contains(era) else { return .major }
         return .other

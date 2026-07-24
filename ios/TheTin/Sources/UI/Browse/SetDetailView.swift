@@ -77,7 +77,7 @@ struct SetDetailView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .cardQuickActions(cardId: card.id, wants: wants)
+                        .cardQuickActions(card: card, wants: wants, collection: collection, store: store)
                     }
                 }
 
