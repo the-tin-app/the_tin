@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, staging]
+  push:
+    branches: [main, staging]
+
+# ponytail: backend tests only (ubuntu). iOS tests need a macOS runner + Xcode
+# and aren't wired here yet — add a macos-latest job when it's worth the minutes.
+
+jobs:
+  node:
+    name: ${{ matrix.dir }} (node)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [functions, catalog-server]
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  fingerprint:
+    name: fingerprint (python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fingerprint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest

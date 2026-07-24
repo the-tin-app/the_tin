@@ -1,0 +1,18 @@
+name: Feature request
+description: Suggest an idea for The Tin
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the collecting problem or gap, not just the solution.
+      placeholder: I want to track which cards I've traded away, separate from sold…
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to see?
+    validations:
+      required: true

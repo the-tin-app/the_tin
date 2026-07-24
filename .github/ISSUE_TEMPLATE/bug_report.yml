@@ -1,0 +1,39 @@
+name: Bug report
+description: Something in the app is broken or behaving wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting! Card recognition runs on-device, so please include your device and version — most bugs are device-specific.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong, and what did you expect instead?
+      placeholder: I scanned a reverse-holo Charizard and it matched the normal print…
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the scanner
+        2. Scan …
+        3. See …
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App version / build
+      description: Shown in Settings (e.g. 1.0.0 build 21). TestFlight testers — include the build number.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device & iOS version
+      placeholder: iPhone 15 Pro, iOS 18.5
+    validations:
+      required: true
