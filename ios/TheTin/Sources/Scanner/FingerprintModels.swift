@@ -69,21 +69,10 @@ extension FingerprintRemote {
     }
 }
 
-/// Mirrors HTTPCatalogRemote against the Firebase Storage download endpoint (reuses its URL helper).
-struct HTTPFingerprintRemote: FingerprintRemote {
-    let baseURL: URL
-    var session: URLSession = .shared
-
-    func fetchManifest() async throws -> FingerprintManifest {
-        try JSONDecoder().decode(FingerprintManifest.self, from: try await get("fingerprint/manifest.json"))
-    }
-    func fetchData(path: String) async throws -> Data { try await get(path) }
-
-    private func get(_ path: String) async throws -> Data {
-        guard let url = HTTPCatalogRemote.downloadURL(base: baseURL, path: path) else { throw CatalogError.badResponse }
-        let (data, response) = try await session.data(for: await StorageAuth.authorizedRequest(url: url))
-        guard let http = response as? HTTPURLResponse else { throw CatalogError.badResponse }
-        guard http.statusCode == 200 else { throw CatalogError.httpStatus(http.statusCode) }
-        return data
-    }
+/// No source configured. Unreachable in a shipping build — `AppConfig.selfHostBaseURL` is a
+/// parsed constant — but representable, so fail closed with "scanner unavailable" rather than
+/// force-unwrapping. (The pack is served only from the self-hosted NAS; see `ScannerPackModel`.)
+struct UnavailableFingerprintRemote: FingerprintRemote {
+    func fetchManifest() async throws -> FingerprintManifest { throw CatalogError.badResponse }
+    func fetchData(path: String) async throws -> Data { throw CatalogError.badResponse }
 }

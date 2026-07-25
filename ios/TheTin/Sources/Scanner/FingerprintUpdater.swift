@@ -57,6 +57,18 @@ enum FingerprintUpdateOutcome: Equatable {
     case alreadyCurrent(version: Int)
 }
 
+/// What the server currently publishes, read from whichever manifest format it serves. Lets the
+/// UI advertise a real download size and — more importantly — tell apart a pack that is merely
+/// *older* than the published one (still perfectly usable) from one that is *incompatible*
+/// (different fpVersion/codebook, would silently mismatch), which is the only case worth
+/// taking someone's working scanner away for.
+struct FingerprintPublishedGates: Equatable {
+    let version: Int
+    let fpVersion: Int
+    let codebookHash: String
+    let sizeBytes: Int
+}
+
 /// Mirrors CatalogUpdater's manifest→verify(gz sha256)→gunzip→probe→atomic-swap flow, with two
 /// extra gates: an incompatible codebookHash (≠ the app's bundled codebook) is rejected outright,
 /// and an fpVersion/codebookHash change forces re-download even at an equal `version`.
@@ -111,6 +123,38 @@ final class FingerprintUpdater {
     func discardPartialDownload() {
         try? fm.removeItem(at: paths.incomingURL)
         try? fm.removeItem(at: paths.downloadStateURL)
+    }
+
+    /// Removes the installed pack, its sidecars and any partial download — the Settings
+    /// "reclaim this space" action. The caller must close any open `FingerprintStore` first
+    /// (see `ScannerPackModel.deletePack`), or the handle outlives its file.
+    func deleteInstalledPack() {
+        for suffix in ["", "-wal", "-shm"] {
+            try? fm.removeItem(at: URL(fileURLWithPath: paths.databaseURL.path + suffix))
+        }
+        try? fm.removeItem(at: paths.stateURL)
+        discardPartialDownload()
+    }
+
+    /// Bytes the installed pack occupies on disk, or nil when none is installed.
+    func installedSizeBytes() -> Int? {
+        guard let size = try? fm.attributesOfItem(atPath: paths.databaseURL.path)[.size] as? Int
+        else { return nil }
+        return size
+    }
+
+    /// What the host publishes right now, preferring the parts manifest. Throws when neither
+    /// manifest is reachable — callers treat that as "offline, keep using what's installed".
+    func publishedGates() async throws -> FingerprintPublishedGates {
+        if let parts = try? await remote.fetchPartsManifest() {
+            return FingerprintPublishedGates(version: parts.version, fpVersion: parts.fpVersion,
+                                             codebookHash: parts.codebookHash,
+                                             sizeBytes: parts.sizeBytes)
+        }
+        let legacy = try await remote.fetchManifest()
+        return FingerprintPublishedGates(version: legacy.version, fpVersion: legacy.fpVersion,
+                                         codebookHash: legacy.codebookHash,
+                                         sizeBytes: legacy.sizeBytes)
     }
 
     /// `onProgress` fires only when the pack will actually be fetched — never on the cheap
