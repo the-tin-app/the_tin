@@ -74,7 +74,7 @@ struct SettingsView: View {
             }
             .confirmationDialog("Download over cellular?", isPresented: $confirmingPackCellular,
                                 titleVisibility: .visible) {
-                Button("Download now") { pack.startDownload() }
+                Button("Download now") { pack.startDownload(allowingExpensive: true) }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("You're not on Wi-Fi. This may count against your data plan — you can pause and resume anytime.")
@@ -281,7 +281,9 @@ struct SettingsView: View {
                     Text("Paused — \(p.byteSummary)")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
-                Button(reason == .cellular ? "Resume anyway" : "Resume") { pack.startDownload() }
+                Button(reason == .cellular ? "Resume anyway" : "Resume") {
+                    pack.startDownload(allowingExpensive: reason == .cellular)
+                }
                 Button("Discard partial download", role: .destructive) { pack.discardPartialDownload() }
             case .ready:
                 LabeledContent("Scanner pack", value: installedPackText)

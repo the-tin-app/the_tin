@@ -169,6 +169,37 @@ final class ScannerPackModelTests: XCTestCase {
         await pack.waitForDownload()
     }
 
+    /// Device defect: "Download now" on the cellular confirmation must not be parked two seconds
+    /// later by the very watcher that prompted it. Accepting a metered download means accepting it.
+    @MainActor
+    func testExplicitlyAcceptedCellularDownloadIsNotAutoPaused() async throws {
+        let env = try FingerprintUpdaterTestEnv.makeParts(partSize: 4096)
+        let pack = try makePack(env: env)
+        pack.startDownload(allowingExpensive: true)
+
+        pack.networkChanged(isExpensive: true)
+
+        XCTAssertFalse(pack.isPaused, "the user already said yes to cellular for this transfer")
+        await pack.waitForDownload()
+        XCTAssertEqual(pack.phase, .ready)
+    }
+
+    /// ...but the consent is per-transfer: once installed, a later download must ask again.
+    @MainActor
+    func testCellularConsentDoesNotSurviveTheCompletedDownload() async throws {
+        let env = try FingerprintUpdaterTestEnv.make()
+        let pack = try makePack(env: env)
+        pack.startDownload(allowingExpensive: true)
+        await pack.waitForDownload()
+        pack.deletePack()
+
+        pack.startDownload()
+        pack.networkChanged(isExpensive: true)
+
+        XCTAssertTrue(pack.isPaused, "a fresh transfer must ask for cellular consent again")
+        await pack.waitForDownload()
+    }
+
     @MainActor
     func testNetworkChangeIgnoredWhenNothingIsDownloading() async throws {
         let env = try FingerprintUpdaterTestEnv.make()

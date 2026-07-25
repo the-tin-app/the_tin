@@ -49,16 +49,25 @@ final class ScannerPackModel {
     private let catalogStore: CatalogStore
     private let makeStore: (String) throws -> FingerprintStore
     private let makeCodebook: () throws -> Codebook
+    /// Consulted directly rather than through a SwiftUI `onChange`: the auto-pause must not
+    /// depend on a view being on screen or on observation timing.
+    private let network: NetworkMonitor?
     private var downloadTask: Task<Void, Never>?
+    private var networkWatch: Task<Void, Never>?
+    /// Set when the user explicitly accepted a metered download ("Download now" / "Resume
+    /// anyway"). Without it the watcher would park the very transfer they just approved.
+    private var allowsExpensive = false
 
     init(updater: FingerprintUpdater,
          fallbackUpdater: @autoclosure @escaping () -> FingerprintUpdater? = nil,
          paths: FingerprintPaths, catalogStore: CatalogStore,
          makeStore: @escaping (String) throws -> FingerprintStore,
-         makeCodebook: @escaping () throws -> Codebook) {
+         makeCodebook: @escaping () throws -> Codebook,
+         network: NetworkMonitor? = nil) {
         self.updater = updater; self.fallbackUpdater = fallbackUpdater
         self.paths = paths; self.catalogStore = catalogStore
         self.makeStore = makeStore; self.makeCodebook = makeCodebook
+        self.network = network
     }
 
     /// Convenience wiring used by the app (tests inject their own doubles). Self-hosted pack
@@ -66,7 +75,7 @@ final class ScannerPackModel {
     /// the catalog under `/fingerprint/`, with the Firebase Storage SDK as the whole-operation
     /// fallback. When self-host is unconfigured, Firebase is the primary and only source.
     /// Mirrors `AppModel.makeDefault()`.
-    static func live(catalogStore: CatalogStore) -> ScannerPackModel {
+    static func live(catalogStore: CatalogStore, network: NetworkMonitor) -> ScannerPackModel {
         ScannerPackModel(
             updater: FingerprintUpdater(remote: liveRemote(), paths: .default()),
             fallbackUpdater: AppConfig.selfHostBaseURL == nil ? nil
@@ -74,7 +83,8 @@ final class ScannerPackModel {
             paths: .default(),
             catalogStore: catalogStore,
             makeStore: { try FingerprintStore(path: $0) },
-            makeCodebook: { try Codebook.bundled() })
+            makeCodebook: { try Codebook.bundled() },
+            network: network)
     }
 
     private static func liveRemote() -> FingerprintRemote {
@@ -152,13 +162,18 @@ final class ScannerPackModel {
 
     /// Starts or resumes the pack download. Safe to call from any screen; a second call while a
     /// transfer is running is ignored rather than racing a duplicate download.
-    func startDownload() {
+    ///
+    /// `allowingExpensive` records that the user accepted a metered download, so the cellular
+    /// watcher leaves it alone.
+    func startDownload(allowingExpensive: Bool = false) {
         guard !isDownloading else { return }
+        if allowingExpensive { allowsExpensive = true }
         phase = .downloading(progress ?? FingerprintDownloadProgress(bytesDone: 0,
                                                                      totalBytes: publishedBytes ?? 0))
         downloadTask = Task { [weak self] in
             await self?.runDownload()
         }
+        startNetworkWatch()
     }
 
     /// Awaits the in-flight transfer. Tests only; the UI observes `phase` instead.
@@ -168,23 +183,52 @@ final class ScannerPackModel {
     /// verified stays on disk, so resuming re-fetches one chunk, not the pack.
     func pause(_ reason: PauseReason = .user) {
         guard isDownloading else { return }
+        stopNetworkWatch()
         downloadTask?.cancel()
         downloadTask = nil
         phase = .paused(progress ?? FingerprintDownloadProgress(bytesDone: 0, totalBytes: publishedBytes ?? 0),
                         reason)
     }
 
-    /// Auto-pause when the path turns metered mid-download. Someone who starts on home Wi-Fi and
-    /// walks out the door should not silently spend a few hundred MB of cellular data; the paused
-    /// UI offers to carry on anyway.
+    /// Parks the transfer when the path turns metered. Someone who starts on home Wi-Fi and walks
+    /// out the door should not silently spend a few hundred MB of cellular data; the paused UI
+    /// offers to carry on anyway.
+    ///
+    /// Polled rather than pushed through SwiftUI: the first cut hung this off an `onChange` in the
+    /// tab view and it never fired on device. A poll during an active download costs nothing and
+    /// can't be defeated by which screen happens to be mounted.
+    // ponytail: 2 s poll; if NetworkMonitor ever grows real subscribers, subscribe instead.
+    private func startNetworkWatch() {
+        guard network != nil, networkWatch == nil else { return }
+        networkWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, self.isDownloading else { return }
+                if self.network?.isExpensive == true, !self.allowsExpensive {
+                    self.pause(.cellular)
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopNetworkWatch() {
+        networkWatch?.cancel()
+        networkWatch = nil
+    }
+
+    /// Direct entry point for the same rule, used by tests and by any caller that already knows
+    /// the path turned metered.
     func networkChanged(isExpensive: Bool) {
-        if isExpensive, isDownloading { pause(.cellular) }
+        if isExpensive, isDownloading, !allowsExpensive { pause(.cellular) }
     }
 
     private func runDownload() async {
+        defer { stopNetworkWatch() }
         do {
             _ = try await ensureLatestWithFailover()
             updateAvailable = false
+            allowsExpensive = false      // a fresh transfer must ask again
             installedVersion = updater.installedState()?.version
             installedBytes = updater.installedSizeBytes()
             buildScanDependencies()
@@ -232,8 +276,10 @@ final class ScannerPackModel {
     /// working, until the pack is downloaded again.
     func deletePack() {
         pause()
+        stopNetworkWatch()
         downloadTask?.cancel()
         downloadTask = nil
+        allowsExpensive = false
         // Drop the live handle first: the Matcher holds the sqlite open, and deleting the file
         // out from under it would leave the scanner reading a unlinked inode.
         matcher = nil

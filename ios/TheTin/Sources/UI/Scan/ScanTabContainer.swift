@@ -9,8 +9,9 @@ struct ScanTabContainer: View {
     let store: CatalogStore
     let collection: CollectionModel
     let pack: ScannerPackModel
-    /// Only for the "you're on cellular" confirmation before starting; the auto-pause once a
-    /// transfer is running is driven from `RootView`, which watches the same monitor.
+    /// Only for the "you're on cellular" confirmation before starting. The auto-pause once a
+    /// transfer is running lives in `ScannerPackModel`, which polls the monitor directly —
+    /// driving it from a SwiftUI `onChange` here never fired on device.
     let network: NetworkMonitor
     @State private var source = AVCaptureFrameSource()
     @State private var staging = ScanStagingStore.persisted()
@@ -37,6 +38,7 @@ struct ScanTabContainer: View {
                                        description: Text(msg))
                 Button("Retry") { pack.retry() }.buttonStyle(.bordered)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
             if let matcher = pack.matcher, let index = pack.index {
                 ScanView(model: makeScanModel(matcher, index: index), staging: staging,
@@ -84,7 +86,7 @@ struct ScannerPackSetupView: View {
         .padding(28)
         .confirmationDialog("Download over cellular?", isPresented: $confirmingCellular,
                             titleVisibility: .visible) {
-            Button("Download now") { pack.startDownload() }
+            Button("Download now") { pack.startDownload(allowingExpensive: true) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("You're not on Wi-Fi. \(downloadSize) may count against your data plan. You can pause and resume anytime.")
@@ -124,7 +126,9 @@ struct ScannerPackProgressView: View {
                      ? "Paused — you're on cellular."
                      : "Paused. Your progress is saved.")
                     .font(.subheadline).multilineTextAlignment(.center)
-                Button(paused == .cellular ? "Resume anyway" : "Resume") { pack.startDownload() }
+                Button(paused == .cellular ? "Resume anyway" : "Resume") {
+                    pack.startDownload(allowingExpensive: paused == .cellular)
+                }
                     .buttonStyle(.borderedProminent)
             } else {
                 Text("Setting up the scanner. Keep using The Tin — this carries on in the background.")
@@ -134,5 +138,9 @@ struct ScannerPackProgressView: View {
             }
         }
         .padding(28)
+        // Fill the tab. Without this the view sizes to its content, and the funding bar —
+        // attached as a top safeAreaInset — rides down with it into the middle of the screen
+        // instead of sitting under the navigation bar.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

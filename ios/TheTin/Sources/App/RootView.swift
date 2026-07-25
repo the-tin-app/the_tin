@@ -50,7 +50,7 @@ private struct MainTabView: View {
         self.collection = collection
         self.wants = wants
         self.model = model
-        _pack = State(wrappedValue: ScannerPackModel.live(catalogStore: store))
+        _pack = State(wrappedValue: ScannerPackModel.live(catalogStore: store, network: model.network))
     }
     private enum Tab: Hashable { case discover, browse, search, tin, scan }
     // The tin is the product's home ("daily check-ins"), so launch there once it has cards;
@@ -120,7 +120,8 @@ private struct MainTabView: View {
             NavigationStack {
                 ScanTabContainer(store: store, collection: collection, pack: pack,
                                  network: model.network)
-                    .fundingBanner(model: model, store: store, pack: pack)
+                    .fundingBanner(model: model, store: store, pack: pack,
+                                   showsScannerToast: false)
             }
             .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
             .tag(Tab.scan)
@@ -133,11 +134,6 @@ private struct MainTabView: View {
         }
         .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
-        // Walking out of Wi-Fi range mid-download must not quietly spend cellular data on a
-        // several-hundred-MB transfer; the paused UI offers to carry on anyway.
-        .onChange(of: model.network.isExpensive) { _, expensive in
-            pack.networkChanged(isExpensive: expensive)
-        }
         // Collection writes can fail from any tab (card detail lives under Browse/Search too),
         // so the failure alert hangs off the TabView, not the Tin stack.
         .alert("Save failed", isPresented: Binding(
@@ -173,8 +169,13 @@ private struct MainTabView: View {
 /// Must live INSIDE the NavigationStack: a TabView-level `safeAreaInset` lets the child nav bars
 /// draw over it (it was covering the Discover section headers).
 private extension View {
-    func fundingBanner(model: AppModel, store: CatalogStore, pack: ScannerPackModel) -> some View {
-        modifier(FundingBanner(model: model, store: store, pack: pack))
+    /// `showsScannerToast: false` on the Scan tab — that screen already renders the download
+    /// full-size, so the toast would be a second copy of the same bar sitting on top of its
+    /// Pause button. The toast exists for the other tabs, so progress follows you out of Scan.
+    func fundingBanner(model: AppModel, store: CatalogStore, pack: ScannerPackModel,
+                       showsScannerToast: Bool = true) -> some View {
+        modifier(FundingBanner(model: model, store: store, pack: pack,
+                               showsScannerToast: showsScannerToast))
     }
 }
 
@@ -183,6 +184,7 @@ private struct FundingBanner: ViewModifier {
     let model: AppModel
     let store: CatalogStore
     let pack: ScannerPackModel
+    let showsScannerToast: Bool
 
     func body(content: Content) -> some View {
         content
@@ -204,7 +206,7 @@ private struct FundingBanner: ViewModifier {
                     }
                     // Follows the user out of the Scan tab — the whole point of hoisting the
                     // download is that they can walk away from it.
-                    if case .downloading(let p) = pack.phase {
+                    if showsScannerToast, case .downloading(let p) = pack.phase {
                         UpdateToast(label: "Setting up scanner… \(p.byteSummary)",
                                     progress: p.fraction)
                     }
