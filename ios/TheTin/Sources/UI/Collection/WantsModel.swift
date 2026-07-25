@@ -34,15 +34,24 @@ final class WantsModel {
         persist(rollbackTo: previous)
     }
 
+    /// Serializes writes. Each `persist` saves the WHOLE map, so two in flight at once is a
+    /// last-writer-wins race — and unstructured `Task`s carry no ordering guarantee, so the
+    /// older snapshot can land last and silently discard the newer edit. Hearting a card and
+    /// immediately setting its target could lose the target.
+    private var writeChain: Task<Void, Never>?
+
     /// Optimistic save of the whole map; snap back to the last-saved state on write failure so
     /// the UI never shows a change that wasn't persisted.
     private func persist(rollbackTo previous: [String: WantEntry]) {
         let snapshot = entries
-        Task {
-            do { try await repo.save(uid: uid, entries: snapshot) }
+        let prior = writeChain
+        writeChain = Task { [weak self] in
+            await prior?.value            // FIFO — never let an older snapshot overwrite a newer one
+            guard let self else { return }
+            do { try await self.repo.save(uid: self.uid, entries: snapshot) }
             catch {
-                entries = previous
-                onWriteError?("Couldn't update the wishlist — nothing was changed. Check free storage and try again.")
+                self.entries = previous
+                self.onWriteError?("Couldn't update the wishlist — nothing was changed. Check free storage and try again.")
             }
         }
     }
