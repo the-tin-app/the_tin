@@ -82,6 +82,11 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     var acquiredFrom: String? // card shop, show, trade, online, free text
     var addedAt: Date
     var variant: String? = nil // CardVariant rawValue; nil = unspecified
+    /// Marked as available to trade. Optional (not `Bool = false`) so every collection.json
+    /// written before this existed still decodes untouched.
+    var forTrade: Bool? = nil
+
+    var isForTrade: Bool { forTrade == true }
 
     var gradeValue: Grade? { grade.flatMap(Grade.init(rawValue:)) }
     var variantValue: CardVariant? { variant.flatMap(CardVariant.init(rawValue:)) }
@@ -99,6 +104,11 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     /// already own should become "×2", not a second indistinguishable ×1 row; but a copy with a
     /// price paid, a date, or a source is its own acquisition and stays its own row (merging it
     /// would silently destroy cost basis).
+    ///
+    /// `forTrade` is deliberately NOT compared. It's a label on a stack of otherwise
+    /// interchangeable cards, not a property that makes two of them different objects — comparing
+    /// it would split one row into two the moment you flagged it, which is exactly the duplicate
+    /// this rule exists to prevent. The absorbing row's flag wins.
     func isSameCopy(as other: CollectionEntry) -> Bool {
         cardId == other.cardId && groupId == other.groupId
             && condition == other.condition && grade == other.grade

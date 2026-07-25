@@ -79,6 +79,7 @@ struct ImportedRow {
     var acquiredFrom: String? = nil
     var addedAt: Date? = nil
     var note: String? = nil          // merged into acquiredFrom (e.g. "Grade: CGC 9.5")
+    var forTrade: Bool = false       // The Tin only — round-trips the trade-list flag
 }
 
 enum MatchResult: Equatable {
@@ -364,7 +365,8 @@ enum CollectionCSVImport {
                                qty: max(1, row.qty), condition: row.condition, grade: row.grade,
                                pricePaid: row.pricePaid, acquiredAt: row.acquiredAt,
                                acquiredFrom: from.isEmpty ? nil : from,
-                               addedAt: row.addedAt ?? now, variant: row.variant)
+                               addedAt: row.addedAt ?? now, variant: row.variant,
+                               forTrade: row.forTrade ? true : nil)
     }
 
     /// skipped-rows.csv: the file's original columns + a trailing skip_reason column.
@@ -393,6 +395,11 @@ enum CollectionCSVImport {
             row.acquiredAt = CSVField.date(h.value("acquired_at", in: f))
             row.acquiredFrom = h.value("acquired_from", in: f)
             row.addedAt = CSVField.date(h.value("added_at", in: f))
+            // Absent in files exported before the column existed → false, which is the same as
+            // "not marked". No migration needed.
+            row.forTrade = (h.value("for_trade", in: f)?.lowercased()).map {
+                $0 == "true" || $0 == "yes" || $0 == "1"
+            } ?? false
             return .row(row)   // divider/current_value/value_as_of columns intentionally ignored
         })
 

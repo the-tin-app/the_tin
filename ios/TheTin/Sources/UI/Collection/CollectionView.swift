@@ -283,6 +283,55 @@ final class CollectionModel {
         await write("remove the card") { try await repository.deleteEntry(id: id) }
     }
 
+    // MARK: Trade list
+
+    /// Copies you've marked as available to trade, most valuable first — your spares are the
+    /// currency of this hobby, and the app had no notion of them.
+    var tradeEntries: [CollectionEntry] {
+        GroupStats.sortedByValueDescending(
+            entries: entries.filter(\.isForTrade), prices: prices,
+            variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+            matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
+    }
+
+    /// What the trade list is worth, in the same best-effort terms as the tin total.
+    var tradeValue: (total: Double, pricedCards: Int, totalCards: Int) {
+        GroupStats.totalValue(entries: entries.filter(\.isForTrade), prices: prices,
+                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
+    }
+
+    /// Cards you hold more than one physical copy of. Marking is explicit by design, but an
+    /// explicit-only feature opens on a blank screen forever — this is what the empty trade list
+    /// offers to flag for you.
+    var duplicateCardIds: Set<String> {
+        var qtyByCard: [String: Int] = [:]
+        for entry in entries { qtyByCard[entry.cardId, default: 0] += entry.qty }
+        return Set(qtyByCard.filter { $0.value > 1 }.keys)
+    }
+
+    func setForTrade(_ entry: CollectionEntry, _ on: Bool) async {
+        var updated = entry
+        updated.forTrade = on ? true : nil   // nil, not false — keeps untouched entries clean
+        await saveEntry(updated)
+    }
+
+    /// Flag every row of every card you hold more than once, in ONE write.
+    func flagDuplicatesForTrade() async {
+        let duplicates = duplicateCardIds
+        let updated = entries
+            .filter { duplicates.contains($0.cardId) && !$0.isForTrade }
+            .map { entry -> CollectionEntry in
+                var e = entry
+                e.forTrade = true
+                return e
+            }
+        guard !updated.isEmpty else { return }
+        await write("update your trade list") {
+            try await repository.applyEntryEdits(updated: updated, deletedIds: [])
+        }
+    }
+
     /// Commit a scanned draft into the owned collection. Returns false on write failure so the
     /// caller can keep the draft in staging and let the user retry. `.tin` = ungrouped (groupId "").
     func commitScan(_ draft: ScanDraft, to destination: RouteDestination) async -> Bool {
@@ -432,6 +481,7 @@ struct CollectionView: View {
                 }
                 newDividerRow.tinRow()
                 if let wants { wishlistLink(wants).tinRow() }
+                tradeLink.tinRow()
             } else {
                 searchResults
             }
@@ -534,6 +584,9 @@ struct CollectionView: View {
         }
         .navigationDestination(for: WantedRoute.self) { _ in
             if let wants { WantedCardsView(store: store, wants: wants, collection: model) }
+        }
+        .navigationDestination(for: TradeRoute.self) { _ in
+            TradeListView(model: model, store: store)
         }
         .navigationDestination(for: TinAllCardsRoute.self) { _ in
             GroupDetailView(model: model, group: nil, store: store, onGetStarted: onGetStarted)
@@ -754,16 +807,30 @@ struct CollectionView: View {
     }
 
     private func wishlistLink(_ wants: WantsModel) -> some View {
+        pinnedLink(title: "Wishlist", systemImage: "heart", tint: .pink,
+                   count: wants.wanted.count, route: WantedRoute())
+    }
+
+    /// The other half of the wishlist: what you'll give up. Sits beside it because "hunting" and
+    /// "trading" are the same conversation at a meetup.
+    private var tradeLink: some View {
+        pinnedLink(title: "For Trade", systemImage: "arrow.left.arrow.right", tint: .orange,
+                   count: model.tradeEntries.count, route: TradeRoute())
+    }
+
+    /// The pinned rows under the dividers — same shape, so they read as a pair.
+    private func pinnedLink<V: Hashable>(title: String, systemImage: String, tint: Color,
+                                         count: Int, route: V) -> some View {
         HStack {
-            Image(systemName: "heart").foregroundStyle(.pink)
-            Text("Wishlist")
+            Image(systemName: systemImage).foregroundStyle(tint)
+            Text(title)
             Spacer()
-            Text("\(wants.wanted.count)").foregroundStyle(.secondary)
+            Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-        .background(navLink(WantedRoute()))
+        .background(navLink(route))
     }
 }
 

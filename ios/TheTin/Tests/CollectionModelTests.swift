@@ -341,4 +341,68 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(model.entries.count, 1)
         XCTAssertEqual(model.entries.first?.qty, 2)
     }
+
+    // MARK: Trade list
+
+    /// The flag is a label on a stack of interchangeable cards, not a property that makes two of
+    /// them different objects. If it split `isSameCopy`, marking a copy for trade would silently
+    /// fork the row into two — reintroducing exactly the duplicate that rule exists to prevent.
+    func testForTradeDoesNotSplitAnOtherwiseIdenticalCopy() async throws {
+        var flagged = plainEntry("swsh7-215")
+        flagged.forTrade = true
+        await model.saveEntry(flagged)
+        await waitForStreams()
+        await model.saveEntry(plainEntry("swsh7-215"))
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.count, 1, "the flag must not fork the row")
+        XCTAssertEqual(model.entries.first?.qty, 2)
+        XCTAssertEqual(model.entries.first?.isForTrade, true, "the absorbing row keeps its flag")
+    }
+
+    func testTradeListCollectsFlaggedCopiesAndValuesThem() async throws {
+        var flagged = plainEntry("swsh7-215", qty: 2)
+        flagged.forTrade = true
+        await model.saveEntry(flagged)
+        await model.saveEntry(plainEntry("ex6-58"))
+        await waitForStreams()
+
+        XCTAssertEqual(model.tradeEntries.count, 1)
+        XCTAssertEqual(model.tradeEntries.first?.cardId, "swsh7-215")
+        XCTAssertEqual(model.tradeValue.totalCards, 2)   // physical cards, not rows
+        XCTAssertEqual(model.tradeValue.total, 185)      // 2 × raw 92.5
+    }
+
+    /// Duplicates are counted in physical copies across every row for a card, so two separate
+    /// ×1 acquisitions of the same card count as a duplicate even though neither row is ×2.
+    func testDuplicatesSpanRowsAndCanBeFlaggedInOneGo() async throws {
+        await model.saveEntry(plainEntry("swsh7-215", pricePaid: 10))       // own acquisition…
+        await model.saveEntry(plainEntry("swsh7-215", pricePaid: 20))       // …so these stay 2 rows
+        await model.saveEntry(plainEntry("ex6-58"))                          // single copy
+        await waitForStreams()
+
+        XCTAssertEqual(model.duplicateCardIds, ["swsh7-215"])
+
+        await model.flagDuplicatesForTrade()
+        await waitForStreams()
+
+        XCTAssertEqual(Set(model.tradeEntries.map(\.cardId)), ["swsh7-215"])
+        XCTAssertEqual(model.tradeEntries.count, 2, "every row of a duplicated card is flagged")
+        XCTAssertFalse(model.entries.first { $0.cardId == "ex6-58" }?.isForTrade ?? true)
+    }
+
+    func testUnflaggingClearsTheFieldRatherThanStoringFalse() async throws {
+        var flagged = plainEntry("swsh7-215")
+        flagged.forTrade = true
+        await model.saveEntry(flagged)
+        await waitForStreams()
+        let entry = try XCTUnwrap(model.entries.first)
+
+        await model.setForTrade(entry, false)
+        await waitForStreams()
+
+        XCTAssertTrue(model.tradeEntries.isEmpty)
+        XCTAssertNil(model.entries.first?.forTrade,
+                     "an unmarked entry should look exactly like one that was never marked")
+    }
 }

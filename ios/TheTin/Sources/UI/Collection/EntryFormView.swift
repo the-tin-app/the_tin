@@ -27,6 +27,7 @@ struct EntryFormView: View {
     @State private var hasAcquiredDate = false
     @State private var acquiredAt = Date()
     @State private var acquiredFrom = ""
+    @State private var forTrade = false
     /// Snapshot of the fields as populated, so Cancel/swipe-down can tell typed-then-abandoned
     /// from untouched (only dirty forms earn a discard confirmation).
     @State private var baseline: [String] = []
@@ -35,7 +36,7 @@ struct EntryFormView: View {
     private var snapshot: [String] {
         [groupId, newGroupName, String(qty), condition.rawValue, variant.rawValue,
          grade.map(String.init(describing:)) ?? "", pricePaidText, gradingFeeText,
-         hasAcquiredDate ? acquiredAt.description : "", acquiredFrom]
+         hasAcquiredDate ? acquiredAt.description : "", acquiredFrom, String(forTrade)]
     }
     private var isDirty: Bool { snapshot != baseline }
 
@@ -86,6 +87,11 @@ struct EntryFormView: View {
                     DatePicker("Date", selection: $acquiredAt, displayedComponents: .date)
                 }
                 TextField("Acquired from (shop, show, trade…)", text: $acquiredFrom)
+            }
+            Section {
+                Toggle("Available to trade", isOn: $forTrade)
+            } footer: {
+                Text("Collects this copy in your trade list, which you can share as a link or print as a sheet.")
             }
         }
         .navigationTitle(existing == nil ? "Save to tin" : "Edit entry")
@@ -159,6 +165,7 @@ struct EntryFormView: View {
             hasAcquiredDate = existing.acquiredAt != nil
             acquiredAt = existing.acquiredAt ?? Date()
             acquiredFrom = existing.acquiredFrom ?? ""
+            forTrade = existing.isForTrade
         } else {
             // New entries default to the tin itself, matching the scanner — filing behind a
             // divider is a choice, never a requirement.
@@ -194,7 +201,10 @@ struct EntryFormView: View {
                 acquiredAt: hasAcquiredDate ? acquiredAt : nil,
                 acquiredFrom: acquiredFrom.isEmpty ? nil : acquiredFrom,
                 addedAt: existing?.addedAt ?? Date(),
-                variant: variant.rawValue)
+                variant: variant.rawValue,
+                // nil rather than false when off, so an entry that was never marked stays
+                // byte-identical to what it was before this field existed.
+                forTrade: forTrade ? true : nil)
             if await onSave(entry) { dismiss() }
         }
     }
