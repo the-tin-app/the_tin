@@ -220,6 +220,17 @@ private struct FundingBanner: ViewModifier {
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 6) {
+                    // Hangs off the tab chrome, not the screen you deleted from: swipe-to-remove
+                    // in a divider then navigating away must not take the undo with it.
+                    if let collection = model.collection, let undoable = collection.undoable {
+                        UndoToast(undoable: undoable) {
+                            Task { await collection.undoLastDelete() }
+                        }
+                        .task(id: undoable.id) {
+                            try? await Task.sleep(for: .seconds(6))
+                            collection.clearUndo()
+                        }
+                    }
                     if let progress = model.catalogDownloadProgress {
                         UpdateToast(label: "Updating card data…", progress: progress)
                     }
@@ -310,6 +321,36 @@ private struct UpdateToast: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// Six seconds to change your mind. Same material vocabulary as `UpdateToast` so the bottom of
+/// the screen has one voice; auto-dismisses, because an undo you have to dismiss is a dialog.
+private struct UndoToast: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let undoable: CollectionModel.UndoableDelete
+    let onUndo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(undoable.message)
+                .font(.subheadline)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button("Undo", action: onUndo)
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        // Flat Tin Rule: chrome earns separation from a system material, never a shadow.
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: undoable.id)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(undoable.message). Undo available.")
     }
 }
 

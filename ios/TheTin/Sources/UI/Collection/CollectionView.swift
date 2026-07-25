@@ -201,6 +201,56 @@ final class CollectionModel {
         }
     }
 
+    // MARK: Undo
+
+    /// The last destructive change, kept just long enough to offer it back. Every delete dialog
+    /// in the app said "this can't be undone" — and it couldn't, so one mis-swipe on a graded copy
+    /// meant retyping the grade, the fee, the date and the shop it came from.
+    struct UndoableDelete: Equatable, Identifiable {
+        let id = UUID()
+        /// "Removed Charizard ex" — what the toast says happened.
+        let message: String
+        let groups: [CardGroup]
+        let entries: [CollectionEntry]
+    }
+    private(set) var undoable: UndoableDelete?
+
+    func clearUndo() { undoable = nil }
+
+    /// Put back exactly what was removed, ids and all, in one write. `replaceAll` is the only
+    /// repository call that preserves ids (it exists for backup restore) — `createGroup`/`addEntry`
+    /// would mint new ones, which would orphan the entries pointing at the old group id.
+    func undoLastDelete() async {
+        guard let undone = undoable else { return }
+        undoable = nil
+
+        var restoredGroups = groups
+        for group in undone.groups where !restoredGroups.contains(where: { $0.id == group.id }) {
+            restoredGroups.append(group)
+        }
+        // The snapshot carries the original sortOrder, so a restored divider lands back in its
+        // old position rather than at the end.
+        restoredGroups.sort { $0.sortOrder < $1.sortOrder }
+
+        var restoredEntries = entries
+        for entry in undone.entries {
+            // Overwrite rather than append when the row still exists: deleting a divider "keeping
+            // its cards" leaves them behind with groupId "", and this is what files them back.
+            if let i = restoredEntries.firstIndex(where: { $0.id == entry.id }) {
+                restoredEntries[i] = entry
+            } else {
+                restoredEntries.append(entry)
+            }
+        }
+        await write("undo that") {
+            try await repository.replaceAll(groups: restoredGroups, entries: restoredEntries)
+        }
+    }
+
+    private func cardName(_ cardId: String) -> String {
+        (try? store.card(id: cardId))?.name ?? "card"
+    }
+
     @discardableResult
     func createGroup(name: String) async -> String {
         var id = ""
@@ -211,7 +261,20 @@ final class CollectionModel {
         await write("rename the divider") { try await repository.renameGroup(id: id, name: name) }
     }
     func deleteGroup(id: String, keepingEntries: Bool = false) async {
-        await write("delete the divider") { try await repository.deleteGroup(id: id, keepingEntries: keepingEntries) }
+        let group = groups.first { $0.id == id }
+        // Snapshot BEFORE the write: with `keepingEntries` these rows survive with groupId "",
+        // and the pre-delete copies are what remember which divider they belonged to.
+        let affected = entries.filter { $0.groupId == id }
+        let ok = await write("delete the divider") {
+            try await repository.deleteGroup(id: id, keepingEntries: keepingEntries)
+        }
+        guard ok, let group else { return }
+        let n = affected.cardCount
+        undoable = UndoableDelete(
+            message: keepingEntries || affected.isEmpty
+                ? "Deleted “\(group.name)”"
+                : "Deleted “\(group.name)” and \(n) \(n == 1 ? "card" : "cards")",
+            groups: [group], entries: affected)
     }
     func reorderGroups(ids: [String]) async {
         await write("reorder the dividers") { try await repository.reorderGroups(orderedIds: ids) }
@@ -280,7 +343,11 @@ final class CollectionModel {
     }
 
     func deleteEntry(id: String) async {
-        await write("remove the card") { try await repository.deleteEntry(id: id) }
+        let removed = entries.first { $0.id == id }
+        let ok = await write("remove the card") { try await repository.deleteEntry(id: id) }
+        guard ok, let removed else { return }
+        undoable = UndoableDelete(message: "Removed \(cardName(removed.cardId))",
+                                  groups: [], entries: [removed])
     }
 
     // MARK: Trade list
@@ -559,7 +626,7 @@ struct CollectionView: View {
         } message: { group in
             let n = model.entries(in: group.id).cardCount
             Text(n == 0 ? "This divider is empty."
-                        : "Kept \(n == 1 ? "card moves" : "cards move") to No divider. Deleting \(n == 1 ? "it" : "them") too can't be undone.")
+                        : "Kept \(n == 1 ? "card moves" : "cards move") to No divider. Either way you get a moment to undo it.")
         }
         .confirmationDialog(
             "Remove \((try? store.card(id: deletingEntry?.cardId ?? ""))?.name ?? "this card") from your tin?",

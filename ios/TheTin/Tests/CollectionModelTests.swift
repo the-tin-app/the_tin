@@ -342,6 +342,97 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(model.entries.first?.qty, 2)
     }
 
+    // MARK: Undo
+
+    /// A deleted entry comes back as the SAME row — same id, same acquisition detail — so undo
+    /// restores what you had rather than something that merely looks like it.
+    func testUndoRestoresADeletedEntryWithItsIdAndDetail() async throws {
+        await model.saveEntry(plainEntry("swsh7-215", pricePaid: 400, acquiredFrom: "card show"))
+        await waitForStreams()
+        let original = try XCTUnwrap(model.entries.first)
+
+        await model.deleteEntry(id: original.id)
+        await waitForStreams()
+        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertNotNil(model.undoable)
+
+        await model.undoLastDelete()
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.count, 1)
+        XCTAssertEqual(model.entries.first, original)
+        XCTAssertNil(model.undoable, "the offer is spent once taken")
+    }
+
+    /// Deleting a divider with its cards is the scariest action in the app: undo has to bring back
+    /// the divider AND everything filed behind it, still filed behind it.
+    func testUndoRestoresADeletedDividerAndItsCards() async throws {
+        await model.createGroup(name: "Binder A")
+        await waitForStreams()
+        let gid = try XCTUnwrap(model.groups.first).id
+        await model.saveEntry(plainEntry("swsh7-215", groupId: gid))
+        await model.saveEntry(plainEntry("ex6-58", groupId: gid))
+        await waitForStreams()
+
+        await model.deleteGroup(id: gid)
+        await waitForStreams()
+        XCTAssertTrue(model.groups.isEmpty)
+        XCTAssertTrue(model.entries.isEmpty)
+
+        await model.undoLastDelete()
+        await waitForStreams()
+
+        XCTAssertEqual(model.groups.map(\.id), [gid])
+        XCTAssertEqual(model.entries(in: gid).count, 2)
+    }
+
+    /// "Delete divider, keep its cards" leaves the rows behind with no divider. Undo must re-file
+    /// them, not just re-create an empty divider beside them.
+    func testUndoRefilesCardsKeptFromADeletedDivider() async throws {
+        await model.createGroup(name: "Binder A")
+        await waitForStreams()
+        let gid = try XCTUnwrap(model.groups.first).id
+        await model.saveEntry(plainEntry("swsh7-215", groupId: gid))
+        await waitForStreams()
+
+        await model.deleteGroup(id: gid, keepingEntries: true)
+        await waitForStreams()
+        XCTAssertEqual(model.ungroupedEntries.count, 1, "the card survives, unfiled")
+
+        await model.undoLastDelete()
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries(in: gid).count, 1)
+        XCTAssertTrue(model.ungroupedEntries.isEmpty)
+    }
+
+    /// Only the most recent delete is offered back — the toast shows one thing, so holding more
+    /// would promise an undo stack the UI doesn't have.
+    func testOnlyTheMostRecentDeleteIsOffered() async throws {
+        await model.saveEntry(plainEntry("swsh7-215"))
+        await model.saveEntry(plainEntry("ex6-58"))
+        await waitForStreams()
+        let first = try XCTUnwrap(model.entries.first { $0.cardId == "swsh7-215" })
+        let second = try XCTUnwrap(model.entries.first { $0.cardId == "ex6-58" })
+
+        await model.deleteEntry(id: first.id)
+        await model.deleteEntry(id: second.id)
+        await waitForStreams()
+
+        await model.undoLastDelete()
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.map(\.cardId), ["ex6-58"])
+    }
+
+    func testUndoIsANoOpWhenNothingWasDeleted() async throws {
+        await model.saveEntry(plainEntry("swsh7-215"))
+        await waitForStreams()
+        await model.undoLastDelete()
+        await waitForStreams()
+        XCTAssertEqual(model.entries.count, 1)
+    }
+
     // MARK: Trade list
 
     /// The flag is a label on a stack of interchangeable cards, not a property that makes two of
