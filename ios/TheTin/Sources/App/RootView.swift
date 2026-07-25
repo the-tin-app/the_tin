@@ -114,11 +114,14 @@ private struct MainTabView: View {
                                onGetStarted: { tab in
                                    switch tab {
                                    case .scan: selection = .scan
+                                   // There is no Browse tab any more — push the catalog onto
+                                   // Discover's stack so the CTA lands ON it, not near it.
                                    case .browse:
                                        discoverPath.append(BrowseRoute())
                                        selection = .discover
                                    }
                                },
+                               scannerReady: pack.phase == .ready,
                                // Searching your tin used to dead-end in a note telling you to go
                                // to another tab. Now it takes you there, carrying the query.
                                onSearchCatalog: { query in
