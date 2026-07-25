@@ -113,6 +113,10 @@ enum AppConfig {
 
     /// Wishlist price alerts master switch (Settings toggle). Default OFF per spec — the
     /// snapshot is still maintained while off so re-enabling works instantly.
+    /// Set once the user dismisses the Discover invitation to set up the scanner. The offer stays
+    /// available from Settings and the Scan tab — dismissing silences the nudge, not the feature.
+    static let scannerPromptDismissedKey = "scannerPromptDismissed"
+
     static var priceAlertsEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "priceAlertsEnabled") }
         set { UserDefaults.standard.set(newValue, forKey: "priceAlertsEnabled") }

@@ -15,6 +15,11 @@ struct SelfHostedFingerprintRemote: FingerprintRemote {
         try JSONDecoder().decode(FingerprintManifest.self, from: try await get("fingerprint/manifest.json"))
     }
 
+    func fetchPartsManifest() async throws -> FingerprintPartsManifest {
+        try JSONDecoder().decode(FingerprintPartsManifest.self,
+                                 from: try await get("fingerprint/parts/manifest.json"))
+    }
+
     func fetchData(path: String) async throws -> Data { try await get(path) }
 
     func fetchData(path: String, onBytes: @escaping @Sendable (Int) -> Void) async throws -> Data {
