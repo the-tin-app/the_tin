@@ -110,12 +110,20 @@ enum SetGoals {
             pricedMissing: priced.count)
     }
 
-    /// Chased sets, furthest along first — the ones you're closest to finishing are the ones worth
-    /// acting on. Completed sets sink to the bottom rather than vanishing, so finishing one is
-    /// visible rather than silent.
+    /// Chased sets, fewest cards left first. "3 to finish" is something you can act on today;
+    /// "4% of 400" isn't.
+    ///
+    /// Ranking by completion *fraction* instead moved a set's position when you bought cards in a
+    /// DIFFERENT set — 4% of 400 and 4% of 100 trade places as either one grows — so the list
+    /// reshuffled for reasons the screen never showed you. A remaining count is monotone: a set
+    /// only ever climbs, and only when you actually acquire a card in it.
+    ///
+    /// Completed sets sink to the bottom rather than vanishing, so finishing one is visible rather
+    /// than silent.
     static func sorted(_ progress: [SetGoalProgress]) -> [SetGoalProgress] {
         progress.sorted { a, b in
             if a.isComplete != b.isComplete { return !a.isComplete }
+            if a.remaining != b.remaining { return a.remaining < b.remaining }
             if a.fraction != b.fraction { return a.fraction > b.fraction }
             return a.set.name < b.set.name
         }
