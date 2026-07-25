@@ -83,6 +83,7 @@ private struct MainTabView: View {
                     }
                     .fundingBanner(model: model, store: store, pack: pack)
             }
+            .appToasts(model: model, pack: pack)
             .tabItem { Label("Discover", systemImage: "sparkles") }
             .tag(Tab.discover)
 
@@ -90,6 +91,7 @@ private struct MainTabView: View {
                 MoversView(model: collection, store: store, wants: model.wants)
                     .fundingBanner(model: model, store: store, pack: pack)
             }
+            .appToasts(model: model, pack: pack)
             .tabItem { Label("Movers", systemImage: "chart.line.uptrend.xyaxis") }
             .tag(Tab.movers)
 
@@ -103,6 +105,7 @@ private struct MainTabView: View {
                 }
                 .fundingBanner(model: model, store: store, pack: pack)
             }
+            .appToasts(model: model, pack: pack)
             .tabItem { Label("Search", systemImage: "magnifyingglass") }
             .tag(Tab.search)
 
@@ -134,15 +137,16 @@ private struct MainTabView: View {
                     .sheet(isPresented: $showingSettings) { SettingsView(app: model, pack: pack) }
                     .fundingBanner(model: model, store: store, pack: pack)
             }
+            .appToasts(model: model, pack: pack)
             .tabItem { Label("The Tin", systemImage: "square.stack.3d.up") }
             .tag(Tab.tin)
 
             NavigationStack {
                 ScanTabContainer(store: store, collection: collection, wants: model.wants,
                                  pack: pack, network: model.network)
-                    .fundingBanner(model: model, store: store, pack: pack,
-                                   showsScannerToast: false)
+                    .fundingBanner(model: model, store: store, pack: pack)
             }
+            .appToasts(model: model, pack: pack, showsScannerToast: false)
             .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
             .tag(Tab.scan)
         }
@@ -206,22 +210,25 @@ private struct MainTabView: View {
 /// Must live INSIDE the NavigationStack: a TabView-level `safeAreaInset` lets the child nav bars
 /// draw over it (it was covering the Discover section headers).
 private extension View {
+    func fundingBanner(model: AppModel, store: CatalogStore, pack: ScannerPackModel) -> some View {
+        modifier(FundingBanner(model: model, store: store, pack: pack))
+    }
+
+    /// Attach to the tab's `NavigationStack`, never to its root view — see `AppToasts`.
+    ///
     /// `showsScannerToast: false` on the Scan tab — that screen already renders the download
     /// full-size, so the toast would be a second copy of the same bar sitting on top of its
     /// Pause button. The toast exists for the other tabs, so progress follows you out of Scan.
-    func fundingBanner(model: AppModel, store: CatalogStore, pack: ScannerPackModel,
-                       showsScannerToast: Bool = true) -> some View {
-        modifier(FundingBanner(model: model, store: store, pack: pack,
-                               showsScannerToast: showsScannerToast))
+    func appToasts(model: AppModel, pack: ScannerPackModel,
+                   showsScannerToast: Bool = true) -> some View {
+        modifier(AppToasts(model: model, pack: pack, showsScannerToast: showsScannerToast))
     }
 }
 
 private struct FundingBanner: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: AppModel
     let store: CatalogStore
     let pack: ScannerPackModel
-    let showsScannerToast: Bool
 
     func body(content: Content) -> some View {
         content
@@ -236,10 +243,29 @@ private struct FundingBanner: ViewModifier {
                     FundingBar(funding: model.funding)
                 }
             }
+    }
+}
+
+/// The bottom toasts — undo, catalog update, scanner download.
+///
+/// Applied to the tab's `NavigationStack`, NOT to the stack's root view. Attached to the root, an
+/// overlay is covered the moment anything is pushed: you delete a card inside a divider
+/// (`GroupDetailView`), and the undo toast renders on the hidden root screen behind it. The Tin's
+/// write-failure alert already lives at this level for the same reason — collection writes happen
+/// from screens all over the app, so the response to one can't live on any single screen.
+///
+/// Pinning to the bottom of the NavigationStack puts the toast just above the tab bar (the stack's
+/// frame stops there), which is also clear of the home indicator.
+private struct AppToasts: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let model: AppModel
+    let pack: ScannerPackModel
+    let showsScannerToast: Bool
+
+    func body(content: Content) -> some View {
+        content
             .overlay(alignment: .bottom) {
                 VStack(spacing: 6) {
-                    // Hangs off the tab chrome, not the screen you deleted from: swipe-to-remove
-                    // in a divider then navigating away must not take the undo with it.
                     if let collection = model.collection, let undoable = collection.undoable {
                         UndoToast(undoable: undoable) {
                             Task { await collection.undoLastDelete() }
