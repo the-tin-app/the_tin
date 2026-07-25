@@ -127,6 +127,30 @@ final class MoversTests: XCTestCase {
         XCTAssertEqual(s.totalCards, 1)
     }
 
+    /// Basis-flip guard. `price_latest.raw_usd` can quote a different printing than it did in
+    /// yesterday's artifact, and the resulting "change" is the spread between two printings — a
+    /// card showed +1800% while its own detail screen said +0.2% (2026-07-25). Better to omit the
+    /// card than to claim the tin gained eighteen times over.
+    func testImplausibleChangesAreOmittedRatherThanShown() {
+        let s = Movers.summary(entries: [entry("e", card: "c1", qty: 1)],
+                               prices: ["c1": price("c1", raw: 500)],
+                               deltasByCard: ["c1": [raw(18.0)]],   // +1800%
+                               period: .d1)
+        XCTAssertTrue(s.rows.isEmpty)
+        XCTAssertEqual(s.totalImpact, 0, "a basis flip must not move the headline either")
+    }
+
+    /// The guard is a ceiling on nonsense, not on the market: a card that genuinely doubled is
+    /// still reported.
+    func testALegitimateDoublingIsStillReported() {
+        let s = Movers.summary(entries: [entry("e", card: "c1", qty: 1)],
+                               prices: ["c1": price("c1", raw: 200)],
+                               deltasByCard: ["c1": [raw(1.0)]],    // +100%
+                               period: .d1)
+        XCTAssertEqual(s.rows.count, 1)
+        XCTAssertEqual(s.rows[0].impact, 100, accuracy: 0.001)
+    }
+
     func testEmptyTinIsEmptySummary() {
         let s = Movers.summary(entries: [], prices: [:], deltasByCard: [:], period: .d1)
         XCTAssertTrue(s.rows.isEmpty)

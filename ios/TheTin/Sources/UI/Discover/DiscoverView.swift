@@ -4,6 +4,7 @@ struct DiscoverView: View {
     let store: CatalogStore
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    var goals: SetGoalsModel? = nil
     @State private var model: DiscoverModel?
 
     var body: some View {
@@ -35,7 +36,7 @@ struct DiscoverView: View {
         // the "Browse" tab.
         .navigationDestination(for: BrowseRoute.self) { _ in
             BrowseView(store: store, entries: collection?.entries ?? [],
-                       collection: collection, wants: wants)
+                       collection: collection, wants: wants, goals: goals)
         }
         .task(id: tasteSignalKey) {
             let m = model ?? DiscoverModel(store: store)

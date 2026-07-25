@@ -37,10 +37,22 @@ enum Movers {
     /// about the card rather than a holding.
     struct MarketRow: Identifiable, Equatable {
         let cardId: String
+        /// Which printing moved, when the change is per-printing. nil for single-printing cards
+        /// quoted on the raw series. Shown, because "Charizard +40%" means different things for
+        /// Unlimited and 1st Edition.
+        let printing: String?
         let pct: Double
         let usd: Double
         var id: String { cardId }
     }
+
+    /// A guard against basis flips, not a claim about the market. `price_latest.raw_usd` can
+    /// change WHICH printing it quotes between nightly artifacts, and the resulting "change" is
+    /// the spread between two printings — that's how a card sat at +1800% while its own detail
+    /// screen said +0.2%. A genuine daily move past 500% doesn't happen at this price floor;
+    /// something arithmetic did.
+    /// ponytail: a flat ceiling. The real fix is a stable per-printing basis in the pipeline.
+    static let implausiblePct: Double = 5.0
 
     /// Below this the list fills with commons whose "moves" are rounding noise on a few cents.
     /// ponytail: a flat floor, not a percentile — revisit if it hides real movement in cheap sets.
@@ -90,6 +102,10 @@ enum Movers {
             // reports its condition's move, not the raw market's.
             guard let pct = GroupStats.unitDelta(entry, records: deltasByCard[entry.cardId] ?? [])?
                     .pct(for: period), pct > -1 else { continue }
+            // Same basis-flip guard as the market list: an entry with no printing recorded falls
+            // through to the raw rung, which can quote a different printing than it did yesterday.
+            // Better to omit the card than to claim your tin gained 1800%.
+            guard abs(pct) <= implausiblePct else { continue }
             // pct is measured against the earlier price, so the earlier value is value / (1 + pct).
             // Using `value × pct` instead would overstate every gain and understate every loss.
             let impact = value - value / (1 + pct)

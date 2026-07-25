@@ -52,9 +52,16 @@ struct SetDetailView: View {
     private static let sortOptions: [CardSort] = [.number, .alphabetical, .cheapest, .expensive]
 
     @State private var confirmingWishlistAdd = false
+    @State private var confirmingWishlistRemove = false
 
     private var owned: Set<String> { Set(entries.map(\.cardId)) }
     private var wanted: Set<String> { wants?.wanted ?? [] }
+
+    /// This set's cards that are on the wishlist — what a bulk add put there, and what the
+    /// undo button takes back off.
+    private func wishlistedInSet(wanted: Set<String>) -> [String] {
+        model.cards.map(\.id).filter { wanted.contains($0) }
+    }
 
     /// Every card in this set you neither own nor already want — what "add what I'm missing"
     /// actually means. Deliberately the whole set, not the current page: the sort and the grid
@@ -97,15 +104,27 @@ struct SetDetailView: View {
                 // offering "add everything missing" from the All view would be a trap.
                 if model.filter == .missing, wants != nil {
                     let addable = missingUnwanted(owned: owned, wanted: wanted)
-                    if !addable.isEmpty {
-                        Button { confirmingWishlistAdd = true } label: {
-                            Label("Add ^[\(addable.count) card](inflect: true) to wishlist",
-                                  systemImage: "heart")
+                    let wishlisted = wishlistedInSet(wanted: wanted)
+                    HStack(spacing: 8) {
+                        if !addable.isEmpty {
+                            Button { confirmingWishlistAdd = true } label: {
+                                Label("Add ^[\(addable.count) card](inflect: true) to wishlist",
+                                      systemImage: "heart")
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .padding(.top, 2)
+                        // The way back from a bulk add. Without it, undoing "add 120 cards" is
+                        // 120 taps — which is exactly what a mis-tap here cost (2026-07-25).
+                        if !wishlisted.isEmpty {
+                            Button(role: .destructive) { confirmingWishlistRemove = true } label: {
+                                Label("Remove ^[\(wishlisted.count) card](inflect: true)",
+                                      systemImage: "heart.slash")
+                            }
+                            .buttonStyle(.bordered)
+                        }
                     }
+                    .controlSize(.small)
+                    .padding(.top, 2)
                 }
 
                 LazyVGrid(columns: columns, spacing: 12) {
@@ -175,8 +194,22 @@ struct SetDetailView: View {
             Button("Add to wishlist") { wants?.addMany(addable) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Everything you don't already own or want from \(model.set.name).")
+            // Says plainly that this is the singles list, not a set goal — the confusion that
+            // put 120 unwanted cards on a wishlist (2026-07-25).
+            Text("Adds \(model.set.name)'s missing cards to your wishlist as individual singles. To track the set as a goal instead, use “Collect this set”.")
         }
+        .confirmationDialog(wishlistRemoveTitle(count: wishlistedInSet(wanted: wanted).count),
+                            isPresented: $confirmingWishlistRemove, titleVisibility: .visible) {
+            let wishlisted = wishlistedInSet(wanted: wanted)
+            Button("Remove from wishlist", role: .destructive) { wants?.removeMany(wishlisted) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Takes \(model.set.name)'s cards off your wishlist. Nothing in your tin is touched.")
+        }
+    }
+
+    private func wishlistRemoveTitle(count: Int) -> String {
+        "Remove \(count) \(count == 1 ? "card" : "cards") from your wishlist?"
     }
 
     private func wishlistAddTitle(count: Int) -> String {

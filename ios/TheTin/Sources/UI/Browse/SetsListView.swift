@@ -6,6 +6,9 @@ struct SetsListView: View {
     var entries: [CollectionEntry] = []
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    /// Threaded down so a set screen can offer "Collect this set". Without it the button is
+    /// invisible on the ONLY path most people take to a set (2026-07-25).
+    var goals: SetGoalsModel? = nil
 
     @State private var model = SetsListModel()
 
@@ -81,7 +84,8 @@ struct SetsListView: View {
         .navigationDestination(for: SetID.self) { setID in
             if let set = try? store.set(id: setID.raw) {
                 SetDetailView(model: SetDetailModel(store: store, set: set),
-                              entries: entries, store: store, collection: collection, wants: wants)
+                              entries: entries, store: store, collection: collection,
+                              wants: wants, goals: goals)
             }
         }
     }

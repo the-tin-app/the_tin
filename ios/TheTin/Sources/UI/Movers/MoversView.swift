@@ -194,8 +194,16 @@ private struct MarketMoverRow: View {
                 }
             VStack(alignment: .leading, spacing: 1) {
                 Text(card?.name ?? row.cardId).lineLimit(1)
-                Text(row.usd, format: .currency(code: "USD"))
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                HStack(spacing: 4) {
+                    Text(row.usd, format: .currency(code: "USD")).monospacedDigit()
+                    // Which printing moved: "+40%" means different things for Unlimited and
+                    // 1st Edition, and quoting one while pricing the other is what produced
+                    // the impossible percentages.
+                    if let printing = row.printing {
+                        Text("· \(printing)").lineLimit(1)
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             Text((row.pct > 0 ? "+" : "−") + abs(row.pct).formatted(.percent.precision(.fractionLength(1))))

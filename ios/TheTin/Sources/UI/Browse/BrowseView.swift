@@ -25,6 +25,7 @@ struct BrowseView: View {
     var entries: [CollectionEntry] = []
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    var goals: SetGoalsModel? = nil
     @State private var axis: BrowseAxis = .set
 
     var body: some View {
@@ -32,7 +33,7 @@ struct BrowseView: View {
             switch axis {
             case .set:
                 SetsListView(sets: (try? store.sets()) ?? [], store: store,
-                             entries: entries, collection: collection, wants: wants)
+                             entries: entries, collection: collection, wants: wants, goals: goals)
             case .pokedex:
                 PokedexListView(store: store, entries: entries, collection: collection, wants: wants)
             case .sealed:
