@@ -9,7 +9,9 @@
 //   * NOTHING IS STORED. There is no database, no upload, no account — this function renders from
 //     the query string and forgets. "Deleting" a shared list means not sharing the link again.
 //   * The route is noindex (see the response headers below) so shared lists never enter a search
-//     index, and no-store so no shared cache keeps a copy.
+//     index. It IS edge-cacheable: the URL already carries the whole list, so a cached copy is
+//     only readable by someone who already has the link, and caching keeps repeat views (unfurl
+//     crawlers especially) off the Workers invocation count.
 //
 // The payload is in the query string rather than a #fragment because a fragment never reaches the
 // server — strictly more private, but Facebook and Discord crawlers can't read one either, and the
@@ -151,10 +153,12 @@ export function renderErrorHTML({ origin }) {
 export async function onRequest(context) {
   const url = new URL(context.request.url);
   const encoded = url.searchParams.get("d");
-  // no-store as well as noindex: a shared list should not sit in any intermediary cache.
+  // Cacheable like /c/:id. A cache entry is keyed by the full URL, and that URL already contains
+  // the list — so caching exposes nothing to anyone who couldn't already read it, and it stops a
+  // popular link billing an invocation per unfurl. Still noindex: cacheable is not findable.
   const headers = {
     "content-type": "text/html; charset=utf-8",
-    "cache-control": "no-store",
+    "cache-control": "public, max-age=3600",
     "x-robots-tag": "noindex, nofollow",
   };
   if (!encoded) return new Response(renderErrorHTML({ origin: url.origin }), { status: 400, headers });
