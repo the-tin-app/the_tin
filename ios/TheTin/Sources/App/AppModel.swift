@@ -41,6 +41,20 @@ final class AppModel {
         cardRouteToken += 1
     }
 
+    /// Where an App Intent ("Scan a card", "Search cards") asked the app to go. Same token
+    /// pattern as the wishlist/card routes above, so a second invocation re-routes.
+    enum IntentRoute: Equatable {
+        case scan
+        case search(String)
+    }
+    private(set) var intentRouteToken = 0
+    private(set) var pendingIntentRoute: IntentRoute?
+
+    func openIntentRoute(_ route: IntentRoute) {
+        pendingIntentRoute = route
+        intentRouteToken += 1
+    }
+
     /// Parse a universal link. Only `/c/<id>` routes; anything else is ignored so the web
     /// pages (home/privacy/support) keep opening in the browser.
     func handleDeepLink(_ url: URL) {

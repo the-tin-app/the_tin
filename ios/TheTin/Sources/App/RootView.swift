@@ -67,6 +67,7 @@ private struct MainTabView: View {
     @State private var discoverPath = NavigationPath()
     @State private var consumedRouteToken = 0
     @State private var consumedCardToken = 0
+    @State private var consumedIntentToken = 0
 
     var body: some View {
         TabView(selection: $selection) {
@@ -149,10 +150,12 @@ private struct MainTabView: View {
             if searchModel == nil { searchModel = SearchModel(store: store) }
             consumeWishlistRoute() // cold launch from a tap: token bumped before we appeared
             consumeCardRoute()
+            consumeIntentRoute()   // …same for a cold launch from Siri or the Action button
             await pack.refresh()   // learn the pack's state once, for Settings and the prompt
         }
         .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
+        .onChange(of: model.intentRouteToken) { consumeIntentRoute() }
         // Collection writes can fail from any tab (card detail lives under Browse/Search too),
         // so the failure alert hangs off the TabView, not the Tin stack.
         .alert("Save failed", isPresented: Binding(
@@ -170,6 +173,21 @@ private struct MainTabView: View {
         consumedRouteToken = model.wishlistRouteToken
         selection = .tin
         tinPath.append(WantedRoute())
+    }
+
+    private func consumeIntentRoute() {
+        guard model.intentRouteToken > consumedIntentToken,
+              let route = model.pendingIntentRoute else { return }
+        consumedIntentToken = model.intentRouteToken
+        switch route {
+        case .scan:
+            selection = .scan
+        case .search(let query):
+            // searchModel is created in the same `.task` immediately above this call, so it
+            // exists by the time a cold-launch intent is consumed.
+            searchModel?.text = query
+            selection = .search
+        }
     }
 
     private func consumeCardRoute() {
