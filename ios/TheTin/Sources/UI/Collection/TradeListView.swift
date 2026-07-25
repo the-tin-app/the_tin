@@ -13,6 +13,10 @@ struct TradeListView: View {
     @Bindable var model: CollectionModel
     let store: CatalogStore
     @State private var editingEntry: CollectionEntry?
+    @State private var printRequest: PrintSheetRequest?
+    /// Built once per change of the list rather than per body pass — encoding is a gzip per
+    /// binary-search step, which is cheap but not free.
+    @State private var shareLink: (url: URL, included: Int)?
 
     var body: some View {
         List {
@@ -57,6 +61,9 @@ struct TradeListView: View {
         .overlay { if model.tradeEntries.isEmpty { emptyState } }
         .navigationTitle("For Trade")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar { shareMenu }
+        .printSheetFlow($printRequest)
+        .task(id: model.tradeEntries.count) { rebuildShareLink() }
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
                 NavigationStack {
@@ -101,6 +108,51 @@ struct TradeListView: View {
                 .buttonStyle(.borderedProminent)
             }
         }
+    }
+
+    /// Post it to Discord, or print it and bring it. The link carries card ids and nothing that
+    /// identifies you — see `ShareList`.
+    @ToolbarContentBuilder private var shareMenu: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Section("Share a link") {
+                    if let shareLink {
+                        ShareLink(item: shareLink.url,
+                                  subject: Text("Cards I'll trade"),
+                                  message: Text("Cards I'll trade — from The Tin")) {
+                            Text(shareLink.included < model.tradeEntries.count
+                                 ? "Link (first \(shareLink.included) cards)"
+                                 : "Link to this list")
+                        }
+                    }
+                }
+                Section("Print (PDF of card images)") {
+                    Button("All cards") {
+                        printRequest = PrintSheet.tradeRequest(title: "For Trade",
+                                                               entries: model.tradeEntries,
+                                                               model: model, store: store)
+                    }
+                }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .accessibilityLabel("Share trade list")
+            .disabled(model.tradeEntries.isEmpty)
+        }
+    }
+
+    /// Most valuable first, so a list too long for a URL keeps the cards worth talking about.
+    /// Names ride along because whoever opens the link usually doesn't have the app.
+    private func rebuildShareLink() {
+        let setNames = Dictionary(uniqueKeysWithValues:
+            ((try? store.sets()) ?? []).map { ($0.id, $0.name) })
+        let items = model.tradeEntries.map { entry -> ShareList.Item in
+            let card = try? store.card(id: entry.cardId)
+            return ShareList.Item(c: entry.cardId, n: card?.name,
+                                  s: card.flatMap { setNames[$0.setId] },
+                                  q: entry.qty, d: entry.condition)
+        }
+        shareLink = try? ShareList.link(kind: .trade, items: items)
     }
 
     private func dividerName(_ entry: CollectionEntry) -> String {

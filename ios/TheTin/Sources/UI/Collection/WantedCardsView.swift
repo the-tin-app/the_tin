@@ -16,6 +16,8 @@ struct WantedCardsView: View {
     @State private var printRequest: PrintSheetRequest?
     @State private var exportDoc: CSVDocument?
     @State private var exportName = "the-tin-wishlist"
+    /// Rebuilt when the wishlist changes rather than per body pass — see `TradeListView`.
+    @State private var shareLink: (url: URL, included: Int)?
 
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
 
@@ -85,6 +87,7 @@ struct WantedCardsView: View {
             exportDoc = nil
         }
         .printSheetFlow($printRequest)
+        .task(id: wants.entries.count) { rebuildShareLink(r) }
         .sheet(item: $editing) { card in
             WishlistEditSheet(card: card, price: r.rawUsd[card.id], wants: wants)
         }
@@ -193,6 +196,19 @@ struct WantedCardsView: View {
     @ToolbarContentBuilder private func shareMenu(r: Resolved, disabled: Bool) -> some ToolbarContent {
         ToolbarItem {
             Menu {
+                // A link a friend can open without the app — the thing you actually paste into
+                // Discord before a meetup. Carries card ids only; see `ShareList`.
+                Section("Share a link") {
+                    if let shareLink {
+                        ShareLink(item: shareLink.url,
+                                  subject: Text("Cards I'm hunting"),
+                                  message: Text("Cards I'm hunting — from The Tin")) {
+                            Text(shareLink.included < r.allCards.count
+                                 ? "Link (first \(shareLink.included) cards)"
+                                 : "Link to this list")
+                        }
+                    }
+                }
                 Section("Export as CSV (spreadsheet)") {
                     Button("All cards") { exportCSV(r, priority: nil) }
                     ForEach(WantPriority.allCases) { p in
@@ -215,6 +231,25 @@ struct WantedCardsView: View {
     /// only" means the low list, full stop — so Export/Print subsets match their menu labels.
     private func subset(_ r: Resolved, priority p: WantPriority?) -> [CardRecord] {
         p == nil ? r.allCards : r.allCards.filter { priority($0.id) == p }
+    }
+
+    /// Most valuable first, so a list too long for a URL keeps the cards worth talking about.
+    /// Target price and priority ride along — they're what turn a list of names into an ask.
+    private func rebuildShareLink(_ r: Resolved) {
+        let ordered = WishlistGrid.sorted(cards: r.allCards, entries: wants.entries,
+                                          prices: r.rawUsd,
+                                          setDates: r.setsById.mapValues { $0.releaseDate ?? "" },
+                                          by: .expensive)
+        let items = ordered.map { card -> ShareList.Item in
+            let entry = wants.entry(card.id)
+            // Normal priority is the default on the other side too, so it's not worth the bytes.
+            let priority = entry?.priority
+            return ShareList.Item(c: card.id, n: card.name, s: r.setsById[card.setId]?.name,
+                                  t: entry?.targetUsd,
+                                  p: priority == nil || priority == .normal
+                                     ? nil : priority?.label.lowercased())
+        }
+        shareLink = try? ShareList.link(kind: .want, items: items)
     }
 
     private func exportCSV(_ r: Resolved, priority p: WantPriority?) {

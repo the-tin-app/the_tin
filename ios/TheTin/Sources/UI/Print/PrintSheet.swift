@@ -164,13 +164,21 @@ extension PrintSheet {
     @MainActor
     static func tradeRequest(group: CardGroup, model: CollectionModel,
                              store: CatalogStore) -> PrintSheetRequest {
-        let entries = model.entries(in: group.id)
+        tradeRequest(title: "For Trade — \(group.name)", entries: model.entries(in: group.id),
+                     model: model, store: store)
+    }
+
+    /// The same sheet for any set of entries — the trade list isn't a divider, it's a flag that
+    /// cuts across them.
+    @MainActor
+    static func tradeRequest(title: String, entries: [CollectionEntry], model: CollectionModel,
+                             store: CatalogStore) -> PrintSheetRequest {
         let cards = Dictionary(uniqueKeysWithValues:
             ((try? store.cards(ids: entries.map(\.cardId))) ?? []).map { ($0.id, $0) })
         let setNames = Dictionary(uniqueKeysWithValues:
             ((try? store.sets()) ?? []).map { ($0.id, $0.name) })
         return PrintSheetRequest(
-            title: "For Trade — \(group.name)",
+            title: title,
             items: tradeItems(entries: entries, cards: cards, setNames: setNames,
                               prices: model.prices, variantsByCard: model.variantsByCard,
                               conditionsByCard: model.conditionsByCard,
