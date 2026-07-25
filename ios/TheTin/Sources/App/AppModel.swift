@@ -239,7 +239,8 @@ final class AppModel {
             // background; acceptance re-checks emptiness, so racing a first scan is safe.
             if backup == nil {
                 let backupService = BackupService(collection: repository,
-                                                  wants: wantsRepository, uid: uid)
+                                                  wants: wantsRepository, setGoals: setGoals,
+                                                  uid: uid)
                 backupService.start()
                 self.backup = backupService
                 Task { await backupService.offerRestoreIfEligible() }

@@ -24,6 +24,9 @@ final class SetGoalsModel {
     private let fileURL: URL
     /// Routes write failures into the same alert sink as collection/wishlist writes.
     var onWriteError: ((String) -> Void)?
+    /// Fired after a successful write. `BackupService` uses it in place of a stream, since goals
+    /// are one small whole-file write rather than a repository.
+    var onChange: (() -> Void)?
 
     init(paths: SetGoalPaths = .default()) {
         self.fileURL = paths.fileURL
@@ -43,7 +46,7 @@ final class SetGoalsModel {
     func toggle(_ setId: String) {
         let previous = setIds
         if setIds.contains(setId) { setIds.remove(setId) } else { setIds.insert(setId) }
-        do { try persist() } catch {
+        do { try persist(); onChange?() } catch {
             setIds = previous
             onWriteError?("Couldn't update your sets — nothing was changed. Check free storage and try again.")
         }
@@ -53,7 +56,7 @@ final class SetGoalsModel {
     func replaceAll(_ ids: Set<String>) {
         let previous = setIds
         setIds = ids
-        do { try persist() } catch { setIds = previous }
+        do { try persist(); onChange?() } catch { setIds = previous }
     }
 
     private func persist() throws {
