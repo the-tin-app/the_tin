@@ -64,6 +64,34 @@ final class SetGoalsTests: XCTestCase {
         XCTAssertEqual(p.gapValue, 400)
     }
 
+    /// Fewest cards left wins over the higher completion fraction: 10 to finish is more actionable
+    /// than 20, even though 380/400 is "further along" than 90/100. This is the case that separates
+    /// the two rules — ranking by fraction put the big set first and let it move whenever the
+    /// *other* set grew.
+    func testSortRanksByCardsLeftNotCompletionFraction() {
+        let big = bulkCards(setId: "big", count: 400)
+        let small = bulkCards(setId: "small", count: 100)
+        let rows = [
+            // 380/400 = 95% done, 20 cards left.
+            SetGoals.progress(set: set(id: "big", name: "Big", total: 400), cards: big,
+                              ownedCardIds: Set(big.prefix(380).map(\.id)), prices: [:]),
+            // 90/100 = 90% done, 10 cards left — fewer to chase, so it leads.
+            SetGoals.progress(set: set(id: "small", name: "Small", total: 100), cards: small,
+                              ownedCardIds: Set(small.prefix(90).map(\.id)), prices: [:]),
+        ]
+        let sorted = SetGoals.sorted(rows)
+        XCTAssertEqual(sorted.map { $0.set.id }, ["small", "big"])
+        XCTAssertTrue(sorted[0].fraction < sorted[1].fraction, "the leader is the LESS complete set")
+    }
+
+    private func bulkCards(setId: String, count: Int) -> [CardRecord] {
+        (1...count).map {
+            CardRecord(id: "\(setId)-\($0)", setId: setId, number: String($0), name: "Card \($0)",
+                       hp: nil, types: [], rarity: nil, artist: nil, imageBase: nil, imageUrl: nil,
+                       tcgplayerId: nil)
+        }
+    }
+
     /// Closest to done first — those are the ones worth acting on. Finished sets sink rather than
     /// vanish, so completing one is visible instead of silent.
     func testSortPutsNearlyDoneFirstAndCompleteLast() {
