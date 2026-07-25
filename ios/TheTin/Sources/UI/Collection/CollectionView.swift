@@ -391,6 +391,8 @@ struct CollectionView: View {
     let store: CatalogStore
     var wants: WantsModel? = nil
     var onGetStarted: ((GetStartedTab) -> Void)? = nil
+    /// Scanner pack already installed — flips the empty-tin CTA from "set up" to "scan".
+    var scannerReady = false
     /// Pushes a stack's flip-through deck (nil = the whole tin). VoiceOver's custom-action
     /// mirror of the context menu's "Flip through cards" — actions can't tap the invisible
     /// NavigationLinks. (Row activation itself opens the list-first landing.)
@@ -405,7 +407,6 @@ struct CollectionView: View {
     @State private var deletingGroup: CardGroup?
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
-    @State private var deletingEntry: CollectionEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var searchIndex = CardSearchIndex()
 
@@ -416,18 +417,30 @@ struct CollectionView: View {
         List {
             if searchText.isEmpty {
                 if model.catalogUnavailable { catalogNotice.tinRow() }
-                header.tinRow()
-                everythingRow.tinRow()
-                ForEach(model.groups) { group in
-                    groupRow(group).tinRow()
+                if model.entries.isEmpty {
+                    // A first-run tin has nothing to total, riffle, or file — so the screen's job
+                    // is to say what a tin is and offer the two ways to fill it. Dividers still
+                    // show if any exist (deleting the last card mustn't strand them), and the
+                    // wishlist only when it has something in it.
+                    emptyTin.tinRow()
+                    ForEach(model.groups) { group in
+                        groupRow(group).tinRow()
+                    }
+                    if let wants, !wants.wanted.isEmpty { wishlistLink(wants).tinRow() }
+                } else {
+                    header.tinRow()
+                    everythingRow.tinRow()
+                    ForEach(model.groups) { group in
+                        groupRow(group).tinRow()
+                    }
+                    .onMove { from, to in
+                        var ids = model.groups.map(\.id)
+                        ids.move(fromOffsets: from, toOffset: to)
+                        Task { await model.reorderGroups(ids: ids) }
+                    }
+                    newDividerRow.tinRow()
+                    if let wants { wishlistLink(wants).tinRow() }
                 }
-                .onMove { from, to in
-                    var ids = model.groups.map(\.id)
-                    ids.move(fromOffsets: from, toOffset: to)
-                    Task { await model.reorderGroups(ids: ids) }
-                }
-                newDividerRow.tinRow()
-                if let wants { wishlistLink(wants).tinRow() }
             } else {
                 searchResults
             }
@@ -507,16 +520,6 @@ struct CollectionView: View {
             Text(n == 0 ? "This divider is empty."
                         : "Kept \(n == 1 ? "card moves" : "cards move") to No divider. Deleting \(n == 1 ? "it" : "them") too can't be undone.")
         }
-        .confirmationDialog(
-            "Remove \((try? store.card(id: deletingEntry?.cardId ?? ""))?.name ?? "this card") from your tin?",
-            isPresented: Binding(get: { deletingEntry != nil },
-                                 set: { if !$0 { deletingEntry = nil } }),
-            titleVisibility: .visible,
-            presenting: deletingEntry
-        ) { entry in
-            Button("Remove", role: .destructive) { Task { await model.deleteEntry(id: entry.id) } }
-            Button("Cancel", role: .cancel) {}
-        }
         .navigationDestination(for: TinPagerRoute.self) { route in
             GroupPagerView(model: model, store: store, groupId: route.groupId)
         }
@@ -555,49 +558,77 @@ struct CollectionView: View {
         .onChange(of: model.catalogGeneration) { searchIndex.clear() }
     }
 
+    /// Only rendered once there's a card to total — `emptyTin` owns the first-run screen.
     private var header: some View {
         let v = model.tinValue
-        let isEmpty = model.entries.isEmpty
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
                 Text(v.total, format: WidgetShared.tinCurrency(v.total))
                     .font(.system(.largeTitle, design: .rounded).weight(.bold))
                     .monospacedDigit()
                     .contentTransition(.numericText())
-                // An empty tin's "$0 ›" led to a screen that just said "add cards" —
-                // no chevron, no route until there's a portfolio to show.
-                if !isEmpty {
-                    Image(systemName: "chevron.right")
-                        .font(.body.weight(.semibold)).foregroundStyle(.tertiary)
-                }
+                Image(systemName: "chevron.right")
+                    .font(.body.weight(.semibold)).foregroundStyle(.tertiary)
             }
-            .background { if !isEmpty { navLink(PortfolioRoute()) } }
+            .background { navLink(PortfolioRoute()) }
             .accessibilityLabel("Tin value, \(v.total.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
-            .accessibilityHint(isEmpty ? "" : "Shows portfolio value history")
-            if isEmpty {
-                Text("Your tin is empty — add your first card.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    Button { onGetStarted?(.scan) } label: {
-                        Label("Scan a card", systemImage: "camera.viewfinder")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Button { onGetStarted?(.browse) } label: {
-                        Label("Browse sets", systemImage: "square.grid.2x2")
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .controlSize(.small)
-                .padding(.top, 6)
-            } else {
-                Text("\(v.totalCards) cards in your tin · \(v.pricedCards) of \(v.totalCards) priced")
-                    .font(.footnote).foregroundStyle(.secondary)
-                if let asOf = model.priceAsOf {
-                    AsOfLabel(date: asOf)
-                }
+            .accessibilityHint("Shows portfolio value history")
+            Text("\(v.totalCards) cards in your tin · \(v.pricedCards) of \(v.totalCards) priced")
+                .font(.footnote).foregroundStyle(.secondary)
+            if let asOf = model.priceAsOf {
+                AsOfLabel(date: asOf)
             }
         }
         .padding(.bottom, 6)
+    }
+
+    /// First run: say what a tin is, then the two ways to put a card in one. The scanner option
+    /// names its one-time download up front (it's ~half a gig) so tapping through isn't a
+    /// surprise — and drops the download line once the pack is installed.
+    private var emptyTin: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "square.stack.3d.up")
+                .font(.system(size: 44)).foregroundStyle(.tint)
+            VStack(spacing: 6) {
+                Text("Your tin is empty")
+                    .font(.system(.title2, design: .serif).italic().weight(.semibold))
+                Text("A tin holds the cards you own — what each one is worth today, and how that value moves. File them behind dividers however you like.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            VStack(spacing: 14) {
+                getStartedOption(
+                    title: scannerReady ? "Scan a card" : "Set up the scanner",
+                    caption: scannerReady
+                        ? "Point your camera at a card and The Tin names it."
+                        : "One-time download, then your camera names any card.",
+                    prominent: true) { onGetStarted?(.scan) }
+                getStartedOption(
+                    title: "Browse sets",
+                    caption: "Pick a set, find the card, add it by hand.",
+                    prominent: false) { onGetStarted?(.browse) }
+            }
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28).padding(.horizontal, 8)
+    }
+
+    private func getStartedOption(title: String, caption: String, prominent: Bool,
+                                  action: @escaping () -> Void) -> some View {
+        VStack(spacing: 4) {
+            Button(title, action: action)
+                .buttonStyle(.borderedProminent)
+                .tint(prominent ? .accentColor : Color(.secondarySystemFill))
+                .foregroundStyle(prominent ? Color.white : Color.primary)
+            // The button's intrinsic width otherwise stretches the stack and truncates this
+            // to one clipped line instead of wrapping.
+            Text(caption)
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private var everythingRow: some View {
@@ -722,8 +753,13 @@ struct CollectionView: View {
                         dividerName: dividerName(entry),
                         value: model.entryValue(entry))
                 }
-                .swipeActions {
-                    Button("Remove", role: .destructive) { deletingEntry = entry }
+                // Reveal-then-tap IS the confirmation (Notes/Reminders): a dialog after the swipe
+                // made the row vanish, come back, and ask again. No full swipe, so it can't fire
+                // by accident.
+                .swipeActions(allowsFullSwipe: false) {
+                    Button("Remove", role: .destructive) {
+                        Task { await model.deleteEntry(id: entry.id) }
+                    }
                 }
                 .swipeActions(edge: .leading) {
                     Button { editingEntry = entry } label: { Label("Edit", systemImage: "pencil") }

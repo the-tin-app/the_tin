@@ -27,7 +27,10 @@ struct SetsListView: View {
         NavigationLink(value: SetID(raw: set.id)) {
             VStack(spacing: 4) {
                 CardImageView(card: repCard(set), quality: "low")
-                Text(set.name).font(.caption).lineLimit(2).multilineTextAlignment(.center)
+                // Always two lines tall: a one-line name would otherwise make a shorter cell,
+                // and the grid row sizes to its tallest neighbour — ragged art and counts.
+                Text(set.name).font(.caption).lineLimit(2, reservesSpace: true)
+                    .multilineTextAlignment(.center)
                 // Capped like GroupStats.setCompletion: secret rares push a set's card list past
                 // its printed total, and "104/102 collected" reads as a bug.
                 Text("\(min(ownedCounts[set.id] ?? 0, set.total))/\(set.total)")
