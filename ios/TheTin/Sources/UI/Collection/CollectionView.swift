@@ -201,6 +201,88 @@ final class CollectionModel {
         }
     }
 
+    // MARK: Undo
+
+    /// The last destructive change, kept just long enough to offer it back. Every delete dialog
+    /// in the app said "this can't be undone" — and it couldn't, so one mis-swipe on a graded copy
+    /// meant retyping the grade, the fee, the date and the shop it came from.
+    struct UndoableDelete: Equatable, Identifiable {
+        let id = UUID()
+        /// "Removed Charizard ex" — what the toast says happened.
+        let message: String
+        let groups: [CardGroup]
+        let entries: [CollectionEntry]
+    }
+    private(set) var undoable: UndoableDelete?
+
+    /// Counts down the offer. Owned by the model, NOT by a `.task` on the toast view: SwiftUI
+    /// cancels a view task whenever it tears the view down or re-identifies it, and the entries
+    /// stream fires immediately after a delete — re-evaluating exactly that subtree. The cancelled
+    /// `try? await Task.sleep` then swallowed its own CancellationError and fell straight through
+    /// to the clear, so the offer was raised and wiped inside a frame and no toast was ever
+    /// visible, at any placement. (Same trap `publishWidgetSnapshot` guards against, and the same
+    /// "policy belongs in the model where a test can reach it" lesson as the scanner's auto-pause.)
+    private var undoExpiry: Task<Void, Never>?
+
+    /// How long an undo stays on offer.
+    static let undoWindow: Duration = .seconds(6)
+
+    func clearUndo() {
+        undoExpiry?.cancel()
+        undoExpiry = nil
+        undoable = nil
+    }
+
+    /// Raise an undo offer and start its countdown, replacing any offer already standing.
+    private func offerUndo(_ offer: UndoableDelete) {
+        undoExpiry?.cancel()
+        undoable = offer
+        undoExpiry = Task { [weak self] in
+            try? await Task.sleep(for: Self.undoWindow)
+            // A cancelled sleep means a NEWER offer superseded this one (or someone took the
+            // undo). Clearing here would wipe that newer offer — the exact bug this moved to fix.
+            guard !Task.isCancelled else { return }
+            self?.undoable = nil
+            self?.undoExpiry = nil
+        }
+    }
+
+    /// Put back exactly what was removed, ids and all, in one write. `replaceAll` is the only
+    /// repository call that preserves ids (it exists for backup restore) — `createGroup`/`addEntry`
+    /// would mint new ones, which would orphan the entries pointing at the old group id.
+    func undoLastDelete() async {
+        guard let undone = undoable else { return }
+        undoExpiry?.cancel()
+        undoExpiry = nil
+        undoable = nil
+
+        var restoredGroups = groups
+        for group in undone.groups where !restoredGroups.contains(where: { $0.id == group.id }) {
+            restoredGroups.append(group)
+        }
+        // The snapshot carries the original sortOrder, so a restored divider lands back in its
+        // old position rather than at the end.
+        restoredGroups.sort { $0.sortOrder < $1.sortOrder }
+
+        var restoredEntries = entries
+        for entry in undone.entries {
+            // Overwrite rather than append when the row still exists: deleting a divider "keeping
+            // its cards" leaves them behind with groupId "", and this is what files them back.
+            if let i = restoredEntries.firstIndex(where: { $0.id == entry.id }) {
+                restoredEntries[i] = entry
+            } else {
+                restoredEntries.append(entry)
+            }
+        }
+        await write("undo that") {
+            try await repository.replaceAll(groups: restoredGroups, entries: restoredEntries)
+        }
+    }
+
+    private func cardName(_ cardId: String) -> String {
+        (try? store.card(id: cardId))?.name ?? "card"
+    }
+
     @discardableResult
     func createGroup(name: String) async -> String {
         var id = ""
@@ -211,7 +293,20 @@ final class CollectionModel {
         await write("rename the divider") { try await repository.renameGroup(id: id, name: name) }
     }
     func deleteGroup(id: String, keepingEntries: Bool = false) async {
-        await write("delete the divider") { try await repository.deleteGroup(id: id, keepingEntries: keepingEntries) }
+        let group = groups.first { $0.id == id }
+        // Snapshot BEFORE the write: with `keepingEntries` these rows survive with groupId "",
+        // and the pre-delete copies are what remember which divider they belonged to.
+        let affected = entries.filter { $0.groupId == id }
+        let ok = await write("delete the divider") {
+            try await repository.deleteGroup(id: id, keepingEntries: keepingEntries)
+        }
+        guard ok, let group else { return }
+        let n = affected.cardCount
+        offerUndo(UndoableDelete(
+            message: keepingEntries || affected.isEmpty
+                ? "Deleted “\(group.name)”"
+                : "Deleted “\(group.name)” and \(n) \(n == 1 ? "card" : "cards")",
+            groups: [group], entries: affected))
     }
     func reorderGroups(ids: [String]) async {
         await write("reorder the dividers") { try await repository.reorderGroups(orderedIds: ids) }
@@ -280,7 +375,82 @@ final class CollectionModel {
     }
 
     func deleteEntry(id: String) async {
-        await write("remove the card") { try await repository.deleteEntry(id: id) }
+        let removed = entries.first { $0.id == id }
+        let ok = await write("remove the card") { try await repository.deleteEntry(id: id) }
+        guard ok, let removed else { return }
+        offerUndo(UndoableDelete(message: "Removed \(cardName(removed.cardId))",
+                                 groups: [], entries: [removed]))
+    }
+
+    // MARK: Trade list
+
+    /// Copies you've marked as available to trade, most valuable first — your spares are the
+    /// currency of this hobby, and the app had no notion of them.
+    var tradeEntries: [CollectionEntry] {
+        GroupStats.sortedByValueDescending(
+            entries: entries.filter(\.isForTrade), prices: prices,
+            variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+            matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
+    }
+
+    /// What the trade list is worth, in the same best-effort terms as the tin total.
+    var tradeValue: (total: Double, pricedCards: Int, totalCards: Int) {
+        GroupStats.totalValue(entries: entries.filter(\.isForTrade), prices: prices,
+                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
+    }
+
+    /// Cards you hold more than one physical copy of. Marking is explicit by design, but an
+    /// explicit-only feature opens on a blank screen forever — this is what the empty trade list
+    /// offers to flag for you.
+    var duplicateCardIds: Set<String> {
+        var qtyByCard: [String: Int] = [:]
+        for entry in entries { qtyByCard[entry.cardId, default: 0] += entry.qty }
+        return Set(qtyByCard.filter { $0.value > 1 }.keys)
+    }
+
+    func setForTrade(_ entry: CollectionEntry, _ on: Bool) async {
+        var updated = entry
+        updated.forTrade = on ? true : nil   // nil, not false — keeps untouched entries clean
+        await saveEntry(updated)
+    }
+
+    /// Flag every copy of every card you hold more than once — as INDIVIDUAL rows, in one write.
+    ///
+    /// A ×4 row becomes four ×1 rows, because trading is a per-copy decision: you keep the sharp
+    /// one and trade the other three, and each may be in a different condition. Flagging the stack
+    /// as a unit couldn't express that. Any money recorded on the row is a total (the form says
+    /// "Price paid — total"), so it divides across the copies and the cost basis survives the
+    /// split.
+    func flagDuplicatesForTrade() async {
+        let duplicates = duplicateCardIds
+        var updated: [CollectionEntry] = []
+        for entry in entries where duplicates.contains(entry.cardId) {
+            guard entry.qty > 1 else {
+                if !entry.isForTrade {
+                    var one = entry
+                    one.forTrade = true
+                    updated.append(one)
+                }
+                continue
+            }
+            let share = { (total: Double?) in total.map { $0 / Double(entry.qty) } }
+            for copy in 0..<entry.qty {
+                var one = entry
+                // The first copy keeps the original row's id, so an undo or a backup that
+                // references it still resolves; the rest are new rows.
+                one.id = copy == 0 ? entry.id : UUID().uuidString
+                one.qty = 1
+                one.forTrade = true
+                one.pricePaid = share(entry.pricePaid)
+                one.gradingFeeUsd = share(entry.gradingFeeUsd)
+                updated.append(one)
+            }
+        }
+        guard !updated.isEmpty else { return }
+        await write("update your trade list") {
+            try await repository.applyEntryEdits(updated: updated, deletedIds: [])
+        }
     }
 
     /// Commit a scanned draft into the owned collection. Returns false on write failure so the
@@ -393,6 +563,12 @@ struct CollectionView: View {
     var onGetStarted: ((GetStartedTab) -> Void)? = nil
     /// Scanner pack already installed — flips the empty-tin CTA from "set up" to "scan".
     var scannerReady = false
+    /// Hands the current query to the catalog-wide Search tab. Without it, searching your tin for
+    /// something you don't own dead-ended in a note pointing at another tab — the app admitting a
+    /// seam instead of crossing it.
+    var onSearchCatalog: ((String) -> Void)? = nil
+    /// The sets being collected — drives the Wanted screen's Sets segment.
+    var goals: SetGoalsModel? = nil
     /// Pushes a stack's flip-through deck (nil = the whole tin). VoiceOver's custom-action
     /// mirror of the context menu's "Flip through cards" — actions can't tap the invisible
     /// NavigationLinks. (Row activation itself opens the list-first landing.)
@@ -440,6 +616,9 @@ struct CollectionView: View {
                     }
                     newDividerRow.tinRow()
                     if let wants { wishlistLink(wants).tinRow() }
+                    // Not on the empty branch: with no entries there is nothing to trade, so the
+                    // row would only be a promise the tin can't keep — same rule as the wishlist.
+                    tradeLink.tinRow()
                 }
             } else {
                 searchResults
@@ -518,7 +697,7 @@ struct CollectionView: View {
         } message: { group in
             let n = model.entries(in: group.id).cardCount
             Text(n == 0 ? "This divider is empty."
-                        : "Kept \(n == 1 ? "card moves" : "cards move") to No divider. Deleting \(n == 1 ? "it" : "them") too can't be undone.")
+                        : "Kept \(n == 1 ? "card moves" : "cards move") to No divider. Either way you get a moment to undo it.")
         }
         .navigationDestination(for: TinPagerRoute.self) { route in
             GroupPagerView(model: model, store: store, groupId: route.groupId)
@@ -532,7 +711,12 @@ struct CollectionView: View {
             }
         }
         .navigationDestination(for: WantedRoute.self) { _ in
-            if let wants { WantedCardsView(store: store, wants: wants, collection: model) }
+            if let wants {
+                WantedView(store: store, wants: wants, collection: model, goals: goals)
+            }
+        }
+        .navigationDestination(for: TradeRoute.self) { _ in
+            TradeListView(model: model, store: store)
         }
         .navigationDestination(for: TinAllCardsRoute.self) { _ in
             GroupDetailView(model: model, group: nil, store: store, onGetStarted: onGetStarted)
@@ -742,7 +926,12 @@ struct CollectionView: View {
             ContentUnavailableView {
                 Label("No matches for “\(searchText)” in your tin", systemImage: "magnifyingglass")
             } description: {
-                Text("Searches cards you own by name, set, and number — the Search tab covers the whole catalog.")
+                Text("This searches the cards you own, by name, set, and number.")
+            } actions: {
+                if let onSearchCatalog {
+                    Button("Search the whole catalog") { onSearchCatalog(searchText) }
+                        .buttonStyle(.borderedProminent)
+                }
             }
         } else {
             ForEach(matches) { entry in
@@ -781,16 +970,31 @@ struct CollectionView: View {
     }
 
     private func wishlistLink(_ wants: WantsModel) -> some View {
+        // One row for both kinds of wanting: sets you're collecting and singles you're hunting.
+        pinnedLink(title: "Wanted", systemImage: "heart", tint: .pink,
+                   count: wants.wanted.count + (goals?.setIds.count ?? 0), route: WantedRoute())
+    }
+
+    /// The other half of the wishlist: what you'll give up. Sits beside it because "hunting" and
+    /// "trading" are the same conversation at a meetup.
+    private var tradeLink: some View {
+        pinnedLink(title: "For Trade", systemImage: "arrow.left.arrow.right", tint: .orange,
+                   count: model.tradeEntries.count, route: TradeRoute())
+    }
+
+    /// The pinned rows under the dividers — same shape, so they read as a pair.
+    private func pinnedLink<V: Hashable>(title: String, systemImage: String, tint: Color,
+                                         count: Int, route: V) -> some View {
         HStack {
-            Image(systemName: "heart").foregroundStyle(.pink)
-            Text("Wishlist")
+            Image(systemName: systemImage).foregroundStyle(tint)
+            Text(title)
             Spacer()
-            Text("\(wants.wanted.count)").foregroundStyle(.secondary)
+            Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-        .background(navLink(WantedRoute()))
+        .background(navLink(route))
     }
 }
 

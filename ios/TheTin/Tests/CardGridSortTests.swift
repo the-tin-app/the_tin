@@ -33,4 +33,18 @@ final class CardGridSortTests: XCTestCase {
         let out = CardGridSort.apply(cards: cards, prices: prices, owned: [], wanted: ["s-3"], setDates: [:], sort: .number, filter: .wanted)
         XCTAssertEqual(out.map(\.id), ["s-3"])
     }
+
+    /// The set collector's view: what's left. Ownership is the only axis — a card you've
+    /// wishlisted but don't hold is still missing from the set.
+    func testFilterMissingIsEverythingUnowned() {
+        let out = CardGridSort.apply(cards: cards, prices: prices, owned: ["s-1"], wanted: ["s-2"],
+                                     setDates: [:], sort: .number, filter: .missing)
+        XCTAssertEqual(out.map(\.id), ["s-2", "s-3"])
+    }
+
+    func testFilterMissingIsEmptyOnACompletedSet() {
+        let out = CardGridSort.apply(cards: cards, prices: prices, owned: ["s-1", "s-2", "s-3"],
+                                     wanted: [], setDates: [:], sort: .number, filter: .missing)
+        XCTAssertTrue(out.isEmpty)
+    }
 }

@@ -82,6 +82,11 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     var acquiredFrom: String? // card shop, show, trade, online, free text
     var addedAt: Date
     var variant: String? = nil // CardVariant rawValue; nil = unspecified
+    /// Marked as available to trade. Optional (not `Bool = false`) so every collection.json
+    /// written before this existed still decodes untouched.
+    var forTrade: Bool? = nil
+
+    var isForTrade: Bool { forTrade == true }
 
     var gradeValue: Grade? { grade.flatMap(Grade.init(rawValue:)) }
     var variantValue: CardVariant? { variant.flatMap(CardVariant.init(rawValue:)) }
@@ -99,10 +104,17 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     /// already own should become "×2", not a second indistinguishable ×1 row; but a copy with a
     /// price paid, a date, or a source is its own acquisition and stays its own row (merging it
     /// would silently destroy cost basis).
+    ///
+    /// `forTrade` IS compared (reversed 2026-07-25). It was excluded on the reasoning that the
+    /// flag labels a stack of interchangeable cards; once the trade list became one row per
+    /// physical copy — so you can keep one and trade the other three — a kept copy and a
+    /// for-trade copy stopped being interchangeable. Leaving it out silently folded them back
+    /// together on the next bulk move, destroying exactly the distinction the split creates.
     func isSameCopy(as other: CollectionEntry) -> Bool {
         cardId == other.cardId && groupId == other.groupId
             && condition == other.condition && grade == other.grade
             && variantValue == other.variantValue
+            && isForTrade == other.isForTrade
             && !hasAcquisitionDetail && !other.hasAcquisitionDetail
     }
 }

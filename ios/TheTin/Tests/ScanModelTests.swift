@@ -142,4 +142,84 @@ final class ScanModelTests: XCTestCase {
         XCTAssertEqual(model.ambiguous.first?.id, "card_a")
         XCTAssertEqual(model.guidance, "Scanning paused — pick your card")
     }
+
+    /// Look-up mode answers "what is this?" without touching the tin: a lock publishes the card
+    /// for the view to present and stages nothing, so asking about a card you're not buying no
+    /// longer costs a stage-then-delete round trip.
+    func testLookUpModePublishesCardWithoutStaging() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: staging, store: catalog, fingerThrottle: 1)
+        // The mode persists through AppConfig, so restore it rather than leaking a `true`
+        // default into every later test that expects a lock to stage.
+        let previous = AppConfig.scanLookUpMode
+        defer { AppConfig.scanLookUpMode = previous }
+        model.isLookUpMode = true
+
+        await model.run(source: ReplaySource(buffer: pb, count: 6))
+
+        XCTAssertEqual(model.lookedUpCardId, "card_a", "a lock should publish the card")
+        XCTAssertTrue(staging.drafts.isEmpty, "look-up mode must never stage a draft")
+    }
+
+    /// The chooser path funnels through the same `stage`, so picking a card in look-up mode must
+    /// look it up too — not quietly add it.
+    func testLookUpModeAppliesToTheAmbiguityChooserToo() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: staging, store: catalog, fingerThrottle: 1)
+        let previous = AppConfig.scanLookUpMode
+        defer { AppConfig.scanLookUpMode = previous }
+        model.isLookUpMode = true
+
+        await model.chooseAmbiguous(cardId: "card_a")
+
+        XCTAssertEqual(model.lookedUpCardId, "card_a")
+        XCTAssertTrue(staging.drafts.isEmpty)
+    }
+
+    /// A presented look-up card is modal: the camera is still running underneath, and a second
+    /// lock landing while the sheet is up would swap the card out from under the user.
+    func testPresentedLookUpCardFreezesFurtherLocks() async throws {
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: staging, store: catalog, fingerThrottle: 1)
+        let previous = AppConfig.scanLookUpMode
+        defer { AppConfig.scanLookUpMode = previous }
+        model.isLookUpMode = true
+
+        await model.handle(.lock(cardId: "card_a"))
+        XCTAssertEqual(model.lookedUpCardId, "card_a")
+
+        await model.handle(.lock(cardId: "card_b"))
+        XCTAssertEqual(model.lookedUpCardId, "card_a", "a second lock must not swap the shown card")
+
+        // Dismissing clears it and reopens the scanner to the next card.
+        await model.clearLookedUpCard()
+        XCTAssertNil(model.lookedUpCardId)
+        await model.handle(.lock(cardId: "card_b"))
+        XCTAssertEqual(model.lookedUpCardId, "card_b")
+    }
 }

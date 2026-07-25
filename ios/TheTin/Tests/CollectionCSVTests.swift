@@ -41,9 +41,24 @@ final class CollectionCSVTests: XCTestCase {
         XCTAssertEqual(out[0], CollectionCSV.header.joined(separator: ","))
         // current_value: psa10 505 × qty 2 = 1010.00 (same GroupStats.entryValue the app shows).
         // acquiredFrom contains a comma → quoted.
+        // for_trade is blank, not "false": an entry that was never marked exports as it always did.
         XCTAssertEqual(out[1],
             "swsh7-215,Rayquaza VMAX,swsh7,Evolving Skies,215,Rare Rainbow,2,holo,NM,psa10," +
-            "300.00,1970-01-02T00:00:00Z,\"trade, local show\",1970-01-01T00:00:00Z,Binder,1010.00,2026-07-13")
+            "300.00,1970-01-02T00:00:00Z,\"trade, local show\",1970-01-01T00:00:00Z,Binder,1010.00,2026-07-13,")
+    }
+
+    /// The trade flag has to survive "your data is yours": export then re-import must not quietly
+    /// drop the list you built.
+    func testExportMarksCardsAvailableToTrade() {
+        let entry = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "g1", qty: 1,
+                                    condition: "NM", grade: nil, pricePaid: nil, acquiredAt: nil,
+                                    acquiredFrom: nil, addedAt: Date(timeIntervalSince1970: 0),
+                                    variant: "holo", forTrade: true)
+        let group = CardGroup(id: "g1", name: "Binder", sortOrder: 0, createdAt: Date())
+        let data = CollectionCSV.export(entries: [entry], groups: [group],
+                                        cards: [card.id: card], sets: [set.id: set],
+                                        prices: [card.id: price])
+        XCTAssertTrue(lines(data)[1].hasSuffix(",true"), "got \(lines(data)[1])")
     }
 
     func testExportUnknownCardAndUngroupedGoesBlankNotCrash() {
@@ -51,7 +66,7 @@ final class CollectionCSVTests: XCTestCase {
                                     grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
                                     addedAt: Date(timeIntervalSince1970: 0))
         let data = CollectionCSV.export(entries: [entry], groups: [], cards: [:], sets: [:], prices: [:])
-        XCTAssertEqual(lines(data)[1], "gone-1,,,,,,1,,,,,,,1970-01-01T00:00:00Z,,,")
+        XCTAssertEqual(lines(data)[1], "gone-1,,,,,,1,,,,,,,1970-01-01T00:00:00Z,,,,")
     }
 
     func testWishlistExport() {

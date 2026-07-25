@@ -26,6 +26,33 @@ final class WantsModel {
         persist(rollbackTo: previous)
     }
 
+    /// Heart many cards in one write. "Add everything I'm missing from this set" is otherwise 60
+    /// taps — and 60 `toggle` calls would be 60 whole-map saves queued through the FIFO write
+    /// chain. Cards already wanted keep the priority/target/notes they carry; this only adds.
+    func addMany(_ cardIds: [String]) {
+        let previous = entries
+        var added = false
+        for id in cardIds where entries[id] == nil {
+            entries[id] = WantEntry()
+            added = true
+        }
+        guard added else { return }
+        persist(rollbackTo: previous)
+    }
+
+    /// Un-heart many cards in one write — the counterpart of `addMany`, and the way back from a
+  /// bulk add you didn't mean. Without it, undoing "add 120 cards" is 120 taps.
+    func removeMany(_ cardIds: [String]) {
+        let previous = entries
+        var removed = false
+        for id in cardIds where entries[id] != nil {
+            entries[id] = nil
+            removed = true
+        }
+        guard removed else { return }
+        persist(rollbackTo: previous)
+    }
+
     /// Edit an existing entry's priority/target/notes. No-op if the card isn't wanted.
     func update(_ cardId: String, _ mutate: (inout WantEntry) -> Void) {
         guard var e = entries[cardId] else { return }

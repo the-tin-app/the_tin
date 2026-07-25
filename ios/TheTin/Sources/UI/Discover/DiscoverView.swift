@@ -4,6 +4,7 @@ struct DiscoverView: View {
     let store: CatalogStore
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    var goals: SetGoalsModel? = nil
     @State private var model: DiscoverModel?
 
     var body: some View {
@@ -30,8 +31,12 @@ struct DiscoverView: View {
                            store: store, wants: wants, collection: collection)
             }
         }
+        // The whole browse surface (By Set / By Dex / Sealed / All Cards), not just the filter
+        // deck — this row used to open a screen called "Browse" that had nothing in common with
+        // the "Browse" tab.
         .navigationDestination(for: BrowseRoute.self) { _ in
-            DiscoverBrowseView(store: store, collection: collection, wants: wants)
+            BrowseView(store: store, entries: collection?.entries ?? [],
+                       collection: collection, wants: wants, goals: goals)
         }
         .task(id: tasteSignalKey) {
             let m = model ?? DiscoverModel(store: store)
@@ -56,7 +61,9 @@ private struct DiscoverHomeView: View {
             VStack(alignment: .leading, spacing: 24) {
                 NavigationLink(value: BrowseRoute()) {
                     HStack {
-                        Label("Browse & filter", systemImage: "magnifyingglass")
+                        // Not a magnifying glass — that's Search's icon, and this row leading
+                        // with it was half the reason Browse and Search read as the same door.
+                        Label("Browse the catalog", systemImage: "square.grid.2x2")
                             .font(.title3.bold())
                         Spacer()
                         Image(systemName: "chevron.right").font(.subheadline).foregroundStyle(.secondary)

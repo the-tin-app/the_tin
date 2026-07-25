@@ -132,6 +132,17 @@ final class ScanModel {
     var bestGuess: String?
     var ambiguous: [ChooserOption] = []
 
+    /// What a confident lock does. `false` (default) stages a reviewable draft for the tin;
+    /// `true` just identifies the card and stages nothing — the shop question ("what is this,
+    /// what's it worth, do I own it?") rather than the cataloguing one. Persisted: which mode you
+    /// want follows what you're doing this week, not this launch.
+    var isLookUpMode: Bool = AppConfig.scanLookUpMode {
+        didSet { AppConfig.scanLookUpMode = isLookUpMode }
+    }
+    /// Set when a lock resolves in look-up mode. The view presents that card and clears this,
+    /// which also resets the scanner so the next card (or the same one again) can be read.
+    var lookedUpCardId: String?
+
     init(matcher: Matcher, detector: CardDetector, textGate: TextGate, narrowing: CandidateNarrowing,
          staging: ScanStagingStore, store: CatalogStore, fingerThrottle: Int = 4,
          minFocus: Double = 40) {
@@ -160,6 +171,11 @@ final class ScanModel {
         // was wiping the chooser after a few blurry/glary frames ("the 4 options went away after
         // 3-5s"). The first `.ambiguous` still gets through — `ambiguous` is empty at that point.
         if !ambiguous.isEmpty { return }
+        // A presented look-up card is modal for the same reason the chooser is: the camera keeps
+        // running underneath, and a second lock landing while the sheet is up would swap the card
+        // out from under you (or, with `.sheet(item:)`, silently fail to re-present). Cleared by
+        // `clearLookedUpCard()` on dismiss, which also resets the session.
+        if lookedUpCardId != nil { return }
         switch event {
         case .idle: break
         case .guide(let g): bestGuess = g; ambiguous = []; guidance = g == nil ? "Scanning…" : "Hold steady"
@@ -170,17 +186,33 @@ final class ScanModel {
         }
     }
 
-    /// Stage a confident lock as a reviewable draft. Heuristic variant from catalog rarity;
-    /// blind-price snapshot from `price_latest.raw_usd`. Never writes an owned entry.
+    /// Resolve a confident lock. In look-up mode that means publishing the card for the view to
+    /// present and nothing else; otherwise it stages a reviewable draft (heuristic variant from
+    /// catalog rarity, blind-price snapshot from `price_latest.raw_usd`). Never writes an owned
+    /// entry. Both lock paths — the automatic one and the ambiguity chooser — funnel through here,
+    /// so the mode can't be honoured on one and missed on the other.
     private func stage(cardId: String) {
-        let rarity = (try? store.card(id: cardId))?.rarity
+        ambiguous = []
+        let card = try? store.card(id: cardId)
+        guard !isLookUpMode else {
+            lookedUpCardId = cardId
+            guidance = "Frame the card inside the box"
+            return
+        }
         let price = (try? store.price(cardId: cardId))?.rawUsd
         let draft = ScanDraft(id: UUID().uuidString, cardId: cardId,
-                              variant: .defaultFor(rarity: rarity), condition: .nm,
+                              variant: .defaultFor(rarity: card?.rarity), condition: .nm,
                               qty: 1, addedAt: Date(), priceUsdSnapshot: price)
         staging.append(draft)
-        ambiguous = []
-        guidance = "Added \(cardId) — next card"
+        // The card's name, not its catalog id — this line read "Added swsh7-215 — next card".
+        guidance = "Added \(card?.name ?? cardId) — next card"
+    }
+
+    /// The look-up card has been shown and dismissed: clear it and wipe the scanner back to a
+    /// clean slate, so the very next frame can read the next card — or the same one again.
+    func clearLookedUpCard() async {
+        lookedUpCardId = nil
+        await reset()
     }
 
     /// Resolve a chooser id to the display metadata the user recognizes. Failed lookups fall

@@ -753,6 +753,60 @@ final class CatalogStore {
         }
     }
 
+    /// Biggest raw-market movers across the WHOLE catalog for one lookback — the cards you don't
+    /// own yet. Ranked by absolute percent, because there's no holding to weigh it against; the
+    /// `minUsd` floor is what stops the list being 20-cent commons, whose prices swing wildly on
+    /// rounding alone. Empty on the casual tier, where `price_delta` ships with zero rows.
+    func topMovers(period: DeltaPeriod, minUsd: Double, limit: Int) throws -> [Movers.MarketRow] {
+        // The lookback column can't be bound as a parameter. It comes from a closed enum and is
+        // mapped through this switch, so no caller-controlled string ever reaches the SQL.
+        let column: String
+        switch period {
+        case .d1: column = "pct_1d"
+        case .d7: column = "pct_7d"
+        case .d30: column = "pct_30d"
+        }
+        // PER-PRINTING first, raw only as a fallback. `price_latest.raw_usd` is a single headline
+        // price for a card that may have several printings, and which printing feeds it is not
+        // stable between nightly artifacts — so for a card sold as both Unlimited and 1st Edition,
+        // the raw delta can be the gap BETWEEN THE TWO PRINTINGS rather than a price move, which
+        // is where the +1800% rows came from (reported 2026-07-25; card detail showed the same
+        // card at +0.2% because it reads the per-printing series). Printing deltas join on the
+        // printing key, so both sides always describe the same thing.
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT card_id, printing, pct, usd FROM (
+                    SELECT d.card_id AS card_id, d.key AS printing, d.\(column) AS pct, v.usd AS usd
+                    FROM price_delta d
+                    JOIN price_by_variant v ON v.card_id = d.card_id AND v.printing = d.key
+                    WHERE d.kind = 'printing' AND d.\(column) IS NOT NULL
+                      AND v.usd >= ? AND ABS(d.\(column)) <= ?
+                    UNION ALL
+                    SELECT d.card_id, NULL, d.\(column), p.raw_usd
+                    FROM price_delta d JOIN price_latest p ON p.card_id = d.card_id
+                    WHERE d.kind = 'raw' AND d.\(column) IS NOT NULL
+                      AND p.raw_usd >= ? AND ABS(d.\(column)) <= ?
+                      AND NOT EXISTS (SELECT 1 FROM price_delta pd
+                                      WHERE pd.card_id = d.card_id AND pd.kind = 'printing')
+                )
+                ORDER BY ABS(pct) DESC LIMIT ?
+                """, arguments: [minUsd, Movers.implausiblePct, minUsd, Movers.implausiblePct,
+                                 limit * 3])
+                .map { Movers.MarketRow(cardId: $0["card_id"], printing: $0["printing"],
+                                        pct: $0["pct"], usd: $0["usd"]) }
+        }
+        // A card whose printings both moved would otherwise appear twice and read as a bug; keep
+        // whichever printing moved most.
+        var bestByCard: [String: Movers.MarketRow] = [:]
+        for row in rows where abs(row.pct) > abs(bestByCard[row.cardId]?.pct ?? 0) {
+            bestByCard[row.cardId] = row
+        }
+        return bestByCard.values
+            .sorted { abs($0.pct) == abs($1.pct) ? $0.cardId < $1.cardId : abs($0.pct) > abs($1.pct) }
+            .prefix(limit)
+            .map { $0 }
+    }
+
     // MARK: row mapping
 
     private static func setRecord(_ r: Row) -> SetRecord {

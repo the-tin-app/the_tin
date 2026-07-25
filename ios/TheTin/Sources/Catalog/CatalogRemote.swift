@@ -122,6 +122,15 @@ enum AppConfig {
         set { UserDefaults.standard.set(newValue, forKey: "priceAlertsEnabled") }
     }
 
+    /// Scanner mode: false = stage each lock as a draft for the tin (default), true = just show
+    /// the card and stage nothing. Persisted because which one you want is a property of how
+    /// you're using the app today — cataloguing a box at home vs. asking "what is this?" in a
+    /// shop — not of this launch.
+    static var scanLookUpMode: Bool {
+        get { UserDefaults.standard.bool(forKey: "scanLookUpMode") }
+        set { UserDefaults.standard.set(newValue, forKey: "scanLookUpMode") }
+    }
+
     /// Alert sensitivity in whole percent — 5, 10, or 20; anything else reads as the default 10.
     static var priceAlertSensitivityPct: Int {
         get {

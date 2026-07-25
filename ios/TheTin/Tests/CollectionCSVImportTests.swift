@@ -176,7 +176,7 @@ final class CSVImportCoreTests: XCTestCase {
                                        acquiredAt: Date(timeIntervalSince1970: 1_700_000_000),
                                        acquiredFrom: "trade, local show",
                                        addedAt: Date(timeIntervalSince1970: 1_750_000_000),
-                                       variant: "reverseHolo")
+                                       variant: "reverseHolo", forTrade: true)
         let store = try FixtureCatalog.make()
         let cards = Dictionary(uniqueKeysWithValues: try store.cards(ids: ["swsh7-215"]).map { ($0.id, $0) })
         let sets = Dictionary(uniqueKeysWithValues: try store.sets().map { ($0.id, $0) })
@@ -199,7 +199,18 @@ final class CSVImportCoreTests: XCTestCase {
         XCTAssertEqual(e.acquiredAt, original.acquiredAt)
         XCTAssertEqual(e.acquiredFrom, original.acquiredFrom)
         XCTAssertEqual(e.addedAt, original.addedAt)
+        XCTAssertEqual(e.isForTrade, true, "the trade flag must survive a round trip")
         XCTAssertEqual(e.groupId, "")   // caller re-homes into the "Imported …" divider
+    }
+
+    /// Files exported before `for_trade` existed have no such column. They must import exactly as
+    /// they always did — unflagged, not rejected.
+    func testTinImportWithoutForTradeColumnDefaultsToUnflagged() throws {
+        let csv = "card_id,name,number,set_name,qty\nswsh7-215,,,,1\n"
+        let result = try CollectionCSVImport.importCSV(csv, matcher: matcher)
+        XCTAssertEqual(result.formatName, "The Tin")
+        XCTAssertEqual(result.entries.first?.forTrade, nil)
+        XCTAssertEqual(result.entries.first?.isForTrade, false)
     }
 
     func testUnknownCardIdAndMalformedRowSkippedWithReasons() throws {

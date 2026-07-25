@@ -52,20 +52,28 @@ private struct MainTabView: View {
         self.model = model
         _pack = State(wrappedValue: ScannerPackModel.live(catalogStore: store, network: model.network))
     }
-    private enum Tab: Hashable { case discover, browse, search, tin, scan }
+    // Browse is no longer a tab: it lives behind Discover, which already had a (different)
+    // browse row of its own. The freed slot went to Movers — the daily check-in this app had
+    // no home for (2026-07-24).
+    private enum Tab: Hashable { case discover, movers, search, tin, scan }
     // The tin is the product's home ("daily check-ins"), so launch there once it has cards;
     // an empty tin (first run) opens on Discover so there's something to see.
     @State private var selection: Tab =
         UserDefaults.standard.bool(forKey: "hasCards") ? .tin : .discover
     /// Path for the Tin tab's stack, so a notification tap can push WantedRoute programmatically.
     @State private var tinPath = NavigationPath()
+    /// Path for the Discover stack, so the empty tin's "Browse sets" CTA lands ON the catalog
+    /// rather than on Discover's home with the catalog somewhere below the fold.
+    @State private var discoverPath = NavigationPath()
     @State private var consumedRouteToken = 0
     @State private var consumedCardToken = 0
+    @State private var consumedIntentToken = 0
 
     var body: some View {
         TabView(selection: $selection) {
-            NavigationStack {
-                DiscoverView(store: store, collection: collection, wants: model.wants)
+            NavigationStack(path: $discoverPath) {
+                DiscoverView(store: store, collection: collection, wants: model.wants,
+                             goals: model.setGoals)
                     // Install day is when someone is most likely on home Wi-Fi — the right moment
                     // to mention the scanner. A dismissible banner, never a modal: stacking a
                     // second large download behind the catalog's would make first run worse.
@@ -76,15 +84,17 @@ private struct MainTabView: View {
                     }
                     .fundingBanner(model: model, store: store, pack: pack)
             }
+            .appToasts(model: model, pack: pack)
             .tabItem { Label("Discover", systemImage: "sparkles") }
             .tag(Tab.discover)
 
             NavigationStack {
-                BrowseView(store: store, entries: collection.entries, collection: collection, wants: model.wants)
+                MoversView(model: collection, store: store, wants: model.wants)
                     .fundingBanner(model: model, store: store, pack: pack)
             }
-            .tabItem { Label("Browse", systemImage: "square.grid.2x2") }
-            .tag(Tab.browse)
+            .appToasts(model: model, pack: pack)
+            .tabItem { Label("Movers", systemImage: "chart.line.uptrend.xyaxis") }
+            .tag(Tab.movers)
 
             NavigationStack {
                 Group {
@@ -96,13 +106,30 @@ private struct MainTabView: View {
                 }
                 .fundingBanner(model: model, store: store, pack: pack)
             }
+            .appToasts(model: model, pack: pack)
             .tabItem { Label("Search", systemImage: "magnifyingglass") }
             .tag(Tab.search)
 
             NavigationStack(path: $tinPath) {
                 CollectionView(model: collection, store: store, wants: wants,
-                               onGetStarted: { selection = $0 == .scan ? .scan : .browse },
+                               onGetStarted: { tab in
+                                   switch tab {
+                                   case .scan: selection = .scan
+                                   // There is no Browse tab any more — push the catalog onto
+                                   // Discover's stack so the CTA lands ON it, not near it.
+                                   case .browse:
+                                       discoverPath.append(BrowseRoute())
+                                       selection = .discover
+                                   }
+                               },
                                scannerReady: pack.phase == .ready,
+                               // Searching your tin used to dead-end in a note telling you to go
+                               // to another tab. Now it takes you there, carrying the query.
+                               onSearchCatalog: { query in
+                                   searchModel?.text = query
+                                   selection = .search
+                               },
+                               goals: model.setGoals,
                                openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) })
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
@@ -115,15 +142,16 @@ private struct MainTabView: View {
                     .sheet(isPresented: $showingSettings) { SettingsView(app: model, pack: pack) }
                     .fundingBanner(model: model, store: store, pack: pack)
             }
+            .appToasts(model: model, pack: pack)
             .tabItem { Label("The Tin", systemImage: "square.stack.3d.up") }
             .tag(Tab.tin)
 
             NavigationStack {
-                ScanTabContainer(store: store, collection: collection, pack: pack,
-                                 network: model.network)
-                    .fundingBanner(model: model, store: store, pack: pack,
-                                   showsScannerToast: false)
+                ScanTabContainer(store: store, collection: collection, wants: model.wants,
+                                 pack: pack, network: model.network)
+                    .fundingBanner(model: model, store: store, pack: pack)
             }
+            .appToasts(model: model, pack: pack, showsScannerToast: false)
             .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
             .tag(Tab.scan)
         }
@@ -131,10 +159,12 @@ private struct MainTabView: View {
             if searchModel == nil { searchModel = SearchModel(store: store) }
             consumeWishlistRoute() // cold launch from a tap: token bumped before we appeared
             consumeCardRoute()
+            consumeIntentRoute()   // …same for a cold launch from Siri or the Action button
             await pack.refresh()   // learn the pack's state once, for Settings and the prompt
         }
         .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
+        .onChange(of: model.intentRouteToken) { consumeIntentRoute() }
         // Collection writes can fail from any tab (card detail lives under Browse/Search too),
         // so the failure alert hangs off the TabView, not the Tin stack.
         .alert("Save failed", isPresented: Binding(
@@ -154,6 +184,21 @@ private struct MainTabView: View {
         tinPath.append(WantedRoute())
     }
 
+    private func consumeIntentRoute() {
+        guard model.intentRouteToken > consumedIntentToken,
+              let route = model.pendingIntentRoute else { return }
+        consumedIntentToken = model.intentRouteToken
+        switch route {
+        case .scan:
+            selection = .scan
+        case .search(let query):
+            // searchModel is created in the same `.task` immediately above this call, so it
+            // exists by the time a cold-launch intent is consumed.
+            searchModel?.text = query
+            selection = .search
+        }
+    }
+
     private func consumeCardRoute() {
         guard model.cardRouteToken > consumedCardToken, let id = model.pendingCardId else { return }
         consumedCardToken = model.cardRouteToken
@@ -170,22 +215,25 @@ private struct MainTabView: View {
 /// Must live INSIDE the NavigationStack: a TabView-level `safeAreaInset` lets the child nav bars
 /// draw over it (it was covering the Discover section headers).
 private extension View {
+    func fundingBanner(model: AppModel, store: CatalogStore, pack: ScannerPackModel) -> some View {
+        modifier(FundingBanner(model: model, store: store, pack: pack))
+    }
+
+    /// Attach to the tab's `NavigationStack`, never to its root view — see `AppToasts`.
+    ///
     /// `showsScannerToast: false` on the Scan tab — that screen already renders the download
     /// full-size, so the toast would be a second copy of the same bar sitting on top of its
     /// Pause button. The toast exists for the other tabs, so progress follows you out of Scan.
-    func fundingBanner(model: AppModel, store: CatalogStore, pack: ScannerPackModel,
-                       showsScannerToast: Bool = true) -> some View {
-        modifier(FundingBanner(model: model, store: store, pack: pack,
-                               showsScannerToast: showsScannerToast))
+    func appToasts(model: AppModel, pack: ScannerPackModel,
+                   showsScannerToast: Bool = true) -> some View {
+        modifier(AppToasts(model: model, pack: pack, showsScannerToast: showsScannerToast))
     }
 }
 
 private struct FundingBanner: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: AppModel
     let store: CatalogStore
     let pack: ScannerPackModel
-    let showsScannerToast: Bool
 
     func body(content: Content) -> some View {
         content
@@ -200,8 +248,40 @@ private struct FundingBanner: ViewModifier {
                     FundingBar(funding: model.funding)
                 }
             }
-            .overlay(alignment: .bottom) {
+    }
+}
+
+/// The bottom toasts — undo, catalog update, scanner download.
+///
+/// Applied to the tab's `NavigationStack`, NOT to the stack's root view. Attached to the root, an
+/// overlay is covered the moment anything is pushed: you delete a card inside a divider
+/// (`GroupDetailView`), and the undo toast renders on the hidden root screen behind it. The Tin's
+/// write-failure alert already lives at this level for the same reason — collection writes happen
+/// from screens all over the app, so the response to one can't live on any single screen.
+///
+/// Pinning to the bottom of the NavigationStack puts the toast just above the tab bar (the stack's
+/// frame stops there), which is also clear of the home indicator.
+private struct AppToasts: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let model: AppModel
+    let pack: ScannerPackModel
+    let showsScannerToast: Bool
+
+    func body(content: Content) -> some View {
+        content
+            // `safeAreaInset`, not `overlay`: a TabView lays its content out BEHIND the tab bar and
+            // communicates the bar via safe-area insets, so an overlay pinned to the bottom of the
+            // NavigationStack renders underneath the tab bar and is never seen. safeAreaInset is
+            // the modifier that means "place this in the safe area at the bottom of this
+            // container" — it clears the tab bar, and being attached to the stack it stays put
+            // when a screen is pushed.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 6) {
+                    if let collection = model.collection, let undoable = collection.undoable {
+                        UndoToast(undoable: undoable) {
+                            Task { await collection.undoLastDelete() }
+                        }
+                    }
                     if let progress = model.catalogDownloadProgress {
                         UpdateToast(label: "Updating card data…", progress: progress)
                     }
@@ -292,6 +372,36 @@ private struct UpdateToast: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// Six seconds to change your mind. Same material vocabulary as `UpdateToast` so the bottom of
+/// the screen has one voice; auto-dismisses, because an undo you have to dismiss is a dialog.
+private struct UndoToast: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let undoable: CollectionModel.UndoableDelete
+    let onUndo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(undoable.message)
+                .font(.subheadline)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button("Undo", action: onUndo)
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        // Flat Tin Rule: chrome earns separation from a system material, never a shadow.
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: undoable.id)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(undoable.message). Undo available.")
     }
 }
 

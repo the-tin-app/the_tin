@@ -39,6 +39,9 @@ struct TheTin: App {
         if !isTesting { BackgroundRefresh.register(model: model) }
         NotificationRouter.shared.install()
         NotificationRouter.shared.onWishlistTap = { model.openWishlist() }
+        // Siri / Shortcuts / the Action button. Installed here rather than in a view so a cold
+        // launch straight from an intent has somewhere to deliver before any body runs.
+        MainActor.assumeIsolated { IntentRouter.shared.install { model.openIntentRoute($0) } }
     }
 
     var body: some Scene {

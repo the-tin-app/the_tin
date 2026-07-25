@@ -18,6 +18,9 @@ final class AppModel {
     private(set) var store: CatalogStore?
     private(set) var collection: CollectionModel?
     private(set) var wants: WantsModel?
+    /// The sets you're collecting. Created eagerly (it's a file read, no network) so every screen
+    /// can ask; nil never happens in the app, only in catalog-only tests.
+    private(set) var setGoals: SetGoalsModel? = SetGoalsModel()
     private(set) var catalogState: CatalogState?
     /// Which remote served the most recent catalog operation (nil until the first update runs).
     private(set) var activeSource: CatalogSource?
@@ -39,6 +42,20 @@ final class AppModel {
     func openCard(id: String) {
         pendingCardId = id
         cardRouteToken += 1
+    }
+
+    /// Where an App Intent ("Scan a card", "Search cards") asked the app to go. Same token
+    /// pattern as the wishlist/card routes above, so a second invocation re-routes.
+    enum IntentRoute: Equatable {
+        case scan
+        case search(String)
+    }
+    private(set) var intentRouteToken = 0
+    private(set) var pendingIntentRoute: IntentRoute?
+
+    func openIntentRoute(_ route: IntentRoute) {
+        pendingIntentRoute = route
+        intentRouteToken += 1
     }
 
     /// Parse a universal link. Only `/c/<id>` routes; anything else is ignored so the web

@@ -2,9 +2,12 @@ import Foundation
 
 /// RFC 4180 CSV writer + the two export surfaces (collection, wishlist). Pure — no I/O, no UI.
 enum CollectionCSV {
+    /// `for_trade` is appended last on purpose: `CollectionCSVImport` looks columns up BY NAME,
+    /// so a new trailing column can't shift anything a third-party format reads positionally.
     static let header = ["card_id", "name", "set_id", "set_name", "number", "rarity", "qty",
                          "variant", "condition", "grade", "price_paid", "acquired_at",
-                         "acquired_from", "added_at", "divider", "current_value", "value_as_of"]
+                         "acquired_from", "added_at", "divider", "current_value", "value_as_of",
+                         "for_trade"]
 
     /// ISO 8601 with time, UTC — every exported date column uses this.
     static let iso: ISO8601DateFormatter = {
@@ -64,7 +67,8 @@ enum CollectionCSV {
                     e.variant ?? "", e.condition ?? "", e.grade ?? "",
                     money(e.pricePaid), date(e.acquiredAt), e.acquiredFrom ?? "", date(e.addedAt),
                     groupName[e.groupId] ?? "", money(value),
-                    value == nil ? "" : (price?.asOf ?? "")]
+                    value == nil ? "" : (price?.asOf ?? ""),
+                    e.isForTrade ? "true" : ""]
         }
         return data([header] + rows)
     }
