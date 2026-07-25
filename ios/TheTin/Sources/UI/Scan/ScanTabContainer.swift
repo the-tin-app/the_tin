@@ -8,6 +8,8 @@ import SwiftUI
 struct ScanTabContainer: View {
     let store: CatalogStore
     let collection: CollectionModel
+    /// Feeds the scanner's "on your wishlist" signal; nil in contexts without a wishlist.
+    var wants: WantsModel? = nil
     let pack: ScannerPackModel
     /// Only for the "you're on cellular" confirmation before starting. The auto-pause once a
     /// transfer is running lives in `ScannerPackModel`, which polls the monitor directly —
@@ -42,7 +44,7 @@ struct ScanTabContainer: View {
         case .ready:
             if let matcher = pack.matcher, let index = pack.index {
                 ScanView(model: makeScanModel(matcher, index: index), staging: staging,
-                         collection: collection, store: store, source: source)
+                         collection: collection, store: store, source: source, wants: wants)
             } else {
                 TinLoadingView()
             }

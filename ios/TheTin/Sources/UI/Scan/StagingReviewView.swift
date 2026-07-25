@@ -7,6 +7,8 @@ struct StagingReviewView: View {
     @Bindable var staging: ScanStagingStore
     let collection: CollectionModel
     let store: CatalogStore
+    /// Drives the "do I need this?" line on each row. Optional so previews/tests can omit it.
+    var wants: WantsModel? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var routing: ScanDraft?     // draft being routed
     @State private var newGroupName = ""
@@ -28,6 +30,9 @@ struct StagingReviewView: View {
             Section {
                 ForEach(staging.drafts) { draft in
                     DraftRow(draft: draft, store: store,
+                             knowledge: ScanKnowledge.of(cardId: draft.cardId,
+                                                         entries: collection.entries,
+                                                         wanted: wants?.wanted ?? []),
                              variantPrices: variantsByCard[draft.cardId] ?? [],
                              onVariant: { staging.updateVariant(id: draft.id, $0); repriceAll() },
                              onCondition: { staging.updateCondition(id: draft.id, $0); repriceAll() },
@@ -179,6 +184,9 @@ struct StagingReviewView: View {
 private struct DraftRow: View {
     let draft: ScanDraft
     let store: CatalogStore
+    /// Copies already in the tin + wishlist state for this card — "do I need this?" answered
+    /// on the row, so a stack of scans can be triaged without opening each card.
+    let knowledge: ScanKnowledge
     let variantPrices: [VariantPrice]   // card's real PPT printings — filters the finish picker
     let onVariant: (CardVariant) -> Void
     let onCondition: (CardCondition) -> Void
@@ -192,6 +200,12 @@ private struct DraftRow: View {
         HStack(alignment: .top, spacing: 12) {
             // Card art = at-a-glance confirmation the scan found the right card.
             CardImageView(card: card, quality: "low").frame(width: 58)
+                .overlay(alignment: .topTrailing) {
+                    if knowledge.isNotable {
+                        CardBadges(owned: knowledge.ownedCount > 0, wanted: knowledge.wanted)
+                            .scaleEffect(0.85)
+                    }
+                }
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text(title).font(.headline)
@@ -199,6 +213,11 @@ private struct DraftRow: View {
                     if let p = draft.priceUsdSnapshot {
                         Text(p, format: .currency(code: "USD")).foregroundStyle(.secondary)
                     } else { Text("—").foregroundStyle(.secondary) }
+                }
+                if let caption = knowledge.caption {
+                    Text(caption)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(knowledge.wanted ? Color.pink : Color.green)
                 }
                 // Plain tinted menus (no borders/icons) so labels never hyphenate on
                 // narrow rows; approved mockup option A, CTA wording "File in…".

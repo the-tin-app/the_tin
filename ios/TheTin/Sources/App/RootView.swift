@@ -118,8 +118,8 @@ private struct MainTabView: View {
             .tag(Tab.tin)
 
             NavigationStack {
-                ScanTabContainer(store: store, collection: collection, pack: pack,
-                                 network: model.network)
+                ScanTabContainer(store: store, collection: collection, wants: model.wants,
+                                 pack: pack, network: model.network)
                     .fundingBanner(model: model, store: store, pack: pack,
                                    showsScannerToast: false)
             }

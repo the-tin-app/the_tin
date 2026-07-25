@@ -8,7 +8,16 @@ struct ScanView: View {
     let collection: CollectionModel
     let store: CatalogStore
     let source: AVCaptureFrameSource
+    var wants: WantsModel? = nil
     @State private var showingReview = false
+
+    /// What the tin already knows about the card that just landed in the tray — the "do I need
+    /// this?" answer, read at the moment your hands are still on the card.
+    private var latestKnowledge: ScanKnowledge? {
+        guard let id = staging.drafts.first?.cardId else { return nil }
+        return ScanKnowledge.of(cardId: id, entries: collection.entries,
+                                wanted: wants?.wanted ?? [])
+    }
 
     var body: some View {
         ZStack {
@@ -43,7 +52,8 @@ struct ScanView: View {
                                                             : AnyShapeStyle(Color.orange.opacity(0.9)),
                                     in: Capsule())
                     if model.ambiguous.isEmpty {
-                        StagingTray(staging: staging, store: store) { showingReview = true }
+                        StagingTray(staging: staging, store: store,
+                                    knowledge: latestKnowledge) { showingReview = true }
                     } else {
                         // Variant A (approved 2026-07-15): bottom sheet, 2×2 card-image grid.
                         AmbiguousChooser(model: model, options: model.ambiguous)
@@ -51,9 +61,18 @@ struct ScanView: View {
                 }
             }.padding()
         }
-        .sensoryFeedback(.success, trigger: staging.drafts.count)
+        // A capture you needed feels different from a capture you didn't: the celebratory
+        // `.success` is now spent on a wishlist hit, and a routine card gets a light tick. Only
+        // fires on a capture — the old form buzzed on removals too, because any count change
+        // tripped it.
+        .sensoryFeedback(trigger: staging.drafts.count) { old, new in
+            guard new > old else { return nil }
+            return latestKnowledge?.wanted == true ? .success : .impact(weight: .light)
+        }
         .sheet(isPresented: $showingReview) {
-            NavigationStack { StagingReviewView(staging: staging, collection: collection, store: store) }
+            NavigationStack {
+                StagingReviewView(staging: staging, collection: collection, store: store, wants: wants)
+            }
         }
         .task { await model.run(source: source) }
     }
@@ -121,6 +140,8 @@ private struct AmbiguousChooser: View {
 private struct StagingTray: View {
     let staging: ScanStagingStore
     let store: CatalogStore
+    /// What the tin already knows about the newest capture; nil when the tray is empty.
+    let knowledge: ScanKnowledge?
     let onReview: () -> Void
     private var latestCard: CardRecord? {
         guard let id = staging.drafts.first?.cardId else { return nil }
@@ -128,9 +149,16 @@ private struct StagingTray: View {
     }
     var body: some View {
         HStack(spacing: 12) {
-            // Thumbnail of the most-recent capture = instant "got the right card?" glance.
+            // Thumbnail of the most-recent capture = instant "got the right card?" glance,
+            // badged with the answer to "do I need it?".
             if staging.drafts.first != nil {
                 CardImageView(card: latestCard, quality: "low").frame(width: 34)
+                    .overlay(alignment: .topTrailing) {
+                        if let k = knowledge, k.isNotable {
+                            CardBadges(owned: k.ownedCount > 0, wanted: k.wanted)
+                                .scaleEffect(0.85)
+                        }
+                    }
                     .accessibilityHidden(true)
             } else {
                 Image(systemName: "tray.full").imageScale(.large)
@@ -140,9 +168,17 @@ private struct StagingTray: View {
                 Text("^[\(staging.drafts.count) card](inflect: true) staged").font(.subheadline.bold())
                 Text(staging.totalUsd, format: .currency(code: "USD"))
                     .font(.caption).foregroundStyle(.secondary)
+                // Only when there's something to say — a card you neither own nor want stays quiet
+                // so the line means something when it does appear.
+                if let caption = knowledge?.caption {
+                    Text(caption)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(knowledge?.wanted == true ? Color.pink : Color.green)
+                        .lineLimit(1)
+                }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(staging.drafts.count) \(staging.drafts.count == 1 ? "card" : "cards") staged, \(staging.totalUsd.formatted(.currency(code: "USD")))")
+            .accessibilityLabel(trayAccessibilityLabel)
             Spacer()
             Button("Review") { onReview() }
                 .buttonStyle(.borderedProminent)
@@ -150,5 +186,11 @@ private struct StagingTray: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var trayAccessibilityLabel: String {
+        let base = "\(staging.drafts.count) \(staging.drafts.count == 1 ? "card" : "cards") staged, \(staging.totalUsd.formatted(.currency(code: "USD")))"
+        guard let caption = knowledge?.caption else { return base }
+        return base + ". Latest: " + caption
     }
 }
