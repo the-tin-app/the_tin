@@ -215,13 +215,45 @@ final class CollectionModel {
     }
     private(set) var undoable: UndoableDelete?
 
-    func clearUndo() { undoable = nil }
+    /// Counts down the offer. Owned by the model, NOT by a `.task` on the toast view: SwiftUI
+    /// cancels a view task whenever it tears the view down or re-identifies it, and the entries
+    /// stream fires immediately after a delete — re-evaluating exactly that subtree. The cancelled
+    /// `try? await Task.sleep` then swallowed its own CancellationError and fell straight through
+    /// to the clear, so the offer was raised and wiped inside a frame and no toast was ever
+    /// visible, at any placement. (Same trap `publishWidgetSnapshot` guards against, and the same
+    /// "policy belongs in the model where a test can reach it" lesson as the scanner's auto-pause.)
+    private var undoExpiry: Task<Void, Never>?
+
+    /// How long an undo stays on offer.
+    static let undoWindow: Duration = .seconds(6)
+
+    func clearUndo() {
+        undoExpiry?.cancel()
+        undoExpiry = nil
+        undoable = nil
+    }
+
+    /// Raise an undo offer and start its countdown, replacing any offer already standing.
+    private func offerUndo(_ offer: UndoableDelete) {
+        undoExpiry?.cancel()
+        undoable = offer
+        undoExpiry = Task { [weak self] in
+            try? await Task.sleep(for: Self.undoWindow)
+            // A cancelled sleep means a NEWER offer superseded this one (or someone took the
+            // undo). Clearing here would wipe that newer offer — the exact bug this moved to fix.
+            guard !Task.isCancelled else { return }
+            self?.undoable = nil
+            self?.undoExpiry = nil
+        }
+    }
 
     /// Put back exactly what was removed, ids and all, in one write. `replaceAll` is the only
     /// repository call that preserves ids (it exists for backup restore) — `createGroup`/`addEntry`
     /// would mint new ones, which would orphan the entries pointing at the old group id.
     func undoLastDelete() async {
         guard let undone = undoable else { return }
+        undoExpiry?.cancel()
+        undoExpiry = nil
         undoable = nil
 
         var restoredGroups = groups
@@ -270,11 +302,11 @@ final class CollectionModel {
         }
         guard ok, let group else { return }
         let n = affected.cardCount
-        undoable = UndoableDelete(
+        offerUndo(UndoableDelete(
             message: keepingEntries || affected.isEmpty
                 ? "Deleted “\(group.name)”"
                 : "Deleted “\(group.name)” and \(n) \(n == 1 ? "card" : "cards")",
-            groups: [group], entries: affected)
+            groups: [group], entries: affected))
     }
     func reorderGroups(ids: [String]) async {
         await write("reorder the dividers") { try await repository.reorderGroups(orderedIds: ids) }
@@ -346,8 +378,8 @@ final class CollectionModel {
         let removed = entries.first { $0.id == id }
         let ok = await write("remove the card") { try await repository.deleteEntry(id: id) }
         guard ok, let removed else { return }
-        undoable = UndoableDelete(message: "Removed \(cardName(removed.cardId))",
-                                  groups: [], entries: [removed])
+        offerUndo(UndoableDelete(message: "Removed \(cardName(removed.cardId))",
+                                 groups: [], entries: [removed]))
     }
 
     // MARK: Trade list

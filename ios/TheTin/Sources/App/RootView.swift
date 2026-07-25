@@ -267,15 +267,17 @@ private struct AppToasts: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .bottom) {
+            // `safeAreaInset`, not `overlay`: a TabView lays its content out BEHIND the tab bar and
+            // communicates the bar via safe-area insets, so an overlay pinned to the bottom of the
+            // NavigationStack renders underneath the tab bar and is never seen. safeAreaInset is
+            // the modifier that means "place this in the safe area at the bottom of this
+            // container" — it clears the tab bar, and being attached to the stack it stays put
+            // when a screen is pushed.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 6) {
                     if let collection = model.collection, let undoable = collection.undoable {
                         UndoToast(undoable: undoable) {
                             Task { await collection.undoLastDelete() }
-                        }
-                        .task(id: undoable.id) {
-                            try? await Task.sleep(for: .seconds(6))
-                            collection.clearUndo()
                         }
                     }
                     if let progress = model.catalogDownloadProgress {

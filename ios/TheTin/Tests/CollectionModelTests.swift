@@ -425,6 +425,61 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(model.entries.map(\.cardId), ["ex6-58"])
     }
 
+    /// Regression guard for the toast that never appeared. The 6-second dismissal used to live in
+    /// a `.task` on the toast view, and `try? await Task.sleep` swallowed its own CancellationError
+    /// — so the instant SwiftUI re-identified that subtree (which the entries stream causes on
+    /// every delete), the cancelled sleep fell straight through to the clear and wiped the offer
+    /// inside a frame. Deleting is exactly when the stream fires, so the offer never survived its
+    /// own delete. Owning the countdown in the model is what fixes it; this asserts the offer
+    /// outlives the churn.
+    func testUndoOfferSurvivesTheStreamEmissionCausedByItsOwnDelete() async throws {
+        await model.saveEntry(plainEntry("swsh7-215"))
+        await waitForStreams()
+        let entry = try XCTUnwrap(model.entries.first)
+
+        await model.deleteEntry(id: entry.id)
+        await waitForStreams()          // the delete's own notify, and then some
+        for _ in 0..<50 { await Task.yield() }
+
+        XCTAssertNotNil(model.undoable, "the offer must outlive the delete that raised it")
+        XCTAssertEqual(model.undoable?.entries.first?.id, entry.id)
+    }
+
+    /// A second delete replaces the offer, and the first one's expired countdown must not then
+    /// wipe the newer offer — the same cancellation trap one level up.
+    func testASecondDeleteReplacesTheOfferWithoutTheFirstClearingIt() async throws {
+        await model.saveEntry(plainEntry("swsh7-215"))
+        await model.saveEntry(plainEntry("ex6-58"))
+        await waitForStreams()
+        let first = try XCTUnwrap(model.entries.first { $0.cardId == "swsh7-215" })
+        let second = try XCTUnwrap(model.entries.first { $0.cardId == "ex6-58" })
+
+        await model.deleteEntry(id: first.id)
+        await model.deleteEntry(id: second.id)
+        await waitForStreams()
+        for _ in 0..<50 { await Task.yield() }
+
+        XCTAssertEqual(model.undoable?.entries.first?.id, second.id,
+                       "the newest delete owns the offer, and the superseded timer must not clear it")
+    }
+
+    /// Taking the undo clears the offer and stops its countdown, so a later expiry can't fire
+    /// against a state the user already resolved.
+    func testTakingTheUndoRetiresTheOffer() async throws {
+        await model.saveEntry(plainEntry("swsh7-215"))
+        await waitForStreams()
+        let entry = try XCTUnwrap(model.entries.first)
+        await model.deleteEntry(id: entry.id)
+        await waitForStreams()
+
+        await model.undoLastDelete()
+        await waitForStreams()
+        for _ in 0..<50 { await Task.yield() }
+
+        XCTAssertNil(model.undoable)
+        XCTAssertEqual(model.entries.count, 1)
+    }
+
     func testUndoIsANoOpWhenNothingWasDeleted() async throws {
         await model.saveEntry(plainEntry("swsh7-215"))
         await waitForStreams()
