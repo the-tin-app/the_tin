@@ -52,19 +52,25 @@ private struct MainTabView: View {
         self.model = model
         _pack = State(wrappedValue: ScannerPackModel.live(catalogStore: store, network: model.network))
     }
-    private enum Tab: Hashable { case discover, browse, search, tin, scan }
+    // Browse is no longer a tab: it lives behind Discover, which already had a (different)
+    // browse row of its own. The freed slot went to Movers — the daily check-in this app had
+    // no home for (2026-07-24).
+    private enum Tab: Hashable { case discover, movers, search, tin, scan }
     // The tin is the product's home ("daily check-ins"), so launch there once it has cards;
     // an empty tin (first run) opens on Discover so there's something to see.
     @State private var selection: Tab =
         UserDefaults.standard.bool(forKey: "hasCards") ? .tin : .discover
     /// Path for the Tin tab's stack, so a notification tap can push WantedRoute programmatically.
     @State private var tinPath = NavigationPath()
+    /// Path for the Discover stack, so the empty tin's "Browse sets" CTA lands ON the catalog
+    /// rather than on Discover's home with the catalog somewhere below the fold.
+    @State private var discoverPath = NavigationPath()
     @State private var consumedRouteToken = 0
     @State private var consumedCardToken = 0
 
     var body: some View {
         TabView(selection: $selection) {
-            NavigationStack {
+            NavigationStack(path: $discoverPath) {
                 DiscoverView(store: store, collection: collection, wants: model.wants)
                     // Install day is when someone is most likely on home Wi-Fi — the right moment
                     // to mention the scanner. A dismissible banner, never a modal: stacking a
@@ -80,11 +86,11 @@ private struct MainTabView: View {
             .tag(Tab.discover)
 
             NavigationStack {
-                BrowseView(store: store, entries: collection.entries, collection: collection, wants: model.wants)
+                MoversView(model: collection, store: store, wants: model.wants)
                     .fundingBanner(model: model, store: store, pack: pack)
             }
-            .tabItem { Label("Browse", systemImage: "square.grid.2x2") }
-            .tag(Tab.browse)
+            .tabItem { Label("Movers", systemImage: "chart.line.uptrend.xyaxis") }
+            .tag(Tab.movers)
 
             NavigationStack {
                 Group {
@@ -101,7 +107,20 @@ private struct MainTabView: View {
 
             NavigationStack(path: $tinPath) {
                 CollectionView(model: collection, store: store, wants: wants,
-                               onGetStarted: { selection = $0 == .scan ? .scan : .browse },
+                               onGetStarted: { tab in
+                                   switch tab {
+                                   case .scan: selection = .scan
+                                   case .browse:
+                                       discoverPath.append(BrowseRoute())
+                                       selection = .discover
+                                   }
+                               },
+                               // Searching your tin used to dead-end in a note telling you to go
+                               // to another tab. Now it takes you there, carrying the query.
+                               onSearchCatalog: { query in
+                                   searchModel?.text = query
+                                   selection = .search
+                               },
                                openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) })
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {

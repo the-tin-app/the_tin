@@ -1,17 +1,25 @@
 import SwiftUI
 
 enum BrowseAxis: String, CaseIterable, Identifiable {
-    case set, pokedex, sealed
+    case set, pokedex, sealed, all
     var id: String { rawValue }
     var label: String {
         switch self {
         case .set: return "By Set"
         case .pokedex: return "By Dex"
         case .sealed: return "Sealed"
+        case .all: return "All Cards"
         }
     }
 }
 
+/// The one place the catalog is browsed. Four ways to slice it — by set, by species, sealed
+/// products, or every card with filters on top.
+///
+/// It used to be two screens: this one behind its own tab, and a *separate* filterable deck behind
+/// Discover's "Browse & filter" row. Two doors, different contents, same catalog — so "Browse"
+/// meant one thing in the tab bar and another on Discover. The deck is now the fourth segment
+/// here, and Discover's row leads to this screen (2026-07-24).
 struct BrowseView: View {
     let store: CatalogStore
     var entries: [CollectionEntry] = []
@@ -29,6 +37,8 @@ struct BrowseView: View {
                 PokedexListView(store: store, entries: entries, collection: collection, wants: wants)
             case .sealed:
                 SealedListView(store: store)
+            case .all:
+                DiscoverBrowseView(store: store, collection: collection, wants: wants)
             }
         }
         .safeAreaInset(edge: .top) {

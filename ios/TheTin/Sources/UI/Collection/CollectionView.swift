@@ -391,6 +391,10 @@ struct CollectionView: View {
     let store: CatalogStore
     var wants: WantsModel? = nil
     var onGetStarted: ((GetStartedTab) -> Void)? = nil
+    /// Hands the current query to the catalog-wide Search tab. Without it, searching your tin for
+    /// something you don't own dead-ended in a note pointing at another tab — the app admitting a
+    /// seam instead of crossing it.
+    var onSearchCatalog: ((String) -> Void)? = nil
     /// Pushes a stack's flip-through deck (nil = the whole tin). VoiceOver's custom-action
     /// mirror of the context menu's "Flip through cards" — actions can't tap the invisible
     /// NavigationLinks. (Row activation itself opens the list-first landing.)
@@ -711,7 +715,12 @@ struct CollectionView: View {
             ContentUnavailableView {
                 Label("No matches for “\(searchText)” in your tin", systemImage: "magnifyingglass")
             } description: {
-                Text("Searches cards you own by name, set, and number — the Search tab covers the whole catalog.")
+                Text("This searches the cards you own, by name, set, and number.")
+            } actions: {
+                if let onSearchCatalog {
+                    Button("Search the whole catalog") { onSearchCatalog(searchText) }
+                        .buttonStyle(.borderedProminent)
+                }
             }
         } else {
             ForEach(matches) { entry in
