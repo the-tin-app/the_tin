@@ -415,16 +415,38 @@ final class CollectionModel {
         await saveEntry(updated)
     }
 
-    /// Flag every row of every card you hold more than once, in ONE write.
+    /// Flag every copy of every card you hold more than once — as INDIVIDUAL rows, in one write.
+    ///
+    /// A ×4 row becomes four ×1 rows, because trading is a per-copy decision: you keep the sharp
+    /// one and trade the other three, and each may be in a different condition. Flagging the stack
+    /// as a unit couldn't express that. Any money recorded on the row is a total (the form says
+    /// "Price paid — total"), so it divides across the copies and the cost basis survives the
+    /// split.
     func flagDuplicatesForTrade() async {
         let duplicates = duplicateCardIds
-        let updated = entries
-            .filter { duplicates.contains($0.cardId) && !$0.isForTrade }
-            .map { entry -> CollectionEntry in
-                var e = entry
-                e.forTrade = true
-                return e
+        var updated: [CollectionEntry] = []
+        for entry in entries where duplicates.contains(entry.cardId) {
+            guard entry.qty > 1 else {
+                if !entry.isForTrade {
+                    var one = entry
+                    one.forTrade = true
+                    updated.append(one)
+                }
+                continue
             }
+            let share = { (total: Double?) in total.map { $0 / Double(entry.qty) } }
+            for copy in 0..<entry.qty {
+                var one = entry
+                // The first copy keeps the original row's id, so an undo or a backup that
+                // references it still resolves; the rest are new rows.
+                one.id = copy == 0 ? entry.id : UUID().uuidString
+                one.qty = 1
+                one.forTrade = true
+                one.pricePaid = share(entry.pricePaid)
+                one.gradingFeeUsd = share(entry.gradingFeeUsd)
+                updated.append(one)
+            }
+        }
         guard !updated.isEmpty else { return }
         await write("update your trade list") {
             try await repository.applyEntryEdits(updated: updated, deletedIds: [])
@@ -545,6 +567,8 @@ struct CollectionView: View {
     /// something you don't own dead-ended in a note pointing at another tab — the app admitting a
     /// seam instead of crossing it.
     var onSearchCatalog: ((String) -> Void)? = nil
+    /// The sets being collected — drives the Wanted screen's Sets segment.
+    var goals: SetGoalsModel? = nil
     /// Pushes a stack's flip-through deck (nil = the whole tin). VoiceOver's custom-action
     /// mirror of the context menu's "Flip through cards" — actions can't tap the invisible
     /// NavigationLinks. (Row activation itself opens the list-first landing.)
@@ -687,7 +711,9 @@ struct CollectionView: View {
             }
         }
         .navigationDestination(for: WantedRoute.self) { _ in
-            if let wants { WantedCardsView(store: store, wants: wants, collection: model) }
+            if let wants {
+                WantedView(store: store, wants: wants, collection: model, goals: goals)
+            }
         }
         .navigationDestination(for: TradeRoute.self) { _ in
             TradeListView(model: model, store: store)
@@ -944,8 +970,9 @@ struct CollectionView: View {
     }
 
     private func wishlistLink(_ wants: WantsModel) -> some View {
-        pinnedLink(title: "Wishlist", systemImage: "heart", tint: .pink,
-                   count: wants.wanted.count, route: WantedRoute())
+        // One row for both kinds of wanting: sets you're collecting and singles you're hunting.
+        pinnedLink(title: "Wanted", systemImage: "heart", tint: .pink,
+                   count: wants.wanted.count + (goals?.setIds.count ?? 0), route: WantedRoute())
     }
 
     /// The other half of the wishlist: what you'll give up. Sits beside it because "hunting" and

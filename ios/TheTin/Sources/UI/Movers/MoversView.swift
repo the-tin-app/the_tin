@@ -11,8 +11,20 @@ struct MoversView: View {
     /// The same app-wide key `DeltaBadge`/`DeltaPeriodPicker` read, so changing the window here
     /// changes every change badge in the app — one period, one meaning.
     @AppStorage("deltaPeriod") private var periodRaw: String = DeltaPeriod.d1.rawValue
+    /// Your holdings, or the whole catalog. Persisted: which question you're asking tends to hold
+    /// for a session ("what did my tin do" vs "what should I be chasing").
+    @AppStorage("moversScope") private var scopeRaw: String = Scope.mine.rawValue
+    /// Catalog movers for the current period; reloaded when the period changes, not per body pass.
+    @State private var market: [Movers.MarketRow] = []
+
+    enum Scope: String, CaseIterable {
+        case mine, market
+        var label: String { self == .mine ? "My Cards" : "Market" }
+    }
 
     private var period: DeltaPeriod { DeltaPeriod(rawValue: periodRaw) ?? .d1 }
+    private var scope: Scope { Scope(rawValue: scopeRaw) ?? .mine }
+    private var tier: CatalogTier { CatalogTier(rawValue: AppConfig.catalogTier) ?? .average }
 
     /// Cheap enough to compute in `body`: it's arithmetic over dictionaries `CollectionModel`
     /// already holds in memory — no SQLite reads, unlike the portfolio series.
@@ -34,7 +46,7 @@ struct MoversView: View {
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
             }
-            if !summary.rows.isEmpty {
+            if scope == .mine, !summary.rows.isEmpty {
                 Section {
                     ForEach(summary.rows) { row in
                         NavigationLink(value: CardID(raw: row.cardId)) {
@@ -45,9 +57,23 @@ struct MoversView: View {
                     coverageFooter(summary)
                 }
             }
+            if scope == .market, !market.isEmpty {
+                Section {
+                    ForEach(market) { row in
+                        NavigationLink(value: CardID(raw: row.cardId)) {
+                            MarketMoverRow(row: row, card: try? store.card(id: row.cardId),
+                                           owned: ownedIds.contains(row.cardId),
+                                           wanted: wants?.isWanted(row.cardId) ?? false)
+                        }
+                    }
+                } footer: {
+                    Text("Cards over \(Movers.marketFloorUsd, format: .currency(code: "USD").precision(.fractionLength(0))), by percent moved. Cheaper cards swing on rounding alone.")
+                }
+            }
         }
         .listStyle(.plain)
         .overlay { emptyState(summary) }
+        .task(id: "\(periodRaw)|\(scopeRaw)|\(model.catalogGeneration)") { await loadMarket() }
         .navigationTitle("Movers")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: CardID.self) { cardID in
@@ -61,21 +87,43 @@ struct MoversView: View {
 
     // MARK: pieces
 
-    private func header(_ summary: Movers.Summary) -> some View {
+    @ViewBuilder private func header(_ summary: Movers.Summary) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(signed(summary.totalImpact))
-                    .font(.system(.largeTitle, design: .rounded).weight(.bold))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .foregroundStyle(tint(summary.totalImpact))
-                Text(period.label).font(.subheadline).foregroundStyle(.secondary)
+            Picker("Scope", selection: $scopeRaw) {
+                ForEach(Scope.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Your tin is \(summary.totalImpact >= 0 ? "up" : "down") \(abs(summary.totalImpact).formatted(.currency(code: "USD"))) since \(period.label)")
+            .pickerStyle(.segmented)
+            if scope == .mine {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(signed(summary.totalImpact))
+                        .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .foregroundStyle(tint(summary.totalImpact))
+                    Text(period.label).font(.subheadline).foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Your tin is \(summary.totalImpact >= 0 ? "up" : "down") \(abs(summary.totalImpact).formatted(.currency(code: "USD"))) since \(period.label)")
+            } else {
+                // No total to headline: these aren't your cards, so there's no holding to sum.
+                Text("Biggest movers \(period.label)")
+                    .font(.headline)
+            }
             DeltaPeriodPicker()
             if let asOf = model.priceAsOf { AsOfLabel(date: asOf) }
         }
+    }
+
+    private var ownedIds: Set<String> { Set(model.entries.map(\.cardId)) }
+
+    private func loadMarket() async {
+        guard scope == .market else { return }
+        let store = self.store
+        let period = self.period
+        market = await Task.detached {
+            (try? store.topMovers(period: period, minUsd: Movers.marketFloorUsd,
+                                  limit: Movers.marketLimit)) ?? []
+        }.value
     }
 
     @ViewBuilder private func coverageFooter(_ summary: Movers.Summary) -> some View {
@@ -85,7 +133,27 @@ struct MoversView: View {
     }
 
     @ViewBuilder private func emptyState(_ summary: Movers.Summary) -> some View {
-        if model.entries.isEmpty {
+        // `publish-tiers.ts` empties price_delta for the Small catalog, exactly as it does
+        // price_history — so there is nothing to show and the honest reason is a download-size
+        // one. Same words as the portfolio and price-history notices: never an upsell, and it
+        // says "free" out loud (PRODUCT.md anti-reference).
+        if tier == .casual {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Price changes aren't in the Small catalog", systemImage: "chart.line.uptrend.xyaxis")
+                    .font(.subheadline.weight(.medium))
+                Text("Choose the Standard or Complete catalog in Settings to see what your cards — and the market — are doing. Every option is free.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+            .padding()
+        } else if scope == .market {
+            if market.isEmpty {
+                ContentUnavailableView("Nothing moved \(period.label)", systemImage: "equal.circle",
+                                       description: Text("No catalog price changes landed for this window. Try a longer one."))
+            }
+        } else if model.entries.isEmpty {
             ContentUnavailableView("Nothing in your tin yet", systemImage: "chart.line.uptrend.xyaxis",
                                    description: Text("Add a card and this is where you'll see what it does."))
         } else if summary.rows.isEmpty {
@@ -106,6 +174,37 @@ struct MoversView: View {
 
     private func tint(_ v: Double) -> Color {
         abs(v) < 0.005 ? .secondary : (v > 0 ? .green : .red)
+    }
+}
+
+/// A card the market moved that you may not own — percent-first, since there's no holding to
+/// value. Badged when it's already in your tin or on your wishlist, which is the whole point:
+/// spotting a card you're hunting climbing before you buy it.
+private struct MarketMoverRow: View {
+    let row: Movers.MarketRow
+    let card: CardRecord?
+    let owned: Bool
+    let wanted: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            CardImageView(card: card, quality: "low").frame(width: 44)
+                .overlay(alignment: .topTrailing) {
+                    if owned || wanted { CardBadges(owned: owned, wanted: wanted).scaleEffect(0.85) }
+                }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(card?.name ?? row.cardId).lineLimit(1)
+                Text(row.usd, format: .currency(code: "USD"))
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Spacer()
+            Text((row.pct > 0 ? "+" : "−") + abs(row.pct).formatted(.percent.precision(.fractionLength(1))))
+                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(row.pct > 0 ? .green : .red)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(card?.name ?? row.cardId), \(row.usd.formatted(.currency(code: "USD"))), \(row.pct >= 0 ? "up" : "down") \(abs(row.pct).formatted(.percent.precision(.fractionLength(1))))\(wanted ? ", on your wishlist" : "")\(owned ? ", in your tin" : "")")
     }
 }
 

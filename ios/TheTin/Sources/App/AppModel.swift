@@ -18,6 +18,9 @@ final class AppModel {
     private(set) var store: CatalogStore?
     private(set) var collection: CollectionModel?
     private(set) var wants: WantsModel?
+    /// The sets you're collecting. Created eagerly (it's a file read, no network) so every screen
+    /// can ask; nil never happens in the app, only in catalog-only tests.
+    private(set) var setGoals: SetGoalsModel? = SetGoalsModel()
     private(set) var catalogState: CatalogState?
     /// Which remote served the most recent catalog operation (nil until the first update runs).
     private(set) var activeSource: CatalogSource?

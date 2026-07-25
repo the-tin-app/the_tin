@@ -7,6 +7,9 @@ struct WantedCardsView: View {
     let store: CatalogStore
     let wants: WantsModel
     var collection: CollectionModel? = nil
+    /// Sets being collected — a single that's also covered by one gets a badge so it doesn't read
+    /// as a duplicate of the set goal.
+    var goals: SetGoalsModel? = nil
 
     @State private var sort: WishlistSort = .priority
     @State private var search = ""
@@ -148,7 +151,8 @@ struct WantedCardsView: View {
         LazyVGrid(columns: columns, spacing: 12) {
             ForEach(cards) { card in
                 NavigationLink(value: CardID(raw: card.id)) {
-                    WishlistTile(card: card, priceUsd: rawUsd[card.id], entry: wants.entry(card.id))
+                    WishlistTile(card: card, priceUsd: rawUsd[card.id], entry: wants.entry(card.id),
+                                 inCollectedSet: goals?.isCollecting(card.setId) ?? false)
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
@@ -268,6 +272,9 @@ private struct WishlistTile: View {
     let card: CardRecord
     let priceUsd: Double?
     let entry: WantEntry?
+    /// This card's set is one you're collecting, so it's already tracked in the gap. It stays on
+    /// the wishlist (you chose it, and it may carry a target price) but says why it's in both.
+    var inCollectedSet: Bool = false
 
     private var onSale: Bool { WishlistGrid.isOnSale(card, entry: entry, price: priceUsd) }
 
@@ -277,6 +284,10 @@ private struct WishlistTile: View {
                 .overlay(alignment: .topLeading) { priorityDot }
                 .overlay(alignment: .topTrailing) { noteGlyph }
             Text(card.name).font(.caption).lineLimit(1)
+            if inCollectedSet {
+                Text("in a set you collect")
+                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            }
             priceLabel
         }
     }

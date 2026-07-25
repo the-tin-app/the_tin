@@ -7,9 +7,10 @@ import Foundation
 /// anything happen?". This is that answer, in the units that matter: dollars of *your* holding,
 /// not headline percentages of cards you own one cheap copy of.
 ///
-/// Runs entirely off `price_delta`, which ships in EVERY catalog tier (only `price_history_cond`
-/// and `graded_history` are ever dropped, and `price_history` merely emptied) — so this works on
-/// the Small catalog, where the portfolio chart cannot.
+/// Runs entirely off `price_delta`. That table is **emptied on the casual (Small) tier**, exactly
+/// like `price_history` — `publish-tiers.ts` deletes its rows — so Movers has nothing to show
+/// there and says so in the same words the portfolio and price-history charts use. (An earlier
+/// version of this comment claimed every tier carried it. It does not.)
 enum Movers {
     /// One card's movement. Rows are per *card*, not per entry: a card held as both a raw and a
     /// graded copy moves on two different price series, and the collector thinks of it as one card.
@@ -31,6 +32,22 @@ enum Movers {
             return before > 0 ? impact / before : nil
         }
     }
+
+    /// A catalog-wide mover — a card the market moved, owned or not. No quantity, because it's
+    /// about the card rather than a holding.
+    struct MarketRow: Identifiable, Equatable {
+        let cardId: String
+        let pct: Double
+        let usd: Double
+        var id: String { cardId }
+    }
+
+    /// Below this the list fills with commons whose "moves" are rounding noise on a few cents.
+    /// ponytail: a flat floor, not a percentile — revisit if it hides real movement in cheap sets.
+    static let marketFloorUsd: Double = 5
+
+    /// How many catalog movers to fetch. Enough to scroll, small enough to stay one cheap query.
+    static let marketLimit = 100
 
     struct Summary: Equatable {
         /// Cards that actually moved, largest absolute dollar impact first.

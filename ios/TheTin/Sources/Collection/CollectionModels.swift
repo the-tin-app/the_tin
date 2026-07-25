@@ -105,14 +105,16 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     /// price paid, a date, or a source is its own acquisition and stays its own row (merging it
     /// would silently destroy cost basis).
     ///
-    /// `forTrade` is deliberately NOT compared. It's a label on a stack of otherwise
-    /// interchangeable cards, not a property that makes two of them different objects — comparing
-    /// it would split one row into two the moment you flagged it, which is exactly the duplicate
-    /// this rule exists to prevent. The absorbing row's flag wins.
+    /// `forTrade` IS compared (reversed 2026-07-25). It was excluded on the reasoning that the
+    /// flag labels a stack of interchangeable cards; once the trade list became one row per
+    /// physical copy — so you can keep one and trade the other three — a kept copy and a
+    /// for-trade copy stopped being interchangeable. Leaving it out silently folded them back
+    /// together on the next bulk move, destroying exactly the distinction the split creates.
     func isSameCopy(as other: CollectionEntry) -> Bool {
         cardId == other.cardId && groupId == other.groupId
             && condition == other.condition && grade == other.grade
             && variantValue == other.variantValue
+            && isForTrade == other.isForTrade
             && !hasAcquisitionDetail && !other.hasAcquisitionDetail
     }
 }

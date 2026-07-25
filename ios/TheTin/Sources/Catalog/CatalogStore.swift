@@ -753,6 +753,30 @@ final class CatalogStore {
         }
     }
 
+    /// Biggest raw-market movers across the WHOLE catalog for one lookback — the cards you don't
+    /// own yet. Ranked by absolute percent, because there's no holding to weigh it against; the
+    /// `minUsd` floor is what stops the list being 20-cent commons, whose prices swing wildly on
+    /// rounding alone. Empty on the casual tier, where `price_delta` ships with zero rows.
+    func topMovers(period: DeltaPeriod, minUsd: Double, limit: Int) throws -> [Movers.MarketRow] {
+        // The lookback column can't be bound as a parameter. It comes from a closed enum and is
+        // mapped through this switch, so no caller-controlled string ever reaches the SQL.
+        let column: String
+        switch period {
+        case .d1: column = "pct_1d"
+        case .d7: column = "pct_7d"
+        case .d30: column = "pct_30d"
+        }
+        return try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT d.card_id AS card_id, d.\(column) AS pct, p.raw_usd AS usd
+                FROM price_delta d JOIN price_latest p ON p.card_id = d.card_id
+                WHERE d.kind = 'raw' AND d.\(column) IS NOT NULL AND p.raw_usd >= ?
+                ORDER BY ABS(d.\(column)) DESC LIMIT ?
+                """, arguments: [minUsd, limit])
+                .map { Movers.MarketRow(cardId: $0["card_id"], pct: $0["pct"], usd: $0["usd"]) }
+        }
+    }
+
     // MARK: row mapping
 
     private static func setRecord(_ r: Row) -> SetRecord {

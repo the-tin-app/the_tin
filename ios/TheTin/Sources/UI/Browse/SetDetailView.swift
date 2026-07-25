@@ -10,10 +10,13 @@ final class SetDetailModel {
     private(set) var asOf: String?
     private(set) var sealed: [SealedProduct] = []
     var sort: CardSort = .number
-    var filter: CardFilter = .all
+    var filter: CardFilter
 
-    init(store: CatalogStore, set: SetRecord) {
+    /// `filter` is injectable so arriving from a set goal lands straight on what's left, rather
+    /// than on everything with the gap two taps away.
+    init(store: CatalogStore, set: SetRecord, filter: CardFilter = .all) {
         self.set = set
+        self.filter = filter
         // Local SQLite reads are instant and cannot meaningfully fail after install;
         // an empty screen with the set header is the degraded state.
         cards = (try? store.cards(inSet: set.id)) ?? []
@@ -42,6 +45,8 @@ struct SetDetailView: View {
     var history: PriceHistoryProviding? = nil
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    /// Lets this screen start/stop collecting the set. nil in contexts with no goals model.
+    var goals: SetGoalsModel? = nil
 
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
     private static let sortOptions: [CardSort] = [.number, .alphabetical, .cheapest, .expensive]
@@ -72,6 +77,21 @@ struct SetDetailView: View {
                     if let asOf = model.asOf { AsOfLabel(date: asOf) }
                 }
                 .font(.footnote)
+
+                if let goals {
+                    Button {
+                        goals.toggle(model.set.id)
+                    } label: {
+                        Label(goals.isCollecting(model.set.id)
+                              ? "Collecting this set" : "Collect this set",
+                              systemImage: goals.isCollecting(model.set.id)
+                              ? "checkmark.circle.fill" : "circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(goals.isCollecting(model.set.id) ? .green : .accentColor)
+                    .padding(.top, 2)
+                }
 
                 // The completion bar's call to action. Only while you're looking at the gap —
                 // offering "add everything missing" from the All view would be a trap.

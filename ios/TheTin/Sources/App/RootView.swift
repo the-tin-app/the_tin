@@ -128,6 +128,7 @@ private struct MainTabView: View {
                                    searchModel?.text = query
                                    selection = .search
                                },
+                               goals: model.setGoals,
                                openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) })
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
