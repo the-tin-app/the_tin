@@ -52,13 +52,22 @@ struct ScanView: View {
                                                             : AnyShapeStyle(Color.orange.opacity(0.9)),
                                     in: Capsule())
                     if model.ambiguous.isEmpty {
-                        StagingTray(staging: staging, store: store,
-                                    knowledge: latestKnowledge) { showingReview = true }
+                        modePicker
+                        // In look-up mode the tray is noise until something is actually staged —
+                        // but staged cards from an earlier session still need their way back.
+                        if !model.isLookUpMode || !staging.drafts.isEmpty {
+                            StagingTray(staging: staging, store: store,
+                                        knowledge: latestKnowledge) { showingReview = true }
+                        }
                     } else {
                         // Variant A (approved 2026-07-15): bottom sheet, 2×2 card-image grid.
                         AmbiguousChooser(model: model, options: model.ambiguous)
                     }
                 }
+                // Anchored on the controls stack, NOT the root: the root already carries the
+                // review sheet, and two `.sheet` modifiers on one view is the case SwiftUI
+                // silently drops (same class as StagingReviewView's "tap twice, no prompt").
+                .sheet(item: lookedUpBinding) { lookUpSheet($0) }
             }.padding()
         }
         // A capture you needed feels different from a capture you didn't: the celebratory
@@ -75,6 +84,45 @@ struct ScanView: View {
             }
         }
         .task { await model.run(source: source) }
+    }
+
+    /// Add vs. look up. Two different questions get asked of a card in hand — "file this" while
+    /// cataloguing a box, and "what is this?" standing in a shop — and the scanner only ever
+    /// answered the first, so asking the second cost a stage-then-delete round trip.
+    private var modePicker: some View {
+        Picker("Scanner mode", selection: $model.isLookUpMode) {
+            Text("Add to tin").tag(false)
+            Text("Look up").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 260)
+        .padding(4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityHint(model.isLookUpMode
+                           ? "Scanned cards are shown, not saved"
+                           : "Scanned cards are staged for review")
+    }
+
+    /// Bridges the model's looked-up card id to `.sheet(item:)`. Dismissing clears it AND resets
+    /// the scanner, so the next frame reads fresh.
+    private var lookedUpBinding: Binding<CardID?> {
+        Binding(get: { model.lookedUpCardId.map { CardID(raw: $0) } },
+                set: { if $0 == nil { Task { await model.clearLookedUpCard() } } })
+    }
+
+    @ViewBuilder private func lookUpSheet(_ id: CardID) -> some View {
+        if let card = try? store.card(id: id.raw) {
+            NavigationStack {
+                CardDetailView(model: CardDetailModel(store: store, card: card,
+                                                      history: CatalogPriceHistory(store: store)),
+                               store: store, collection: collection, wants: wants)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { Task { await model.clearLookedUpCard() } }
+                        }
+                    }
+            }
+        }
     }
 }
 
