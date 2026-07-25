@@ -46,8 +46,17 @@ struct SetDetailView: View {
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
     private static let sortOptions: [CardSort] = [.number, .alphabetical, .cheapest, .expensive]
 
+    @State private var confirmingWishlistAdd = false
+
     private var owned: Set<String> { Set(entries.map(\.cardId)) }
     private var wanted: Set<String> { wants?.wanted ?? [] }
+
+    /// Every card in this set you neither own nor already want — what "add what I'm missing"
+    /// actually means. Deliberately the whole set, not the current page: the sort and the grid
+    /// are for looking, the button is for the goal.
+    private func missingUnwanted(owned: Set<String>, wanted: Set<String>) -> [String] {
+        model.cards.filter { !owned.contains($0.id) && !wanted.contains($0.id) }.map(\.id)
+    }
 
     var body: some View {
         let owned = owned
@@ -63,6 +72,21 @@ struct SetDetailView: View {
                     if let asOf = model.asOf { AsOfLabel(date: asOf) }
                 }
                 .font(.footnote)
+
+                // The completion bar's call to action. Only while you're looking at the gap —
+                // offering "add everything missing" from the All view would be a trap.
+                if model.filter == .missing, wants != nil {
+                    let addable = missingUnwanted(owned: owned, wanted: wanted)
+                    if !addable.isEmpty {
+                        Button { confirmingWishlistAdd = true } label: {
+                            Label("Add ^[\(addable.count) card](inflect: true) to wishlist",
+                                  systemImage: "heart")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .padding(.top, 2)
+                    }
+                }
 
                 LazyVGrid(columns: columns, spacing: 12) {
                     ForEach(model.displayed(owned: owned, wanted: wanted)) { card in
@@ -123,5 +147,19 @@ struct SetDetailView: View {
                                store: store, collection: collection, wants: wants)
             }
         }
+        // Plain `String` interpolation, so the inflection markup used on the button itself
+        // would render literally here — dialog titles take a String, not a LocalizedStringKey.
+        .confirmationDialog(wishlistAddTitle(count: missingUnwanted(owned: owned, wanted: wanted).count),
+                            isPresented: $confirmingWishlistAdd, titleVisibility: .visible) {
+            let addable = missingUnwanted(owned: owned, wanted: wanted)
+            Button("Add to wishlist") { wants?.addMany(addable) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Everything you don't already own or want from \(model.set.name).")
+        }
+    }
+
+    private func wishlistAddTitle(count: Int) -> String {
+        "Add \(count) \(count == 1 ? "card" : "cards") to your wishlist?"
     }
 }

@@ -52,6 +52,36 @@ final class WantsModelTests: XCTestCase {
         XCTAssertEqual(model.entry("c1")?.targetUsd, 12)
     }
 
+    /// Bulk add ("everything I'm missing from this set") lands as ONE write, and must not reset
+    /// the priority/target/notes on a card that's already on the list.
+    func testAddManyAddsMissingAndPreservesExistingEntries() async throws {
+        let repo = InMemoryWantsRepository()
+        let model = WantsModel(repo: repo, uid: "u1")
+        model.toggle("kept")
+        model.update("kept") { $0.priority = .high; $0.targetUsd = 25 }
+
+        model.addMany(["kept", "new1", "new2"])
+
+        XCTAssertEqual(model.wanted, ["kept", "new1", "new2"])
+        XCTAssertEqual(model.entry("kept")?.priority, .high, "an existing wish must not be reset")
+        XCTAssertEqual(model.entry("kept")?.targetUsd, 25)
+        XCTAssertEqual(model.entry("new1")?.priority, .normal)
+
+        let persisted = await eventually { repo.stored.keys.contains("new2") }
+        XCTAssertTrue(persisted, "the bulk add must reach the repo")
+    }
+
+    /// Adding nothing new must not queue a write at all — the set screen offers the button
+    /// whenever the filter is on, and a no-op save would still rewrite the whole map.
+    func testAddManyIsANoOpWhenEverythingIsAlreadyWanted() async {
+        let model = WantsModel(repo: InMemoryWantsRepository(), uid: "u1")
+        model.toggle("c1")
+        model.addMany(["c1"])
+        XCTAssertEqual(model.wanted, ["c1"])
+        model.addMany([])
+        XCTAssertEqual(model.wanted, ["c1"])
+    }
+
     /// `WantsModel.persist` writes through an unstructured `Task`, so the repo lands on its own
     /// schedule. These tests used to sleep a fixed 20 ms and assert — which loses the race under
     /// load and made the suite intermittently red (one failure per few full runs, previously

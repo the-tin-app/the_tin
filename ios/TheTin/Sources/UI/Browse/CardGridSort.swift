@@ -13,16 +13,31 @@ enum CardSort: String, CaseIterable, Identifiable {
     }
 }
 enum CardFilter: String, CaseIterable, Identifiable {
-    case all, owned, wanted
+    /// `missing` is the set collector's view: everything in this set you don't have a copy of.
+    /// Completion was a read-only "84/102" until it existed — the number motivated you and then
+    /// gave you no way to act on it.
+    case all, owned, wanted, missing
     var id: String { rawValue }
-    var label: String { self == .all ? "All" : self == .owned ? "Owned" : "Wishlist" }
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .owned: return "Owned"
+        case .wanted: return "Wishlist"
+        case .missing: return "Missing"
+        }
+    }
 }
 
 enum CardGridSort {
     static func apply(cards: [CardRecord], prices: [String: Double], owned: Set<String>, wanted: Set<String>,
                       setDates: [String: String], sort: CardSort, filter: CardFilter) -> [CardRecord] {
         let filtered = cards.filter { c in
-            switch filter { case .all: return true; case .owned: return owned.contains(c.id); case .wanted: return wanted.contains(c.id) }
+            switch filter {
+            case .all: return true
+            case .owned: return owned.contains(c.id)
+            case .wanted: return wanted.contains(c.id)
+            case .missing: return !owned.contains(c.id)
+            }
         }
         func num(_ c: CardRecord) -> Int { Int(c.number) ?? Int.max }
         switch sort {
