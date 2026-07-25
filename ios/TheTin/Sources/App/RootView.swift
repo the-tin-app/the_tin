@@ -38,8 +38,20 @@ private struct MainTabView: View {
     let collection: CollectionModel
     let wants: WantsModel?
     @Bindable var model: AppModel
+    /// Owned here, not in the Scan tab: the pack download must be startable from Settings and the
+    /// first-run prompt, must keep running when the user leaves Scan, and must stay watchable
+    /// from every tab.
+    @State private var pack: ScannerPackModel
     @State private var searchModel: SearchModel?
     @State private var showingSettings = false
+
+    init(store: CatalogStore, collection: CollectionModel, wants: WantsModel?, model: AppModel) {
+        self.store = store
+        self.collection = collection
+        self.wants = wants
+        self.model = model
+        _pack = State(wrappedValue: ScannerPackModel.live(catalogStore: store))
+    }
     private enum Tab: Hashable { case discover, browse, search, tin, scan }
     // The tin is the product's home ("daily check-ins"), so launch there once it has cards;
     // an empty tin (first run) opens on Discover so there's something to see.
@@ -54,14 +66,22 @@ private struct MainTabView: View {
         TabView(selection: $selection) {
             NavigationStack {
                 DiscoverView(store: store, collection: collection, wants: model.wants)
-                    .fundingBanner(model: model, store: store)
+                    // Install day is when someone is most likely on home Wi-Fi — the right moment
+                    // to mention the scanner. A dismissible banner, never a modal: stacking a
+                    // second large download behind the catalog's would make first run worse.
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        ScannerPackPrompt(pack: pack, isExpensive: model.network.isExpensive) {
+                            selection = .scan
+                        }
+                    }
+                    .fundingBanner(model: model, store: store, pack: pack)
             }
             .tabItem { Label("Discover", systemImage: "sparkles") }
             .tag(Tab.discover)
 
             NavigationStack {
                 BrowseView(store: store, entries: collection.entries, collection: collection, wants: model.wants)
-                    .fundingBanner(model: model, store: store)
+                    .fundingBanner(model: model, store: store, pack: pack)
             }
             .tabItem { Label("Browse", systemImage: "square.grid.2x2") }
             .tag(Tab.browse)
@@ -74,7 +94,7 @@ private struct MainTabView: View {
                         TinLoadingView()
                     }
                 }
-                .fundingBanner(model: model, store: store)
+                .fundingBanner(model: model, store: store, pack: pack)
             }
             .tabItem { Label("Search", systemImage: "magnifyingglass") }
             .tag(Tab.search)
@@ -91,15 +111,16 @@ private struct MainTabView: View {
                             .accessibilityLabel("Settings")
                         }
                     }
-                    .sheet(isPresented: $showingSettings) { SettingsView(app: model) }
-                    .fundingBanner(model: model, store: store)
+                    .sheet(isPresented: $showingSettings) { SettingsView(app: model, pack: pack) }
+                    .fundingBanner(model: model, store: store, pack: pack)
             }
             .tabItem { Label("The Tin", systemImage: "square.stack.3d.up") }
             .tag(Tab.tin)
 
             NavigationStack {
-                ScanTabContainer(store: store, collection: collection)
-                    .fundingBanner(model: model, store: store)
+                ScanTabContainer(store: store, collection: collection, pack: pack,
+                                 network: model.network)
+                    .fundingBanner(model: model, store: store, pack: pack)
             }
             .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
             .tag(Tab.scan)
@@ -108,9 +129,15 @@ private struct MainTabView: View {
             if searchModel == nil { searchModel = SearchModel(store: store) }
             consumeWishlistRoute() // cold launch from a tap: token bumped before we appeared
             consumeCardRoute()
+            await pack.refresh()   // learn the pack's state once, for Settings and the prompt
         }
         .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
+        // Walking out of Wi-Fi range mid-download must not quietly spend cellular data on a
+        // several-hundred-MB transfer; the paused UI offers to carry on anyway.
+        .onChange(of: model.network.isExpensive) { _, expensive in
+            pack.networkChanged(isExpensive: expensive)
+        }
         // Collection writes can fail from any tab (card detail lives under Browse/Search too),
         // so the failure alert hangs off the TabView, not the Tin stack.
         .alert("Save failed", isPresented: Binding(
@@ -146,8 +173,8 @@ private struct MainTabView: View {
 /// Must live INSIDE the NavigationStack: a TabView-level `safeAreaInset` lets the child nav bars
 /// draw over it (it was covering the Discover section headers).
 private extension View {
-    func fundingBanner(model: AppModel, store: CatalogStore) -> some View {
-        modifier(FundingBanner(model: model, store: store))
+    func fundingBanner(model: AppModel, store: CatalogStore, pack: ScannerPackModel) -> some View {
+        modifier(FundingBanner(model: model, store: store, pack: pack))
     }
 }
 
@@ -155,6 +182,7 @@ private struct FundingBanner: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: AppModel
     let store: CatalogStore
+    let pack: ScannerPackModel
 
     func body(content: Content) -> some View {
         content
@@ -170,8 +198,16 @@ private struct FundingBanner: ViewModifier {
                 }
             }
             .overlay(alignment: .bottom) {
-                if let progress = model.catalogDownloadProgress {
-                    UpdateToast(progress: progress)
+                VStack(spacing: 6) {
+                    if let progress = model.catalogDownloadProgress {
+                        UpdateToast(label: "Updating card data…", progress: progress)
+                    }
+                    // Follows the user out of the Scan tab — the whole point of hoisting the
+                    // download is that they can walk away from it.
+                    if case .downloading(let p) = pack.phase {
+                        UpdateToast(label: "Setting up scanner… \(p.byteSummary)",
+                                    progress: p.fraction)
+                    }
                 }
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.25),
@@ -179,17 +215,65 @@ private struct FundingBanner: ViewModifier {
     }
 }
 
+/// One-line invitation to set up the scanner, shown on Discover until it's taken or dismissed.
+/// Deliberately a banner in the same vocabulary as the offline / reduced-data banners rather
+/// than a modal — it must be ignorable.
+private struct ScannerPackPrompt: View {
+    let pack: ScannerPackModel
+    let isExpensive: Bool
+    let onOpen: () -> Void
+    @AppStorage(AppConfig.scannerPromptDismissedKey) private var dismissed = false
+
+    private var shouldShow: Bool {
+        if dismissed { return false }
+        return pack.phase == .notInstalled
+    }
+
+    var body: some View {
+        if shouldShow {
+            HStack(spacing: 10) {
+                Image(systemName: "camera.viewfinder").foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Add cards with your camera").font(.caption.bold())
+                    Text(sizeCaption).font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 6)
+                Button("Set up", action: onOpen).font(.caption.bold()).buttonStyle(.bordered)
+                Button {
+                    dismissed = true
+                } label: {
+                    Image(systemName: "xmark").font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Dismiss scanner setup")
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.regularMaterial)
+        }
+    }
+
+    private var sizeCaption: String {
+        guard let bytes = pack.publishedBytes else { return "One-time download, best on Wi-Fi" }
+        let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        return isExpensive ? "One-time \(size) download — best on Wi-Fi"
+                           : "One-time \(size) download"
+    }
+}
+
 /// Bottom card toast (approved mockup A) shown while a new daily catalog artifact is actually
 /// downloading — never for the sub-second already-current check, see
 /// `CatalogUpdater.ensureLatest(onProgress:)`. Byte-accurate % against the manifest's sizeBytes.
+/// Also carries the scanner pack download, so leaving the Scan tab doesn't lose sight of it.
 private struct UpdateToast: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let label: String
     let progress: Double
 
     var body: some View {
         VStack(spacing: 7) {
             HStack {
-                Text("Updating card data…")
+                Text(label)
                 Spacer()
                 Text(progress.formatted(.percent.precision(.fractionLength(0))))
                     .monospacedDigit()

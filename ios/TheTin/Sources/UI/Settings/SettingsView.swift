@@ -6,8 +6,11 @@ import UniformTypeIdentifiers
 /// existing Support / Data / Storage sections.
 struct SettingsView: View {
     @Bindable var app: AppModel
+    let pack: ScannerPackModel
     @State private var model = SettingsModel()
     @State private var confirmingClear = false
+    @State private var confirmingPackDelete = false
+    @State private var confirmingPackCellular = false
     @State private var restoreCandidate: BackupSnapshot?
     @State private var confirmingRestore = false
     @State private var restoreError: String?
@@ -22,18 +25,25 @@ struct SettingsView: View {
 
     private var funding: FundingDisplay { app.funding }
 
+    /// Split out of `body`: with the scanner-pack section added, one ten-section `List` literal
+    /// tipped the type-checker into "unable to type-check this expression in reasonable time".
+    @ViewBuilder private var sections: some View {
+        appSection
+        connectionSection
+        tierSection
+        scannerPackSection
+        activitySection
+        alertsSection
+        supportSection
+        dataSection
+        printoutSection
+        storageSection
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                appSection
-                connectionSection
-                tierSection
-                activitySection
-                alertsSection
-                supportSection
-                dataSection
-                printoutSection
-                storageSection
+                sections
             }
             .navigationTitle("Settings")
             .toolbar {
@@ -52,6 +62,22 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Images will re-download as you view cards.")
+            }
+            .confirmationDialog("Delete the scanner pack?", isPresented: $confirmingPackDelete,
+                                titleVisibility: .visible) {
+                Button("Delete", role: .destructive) { pack.deletePack() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                // Naming what is NOT lost matters more than naming what is: people assume
+                // deleting anything in a collection app deletes their collection.
+                Text("Camera scanning stops working until you download it again. Your collection isn't affected.")
+            }
+            .confirmationDialog("Download over cellular?", isPresented: $confirmingPackCellular,
+                                titleVisibility: .visible) {
+                Button("Download now") { pack.startDownload() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You're not on Wi-Fi. This may count against your data plan — you can pause and resume anytime.")
             }
             .confirmationDialog(manualRestoreTitle, isPresented: $confirmingRestore,
                                 titleVisibility: .visible) {
@@ -228,6 +254,75 @@ struct SettingsView: View {
         return " Currently installed: \(CatalogTier(rawValue: installed)?.title ?? installed)."
     }
 
+    // MARK: Scanner pack
+
+    /// The scanner pack's own section: start it here instead of only from the Scan tab, watch a
+    /// transfer that was started anywhere, and — the part that had no home at all — give the disk
+    /// space back once you've finished cataloguing.
+    private var scannerPackSection: some View {
+        Section {
+            switch pack.phase {
+            case .checking:
+                HStack(spacing: 6) { ProgressView(); Text("Checking…") }
+            case .notInstalled:
+                LabeledContent("Camera scanning", value: "Not set up")
+                Button("Download scanner pack") {
+                    if app.network.isExpensive { confirmingPackCellular = true } else { pack.startDownload() }
+                }
+            case .downloading(let p):
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: p.fraction)
+                    Text(p.byteSummary).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                Button("Pause") { pack.pause() }
+            case .paused(let p, let reason):
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: p.fraction)
+                    Text("Paused — \(p.byteSummary)")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                Button(reason == .cellular ? "Resume anyway" : "Resume") { pack.startDownload() }
+                Button("Discard partial download", role: .destructive) { pack.discardPartialDownload() }
+            case .ready:
+                LabeledContent("Scanner pack", value: installedPackText)
+                if pack.updateAvailable {
+                    Button("Update scanner pack") {
+                        if app.network.isExpensive { confirmingPackCellular = true } else { pack.startDownload() }
+                    }
+                }
+                Button("Delete scanner pack", role: .destructive) { confirmingPackDelete = true }
+            case .unavailable(let msg):
+                LabeledContent("Camera scanning", value: "Unavailable")
+                Text(msg).font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Camera scanning")
+        } footer: {
+            scannerPackFooter
+        }
+    }
+
+    @ViewBuilder private var scannerPackFooter: some View {
+        switch pack.phase {
+        case .ready where pack.updateAvailable:
+            Text("A newer scanner pack is available. The one you have keeps working until you update.")
+        case .ready:
+            Text("Used to identify cards from the camera. Deleting it frees the space and leaves your collection untouched.")
+        case .paused(_, .cellular):
+            Text("Paused automatically because you're not on Wi-Fi. Your progress is saved either way.")
+        default:
+            Text("Lets The Tin identify a card from your camera, offline. One-time download; you can pause and resume it.")
+        }
+    }
+
+    private var installedPackText: String {
+        let version = pack.installedVersion.map { "v\($0)" }
+        let size = pack.installedBytes.map {
+            ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+        }
+        return [version, size].compactMap { $0 }.joined(separator: " · ")
+    }
+
     // MARK: Catalog activity
 
     /// Breadcrumb trail of recent catalog operations (source, outcome, failures) — the on-device
@@ -373,7 +468,6 @@ struct SettingsView: View {
     private var dataSection: some View {
         Section("Data") {
             LabeledContent("Card catalog", value: model.catalogText)
-            LabeledContent("Scanner pack", value: model.fingerprintText)
             Button("Collection report (PDF)") { showingReport = true }
                 .disabled(app.collection?.entries.isEmpty ?? true)
             Button {
