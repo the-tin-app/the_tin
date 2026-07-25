@@ -297,6 +297,7 @@ struct SettingsView: View {
                 LabeledContent("Camera scanning", value: "Unavailable")
                 Text(msg).font(.caption).foregroundStyle(.secondary)
             }
+            LabeledContent("Connection", value: app.network.connectionDescription)
         } header: {
             Text("Camera scanning")
         } footer: {

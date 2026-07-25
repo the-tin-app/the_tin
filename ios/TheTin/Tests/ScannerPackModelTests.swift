@@ -200,6 +200,27 @@ final class ScannerPackModelTests: XCTestCase {
         await pack.waitForDownload()
     }
 
+    /// Device defect: consent used to accumulate, so a single "Download now" over cellular
+    /// silenced the guard for every later download in the session — including one the user
+    /// started expecting Wi-Fi-only behaviour.
+    @MainActor
+    func testCellularConsentDoesNotLeakIntoTheNextPausedResume() async throws {
+        let env = try FingerprintUpdaterTestEnv.makeParts(partSize: 4096)
+        env.remote.failAfterParts = 3
+        let pack = try makePack(env: env)
+        pack.startDownload(allowingExpensive: true)   // user accepted cellular once
+        await pack.waitForDownload()
+        XCTAssertTrue(pack.isPaused)
+
+        env.remote.failAfterParts = nil
+        pack.startDownload()                          // plain Resume — no new consent
+        pack.networkChanged(isExpensive: true)
+
+        XCTAssertEqual(pack.phase.pauseReason, .cellular,
+                       "consent must not carry over into a transfer the user didn't approve")
+        await pack.waitForDownload()
+    }
+
     @MainActor
     func testNetworkChangeIgnoredWhenNothingIsDownloading() async throws {
         let env = try FingerprintUpdaterTestEnv.make()

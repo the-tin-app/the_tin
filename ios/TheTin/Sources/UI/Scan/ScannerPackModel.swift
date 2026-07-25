@@ -26,6 +26,11 @@ final class ScannerPackModel {
         case paused(FingerprintDownloadProgress, PauseReason)
         case ready
         case unavailable(String)
+
+        var pauseReason: PauseReason? {
+            if case .paused(_, let reason) = self { return reason }
+            return nil
+        }
     }
 
     private(set) var phase: Phase = .checking
@@ -100,6 +105,9 @@ final class ScannerPackModel {
 
     var isPaused: Bool { if case .paused = phase { return true }; return false }
 
+    /// Why the transfer is parked, nil when it isn't.
+    var pauseReason: PauseReason? { phase.pauseReason }
+
     /// Progress of whatever transfer is in flight or parked, for the toast and Settings.
     var progress: FingerprintDownloadProgress? {
         switch phase {
@@ -167,7 +175,9 @@ final class ScannerPackModel {
     /// watcher leaves it alone.
     func startDownload(allowingExpensive: Bool = false) {
         guard !isDownloading else { return }
-        if allowingExpensive { allowsExpensive = true }
+        // Assign, don't OR in: consent belongs to the transfer the user approved. Accumulating it
+        // meant one "Download now" over cellular silenced the guard for every later download.
+        allowsExpensive = allowingExpensive
         phase = .downloading(progress ?? FingerprintDownloadProgress(bytesDone: 0,
                                                                      totalBytes: publishedBytes ?? 0))
         downloadTask = Task { [weak self] in
@@ -197,17 +207,19 @@ final class ScannerPackModel {
     /// Polled rather than pushed through SwiftUI: the first cut hung this off an `onChange` in the
     /// tab view and it never fired on device. A poll during an active download costs nothing and
     /// can't be defeated by which screen happens to be mounted.
-    // ponytail: 2 s poll; if NetworkMonitor ever grows real subscribers, subscribe instead.
+    // ponytail: 1 s poll; if NetworkMonitor ever grows real subscribers, subscribe instead.
     private func startNetworkWatch() {
         guard network != nil, networkWatch == nil else { return }
         networkWatch = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
+                // Check first, sleep second: starting a download while already on a metered path
+                // must park immediately, not a second into spending the data.
                 guard let self, self.isDownloading else { return }
                 if self.network?.isExpensive == true, !self.allowsExpensive {
                     self.pause(.cellular)
                     return
                 }
+                try? await Task.sleep(for: .seconds(1))
             }
         }
     }
