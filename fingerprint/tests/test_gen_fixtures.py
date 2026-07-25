@@ -1,4 +1,5 @@
 import os, subprocess, json
+from fpcore import constants as c
 
 def test_gen_writes_references():
     subprocess.run(["python", "scripts/gen_fixtures.py"], check=True)
@@ -10,6 +11,9 @@ def test_gen_writes_references():
     params_path = "tests/fixtures/params.json"
     assert os.path.exists(params_path)
     params = json.load(open(params_path))
-    assert params["fp_version"] == 1
-    assert params["canon_w"] == 660 and params["canon_h"] == 920
-    assert params["orb"]["nfeatures"] == 300
+    # Assert against constants, not literals: this test went red at the nf=300 -> 650
+    # and fp_version 1 -> 3 bumps because it hardcoded the old values. Its job is
+    # "gen_fixtures emits the CURRENT params", not "the params are these numbers".
+    assert params["fp_version"] == c.FP_VERSION
+    assert params["canon_w"] == c.CANON_W and params["canon_h"] == c.CANON_H
+    assert params["orb"]["nfeatures"] == c.ORB_PARAMS["nfeatures"]

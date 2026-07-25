@@ -21,25 +21,65 @@ in every pack built against it, and (Plan 3) the bundled device codebook must ma
 polite 120ms throttle). Re-running skips cards already at the current fp_version, so
 it is safe to interrupt and resume. Do NOT commit `fingerprints.sqlite` or `.cache/`.
 
-## 3. Publish (gzip + manifest)
+## 3. Publish (both distribution formats)
     python scripts/publish_fingerprints.py --db .fp-output/fingerprints.sqlite \
         --version <N> --out .fp-output
-Produces `.fp-output/fingerprint/fingerprints-v<N>.sqlite.gz` and `manifest.json`
-in the Firebase Storage object layout (parallel to `catalog/`).
 
-## 4. Upload to Firebase Storage (manual; needs bucket credentials)
-Upload both objects to the `hobby-tcg` default bucket, preserving paths:
+Produces **two** formats under `.fp-output/`, because they roll out on different clocks:
+
+| Format | Objects | Read by |
+|--------|---------|---------|
+| legacy (frozen) | `fingerprint/fingerprints-v<N>.sqlite.gz` + `fingerprint/manifest.json` | builds shipped before the parts format |
+| parts (current) | `fingerprint/parts/fingerprints-v<N>.part000…` + `fingerprint/parts/manifest.json` | current builds |
+
+Parts are the sqlite split verbatim at 50 MiB, **uncompressed on purpose**: ORB descriptors
+are high-entropy binary and do not compress (measured 41,600 B → 41,613 B — gzip makes them
+slightly bigger). Across a whole pack gzip returns ~9%, all from the keypoint floats, and it
+costs the client a whole-buffer inflate — which is what forced the entire ~800 MB pack through
+device memory. Without it the client streams each part straight to its offset on disk, so peak
+memory is one part and an interrupted download resumes part-by-part.
+
+Concatenating the parts in index order reproduces the sqlite byte-for-byte; `manifest.json`
+carries a per-part sha256 (refetch one corrupt part, not the whole pack) plus the whole-file
+sha256 as the pre-install gate.
+
+Keep publishing both until TestFlight shows no build in the wild still reads the legacy pair,
+then add `--skip-legacy` and delete the old objects from both hosts.
+
+## 4. Upload
+
+Both hosts serve both formats. **Upload parts before the manifest** — a manifest that lists
+parts which aren't served yet strands every client that reads it.
+
+### Self-hosted NAS (primary)
+Copy into the served fingerprint dir, preserving relative paths (see `docs/HANDOFF.md` for
+the real path; `catalog-server` serves any file under it, so no server change is needed):
+
+    rsync -av .fp-output/fingerprint/ <nas>/fingerprint/
+
+### Firebase Storage (fallback; needs bucket credentials)
+The fallback covers a self-hosted server rejecting the device's App Attest environment, so it
+must carry the parts too — otherwise failover lands on a format the current client can't read.
+
+    # parts first, then the manifests
+    gsutil -m cp .fp-output/fingerprint/parts/fingerprints-v<N>.part* \
+        gs://hobby-tcg.firebasestorage.app/fingerprint/parts/
+    gsutil cp .fp-output/fingerprint/parts/manifest.json \
+        gs://hobby-tcg.firebasestorage.app/fingerprint/parts/manifest.json
+    # legacy pair, while still published
     gsutil cp .fp-output/fingerprint/fingerprints-v<N>.sqlite.gz \
         gs://hobby-tcg.firebasestorage.app/fingerprint/fingerprints-v<N>.sqlite.gz
     gsutil cp .fp-output/fingerprint/manifest.json \
         gs://hobby-tcg.firebasestorage.app/fingerprint/manifest.json
-The client fetches these via the Firebase Storage REST endpoint (see
-`ios/TheTin/Sources/Catalog/CatalogRemote.swift`); Plan 3 adds the iOS
-`FingerprintUpdater` that mirrors `CatalogUpdater` (fetch manifest → compare
-version/fpVersion/codebookHash → download → sha256-verify → gunzip → probe → swap).
+
+The iOS `FingerprintUpdater` fetches the parts manifest, downloads missing parts, verifies each
+against its sha256, writes it at `index * partSize`, then gates the assembled file on the whole
+sha256 → probe → atomic swap.
 
 ## Versioning
 - Bump `--version` on every published pack.
 - `fp_version` (in `fpcore/constants.py`) bumps only when canonical size, ORB params,
   or the pack layout change; `codebookHash` changes whenever the codebook is retrained.
-  Plan 3's device gate re-downloads on any of version / fpVersion / codebookHash mismatch.
+  The device gate re-downloads on any of version / fpVersion / codebookHash mismatch.
+- Part filenames carry the version, so publishing v<N+1> never collides with the v<N> parts
+  still being served. Delete the old version's parts once the new manifest is live.
