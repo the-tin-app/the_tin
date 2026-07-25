@@ -53,7 +53,6 @@ struct GroupDetailView: View {
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
     @State private var printRequest: PrintSheetRequest?
-    @State private var deletingEntry: CollectionEntry?
     var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
     @State private var searchIndex = CardSearchIndex()
     // Bulk refiling — stock List multi-select, the same gesture Photos and Files use.
@@ -110,16 +109,6 @@ struct GroupDetailView: View {
         }
         .printSheetFlow($printRequest)
         .onChange(of: model.catalogGeneration) { searchIndex.clear() }
-        .confirmationDialog(
-            "Remove \((try? store.card(id: deletingEntry?.cardId ?? ""))?.name ?? "this card") from your tin?",
-            isPresented: Binding(get: { deletingEntry != nil },
-                                 set: { if !$0 { deletingEntry = nil } }),
-            titleVisibility: .visible,
-            presenting: deletingEntry
-        ) { entry in
-            Button("Remove", role: .destructive) { Task { await model.deleteEntry(id: entry.id) } }
-            Button("Cancel", role: .cancel) {}
-        }
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
                 NavigationStack {
@@ -255,15 +244,12 @@ struct GroupDetailView: View {
             VStack(spacing: 8) {
                 Text(group.map { "Nothing behind “\($0.name)” yet." } ?? "Your tin is empty.")
                     .font(.footnote).foregroundStyle(.secondary)
+                // Text-only: at .small the SF Symbols crowded the capsules and read as noise.
                 HStack(spacing: 8) {
-                    Button { onGetStarted?(.scan) } label: {
-                        Label("Scan a card", systemImage: "camera.viewfinder")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Button { onGetStarted?(.browse) } label: {
-                        Label("Browse sets", systemImage: "square.grid.2x2")
-                    }
-                    .buttonStyle(.bordered)
+                    Button("Scan a card") { onGetStarted?(.scan) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Browse sets") { onGetStarted?(.browse) }
+                        .buttonStyle(.bordered)
                 }
                 .controlSize(.small)
             }
@@ -386,8 +372,12 @@ struct GroupDetailView: View {
             }
         }
         .tag(entry.id)
-        .swipeActions {
-            Button("Remove", role: .destructive) { deletingEntry = entry }
+        // Reveal-then-tap IS the confirmation (Notes/Reminders): a dialog after the swipe made the
+        // row vanish, come back, and ask again. No full swipe, so it can't fire by accident.
+        .swipeActions(allowsFullSwipe: false) {
+            Button("Remove", role: .destructive) {
+                Task { await model.deleteEntry(id: entry.id) }
+            }
         }
         .swipeActions(edge: .leading) {
             Button { editingEntry = entry } label: { Label("Edit", systemImage: "pencil") }

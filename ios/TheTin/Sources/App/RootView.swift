@@ -102,6 +102,7 @@ private struct MainTabView: View {
             NavigationStack(path: $tinPath) {
                 CollectionView(model: collection, store: store, wants: wants,
                                onGetStarted: { selection = $0 == .scan ? .scan : .browse },
+                               scannerReady: pack.phase == .ready,
                                openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) })
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
