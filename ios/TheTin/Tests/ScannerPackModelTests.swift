@@ -11,35 +11,19 @@ private struct RejectingFPRemote: FingerprintRemote {
 final class ScannerPackModelTests: XCTestCase {
     @MainActor
     private func makePack(env: FingerprintUpdaterTestEnv,
-                          updater: FingerprintUpdater? = nil,
-                          fallback: FingerprintUpdater? = nil) throws -> ScannerPackModel {
-        ScannerPackModel(updater: updater ?? env.updater, fallbackUpdater: fallback,
+                          updater: FingerprintUpdater? = nil) throws -> ScannerPackModel {
+        ScannerPackModel(updater: updater ?? env.updater,
                          paths: env.paths, catalogStore: try FixtureCatalog.make(),
                          makeStore: env.makeStore,
                          makeCodebook: { try Codebook.bundled(in: Bundle(for: Self.self)) })
     }
 
-    /// Mirrors the catalog's whole-operation failover: when the self-hosted pack download
-    /// fails (dev-mode server rejecting prod App Attest), the pack must retry the entire
-    /// update against the Firebase fallback instead of stranding on "Download failed".
+    /// The pack has exactly one source (the self-hosted NAS) — it is deliberately NOT mirrored
+    /// to Firebase, because ~500 MB costs real money to back up a ~22 MB catalog tier. So a
+    /// failed download must surface one clear, retryable state rather than crash, spin, or sit
+    /// through a second timeout against a source that doesn't carry the pack.
     @MainActor
-    func testDownloadFailsOverToFallbackUpdater() async throws {
-        let env = try FingerprintUpdaterTestEnv.make()   // working remote → the fallback
-        let primary = FingerprintUpdater(remote: RejectingFPRemote(), paths: env.paths)
-        let pack = try makePack(env: env, updater: primary, fallback: env.updater)
-
-        await pack.refresh()
-        XCTAssertEqual(pack.phase, .notInstalled)
-        pack.startDownload()
-        await pack.waitForDownload()
-
-        XCTAssertEqual(pack.phase, .ready)
-    }
-
-    /// No fallback configured (Firebase-only wiring): a failed download must surface a
-    /// retryable state, not crash or spin.
-    @MainActor
-    func testDownloadFailureWithoutFallbackIsUnavailable() async throws {
+    func testDownloadFailureIsRetryableNotFatal() async throws {
         let env = try FingerprintUpdaterTestEnv.make()
         let primary = FingerprintUpdater(remote: RejectingFPRemote(), paths: env.paths)
         let pack = try makePack(env: env, updater: primary)

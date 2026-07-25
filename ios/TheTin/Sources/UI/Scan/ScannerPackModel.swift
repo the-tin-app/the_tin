@@ -47,9 +47,6 @@ final class ScannerPackModel {
     private(set) var updateAvailable = false
 
     private let updater: FingerprintUpdater
-    // Lazy on purpose: the Firebase-backed fallback calls `Storage.storage()`, which traps
-    // unless FirebaseApp is fully configured — only construct it when failover actually fires.
-    private let fallbackUpdater: () -> FingerprintUpdater?
     private let paths: FingerprintPaths
     private let catalogStore: CatalogStore
     private let makeStore: (String) throws -> FingerprintStore
@@ -64,27 +61,27 @@ final class ScannerPackModel {
     private var allowsExpensive = false
 
     init(updater: FingerprintUpdater,
-         fallbackUpdater: @autoclosure @escaping () -> FingerprintUpdater? = nil,
          paths: FingerprintPaths, catalogStore: CatalogStore,
          makeStore: @escaping (String) throws -> FingerprintStore,
          makeCodebook: @escaping () throws -> Codebook,
          network: NetworkMonitor? = nil) {
-        self.updater = updater; self.fallbackUpdater = fallbackUpdater
+        self.updater = updater
         self.paths = paths; self.catalogStore = catalogStore
         self.makeStore = makeStore; self.makeCodebook = makeCodebook
         self.network = network
     }
 
-    /// Convenience wiring used by the app (tests inject their own doubles). Self-hosted pack
-    /// download (App Attest) when a self-host URL is configured — the pack is served alongside
-    /// the catalog under `/fingerprint/`, with the Firebase Storage SDK as the whole-operation
-    /// fallback. When self-host is unconfigured, Firebase is the primary and only source.
-    /// Mirrors `AppModel.makeDefault()`.
+    /// Convenience wiring used by the app (tests inject their own doubles). The pack is served
+    /// from the self-hosted NAS only (App Attest, alongside the catalog under `/fingerprint/`).
+    ///
+    /// **No Firebase fallback, by decision (2026-07-24).** Unlike the catalog — whose casual tier
+    /// is ~22 MB and is mirrored to Firebase Storage as a backup — the pack is ~500 MB, and
+    /// mirroring it costs real money to back up an artifact an order of magnitude smaller. It was
+    /// never actually mirrored (`fingerprint/` doesn't exist in the bucket), so the fallback this
+    /// replaces could only ever fail: it turned a clear "download failed" into a doubled timeout.
     static func live(catalogStore: CatalogStore, network: NetworkMonitor) -> ScannerPackModel {
         ScannerPackModel(
             updater: FingerprintUpdater(remote: liveRemote(), paths: .default()),
-            fallbackUpdater: AppConfig.selfHostBaseURL == nil ? nil
-                : FingerprintUpdater(remote: StorageFingerprintRemote(), paths: .default()),
             paths: .default(),
             catalogStore: catalogStore,
             makeStore: { try FingerprintStore(path: $0) },
@@ -93,7 +90,7 @@ final class ScannerPackModel {
     }
 
     private static func liveRemote() -> FingerprintRemote {
-        guard let url = AppConfig.selfHostBaseURL else { return StorageFingerprintRemote() }
+        guard let url = AppConfig.selfHostBaseURL else { return UnavailableFingerprintRemote() }
         let session = AppAttestSessionProvider(baseURL: url, attestor: DeviceCheckAttestor(),
                                                http: URLSessionHTTPClient(), keys: KeychainStore())
         return SelfHostedFingerprintRemote(baseURL: url, session: session)
@@ -238,7 +235,7 @@ final class ScannerPackModel {
     private func runDownload() async {
         defer { stopNetworkWatch() }
         do {
-            _ = try await ensureLatestWithFailover()
+            _ = try await updater.ensureLatest(onProgress: progressSink())
             updateAvailable = false
             allowsExpensive = false      // a fresh transfer must ask again
             installedVersion = updater.installedState()?.version
@@ -256,19 +253,6 @@ final class ScannerPackModel {
             } else {
                 phase = .unavailable("Download failed. Check your connection and try again.")
             }
-        }
-    }
-
-    /// Whole-operation failover mirroring `AppModel.updateFromPrimaryOrFallback`: the update runs
-    /// entirely against the primary (manifest + pack together); on ANY failure the whole update
-    /// retries against the fallback. Never mixes the two sources' manifests/artifacts. Covers a
-    /// dev-mode self-hosted server rejecting production App Attest.
-    private func ensureLatestWithFailover() async throws -> FingerprintUpdateOutcome {
-        do { return try await updater.ensureLatest(onProgress: progressSink()) }
-        catch is CancellationError { throw CancellationError() }
-        catch {
-            guard let fallback = fallbackUpdater() else { throw error }
-            return try await fallback.ensureLatest(onProgress: progressSink())
         }
     }
 
