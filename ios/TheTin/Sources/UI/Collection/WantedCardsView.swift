@@ -284,10 +284,12 @@ private struct WishlistTile: View {
                 .overlay(alignment: .topLeading) { priorityDot }
                 .overlay(alignment: .topTrailing) { noteGlyph }
             Text(card.name).font(.caption).lineLimit(1)
-            if inCollectedSet {
-                Text("in a set you collect")
-                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-            }
+            // Always occupies its line, blank when it doesn't apply: a LazyVGrid row sizes to its
+            // tallest cell, so showing this on some tiles and not others left the art and prices
+            // in one row sitting at different heights. Same fix #79 applied to the sets grid.
+            Text(inCollectedSet ? "In a set you collect" : "")
+                .font(.caption2).foregroundStyle(.tertiary)
+                .lineLimit(1, reservesSpace: true)
             priceLabel
         }
     }
