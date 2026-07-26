@@ -24,23 +24,20 @@ struct WantedCardsView: View {
 
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
 
-    /// Bundles every store-backed read resolved once per `body` evaluation, so search/sort/group
-    /// changes don't re-trigger O(N) SQLite reads per card.
-    private struct Resolved {
-        var allCards: [CardRecord]
-        var priceRecords: [String: PriceRecord]
-        var rawUsd: [String: Double]
-        var setsById: [String: SetRecord]
+    /// Bundles every store-backed read the screen needs. `fileprivate` so `WishlistCatalog`
+    /// (below) can hold one; the view still refers to it unqualified.
+    fileprivate struct Resolved {
+        var allCards: [CardRecord] = []
+        var priceRecords: [String: PriceRecord] = [:]
+        var rawUsd: [String: Double] = [:]
+        var setsById: [String: SetRecord] = [:]
     }
 
-    private var resolved: Resolved {
-        let allCards = (try? store.cards(ids: Array(wants.wanted))) ?? []
-        let priceRecords = (try? store.prices(cardIds: allCards.map(\.id))) ?? [:]
-        let setsById = Dictionary(uniqueKeysWithValues: ((try? store.sets()) ?? []).map { ($0.id, $0) })
-        // compactMapValues: a null raw_usd (EUR/graded only) is treated as unpriced, not $0.
-        return Resolved(allCards: allCards, priceRecords: priceRecords,
-                         rawUsd: priceRecords.compactMapValues(\.rawUsd), setsById: setsById)
-    }
+    /// The catalog reads, cached between body passes. This used to be a computed property called
+    /// on the first line of `body` — so a `.searchable` screen re-ran `store.cards`,
+    /// `store.prices` AND `store.sets()` (every set in the catalog) on every keystroke, over a
+    /// wishlist that can hold hundreds of cards.
+    @State private var catalog = WishlistCatalog()
 
     /// Effective priority of a wanted card — a bare-hearted card (no entry) is Normal.
     private func priority(_ id: String) -> WantPriority { wants.entries[id]?.priority ?? .normal }
@@ -62,7 +59,7 @@ struct WantedCardsView: View {
     }
 
     var body: some View {
-        let r = resolved
+        let r = catalog.resolve(wanted: wants.wanted, store: store)
         let displayedCards = displayed(r)
         Group {
             if r.allCards.isEmpty {
@@ -90,6 +87,10 @@ struct WantedCardsView: View {
             exportDoc = nil
         }
         .printSheetFlow($printRequest)
+        // A new catalog artifact can rename a set or reprice every card, and the cache keys off
+        // the wishlist alone — so the swap has to invalidate it explicitly, exactly as
+        // CollectionView does for `CardSearchIndex`.
+        .onChange(of: collection?.catalogGeneration) { catalog.clear() }
         .task(id: wants.entries.count) { rebuildShareLink(r) }
         .sheet(item: $editing) { card in
             WishlistEditSheet(card: card, price: r.rawUsd[card.id], wants: wants)
@@ -264,6 +265,41 @@ struct WantedCardsView: View {
 
     private func printSheet(_ r: Resolved, priority p: WantPriority?) {
         printRequest = PrintSheet.wantRequest(cards: subset(r, priority: p), store: store)
+    }
+}
+
+/// The wishlist's catalog reads, held across body passes.
+///
+/// A reference type held in `@State`, for the same reason `CardSearchIndex` is one: filling it
+/// while `body` evaluates isn't a state mutation, so it needs no `.task` round trip and there's
+/// no empty first frame to flash through. Two different lifetimes are cached separately — the
+/// set table changes only when the catalog artifact does, while cards and prices change whenever
+/// the wishlist does. Filtering, sorting and grouping deliberately stay live: they're arithmetic
+/// over an array that's already in memory, and caching them would only add ways to go stale.
+fileprivate final class WishlistCatalog {
+    private var sets: [String: SetRecord]?
+    private var wantedKey: Set<String>?
+    private var resolved = WantedCardsView.Resolved()
+
+    func resolve(wanted: Set<String>, store: CatalogStore) -> WantedCardsView.Resolved {
+        if sets == nil {
+            sets = Dictionary(uniqueKeysWithValues: ((try? store.sets()) ?? []).map { ($0.id, $0) })
+        }
+        guard wantedKey != wanted else { return resolved }
+        let allCards = (try? store.cards(ids: Array(wanted))) ?? []
+        let priceRecords = (try? store.prices(cardIds: allCards.map(\.id))) ?? [:]
+        // compactMapValues: a null raw_usd (EUR/graded only) is treated as unpriced, not $0.
+        resolved = WantedCardsView.Resolved(allCards: allCards, priceRecords: priceRecords,
+                                            rawUsd: priceRecords.compactMapValues(\.rawUsd),
+                                            setsById: sets ?? [:])
+        wantedKey = wanted
+        return resolved
+    }
+
+    func clear() {
+        sets = nil
+        wantedKey = nil
+        resolved = WantedCardsView.Resolved()
     }
 }
 

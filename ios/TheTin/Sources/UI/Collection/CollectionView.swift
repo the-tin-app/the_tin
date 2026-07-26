@@ -19,6 +19,20 @@ final class CollectionModel {
     private(set) var matrixByCard: [String: [MatrixPrice]] = [:]
     private(set) var gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]
     private(set) var deltasByCard: [String: [DeltaRecord]] = [:]
+    /// Derived value read-outs, recomputed once per entries/prices change instead of per access.
+    /// Every one of these used to be a computed property, and every one was read from inside
+    /// `body`: `CollectionView.groupRow` called `groupValue` for each divider on each body pass
+    /// (an O(n) filter plus a full `GroupStats.totalValue` every time — 40 dividers over 5,000
+    /// entries is 200k filter steps to draw one list), and `tradeLink` called `tradeEntries`,
+    /// which SORTS the trade subset, purely to render its count. They change exactly when the
+    /// entries stream fires or the catalog is swapped, which is where they're now computed.
+    private(set) var valuesByGroup: [String: (total: Double, pricedCards: Int, totalCards: Int)] = [:]
+    private(set) var tinValue: (total: Double, pricedCards: Int, totalCards: Int) = (0, 0, 0)
+    /// Copies you've marked as available to trade, most valuable first — your spares are the
+    /// currency of this hobby, and the app had no notion of them.
+    private(set) var tradeEntries: [CollectionEntry] = []
+    /// What the trade list is worth, in the same best-effort terms as the tin total.
+    private(set) var tradeValue: (total: Double, pricedCards: Int, totalCards: Int) = (0, 0, 0)
     private var streamTasks: [Task<Void, Never>] = []
     /// Mirrors the header's numbers to the home-screen widget. nil until AppModel injects one
     /// (and in unit tests that don't care) — publishing is then a no-op.
@@ -83,6 +97,29 @@ final class CollectionModel {
         matrixByCard = (try? store.matrixPrices(cardIds: ids)) ?? [:]
         gradedByPrintingByCard = (try? store.gradedPrintingPrices(cardIds: ids)) ?? [:]
         deltasByCard = (try? store.deltas(cardIds: ids)) ?? [:]
+        recomputeValues()
+    }
+
+    /// One bucketing pass over `entries`, then one `totalValue` per bucket — O(2n) for the whole
+    /// screen, where per-divider `groupValue` calls were O(n × dividers).
+    private func recomputeValues() {
+        var byGroup: [String: [CollectionEntry]] = [:]
+        for entry in entries { byGroup[entry.groupId, default: []].append(entry) }
+        valuesByGroup = byGroup.mapValues { totalValue($0) }
+        tinValue = totalValue(entries)
+        let forTrade = entries.filter(\.isForTrade)
+        tradeEntries = GroupStats.sortedByValueDescending(
+            entries: forTrade, prices: prices,
+            variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+            matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
+        tradeValue = totalValue(forTrade)
+    }
+
+    /// `GroupStats.totalValue` with this model's price tables already threaded in.
+    private func totalValue(_ entries: [CollectionEntry]) -> (total: Double, pricedCards: Int, totalCards: Int) {
+        GroupStats.totalValue(entries: entries, prices: prices,
+                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
     }
 
     func entries(in groupId: String) -> [CollectionEntry] {
@@ -107,17 +144,10 @@ final class CollectionModel {
                                      matrix: matrix, gradedByPrinting: gradedByPrinting)
     }
 
+    /// A divider's value. Served from `valuesByGroup`; a divider with no entries has no bucket
+    /// and reads as zero, which is what an empty divider is worth.
     func groupValue(_ groupId: String) -> (total: Double, pricedCards: Int, totalCards: Int) {
-        GroupStats.totalValue(entries: entries(in: groupId), prices: prices,
-                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
-                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
-    }
-
-    /// The whole tin's value across every group and ungrouped card.
-    var tinValue: (total: Double, pricedCards: Int, totalCards: Int) {
-        GroupStats.totalValue(entries: entries, prices: prices,
-                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
-                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
+        valuesByGroup[groupId] ?? (0, 0, 0)
     }
 
     /// The catalog's price date — prices always carry their as-of stamp (Caption Ledger Rule).
@@ -384,22 +414,6 @@ final class CollectionModel {
 
     // MARK: Trade list
 
-    /// Copies you've marked as available to trade, most valuable first — your spares are the
-    /// currency of this hobby, and the app had no notion of them.
-    var tradeEntries: [CollectionEntry] {
-        GroupStats.sortedByValueDescending(
-            entries: entries.filter(\.isForTrade), prices: prices,
-            variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
-            matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
-    }
-
-    /// What the trade list is worth, in the same best-effort terms as the tin total.
-    var tradeValue: (total: Double, pricedCards: Int, totalCards: Int) {
-        GroupStats.totalValue(entries: entries.filter(\.isForTrade), prices: prices,
-                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
-                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
-    }
-
     /// Cards you hold more than one physical copy of. Marking is explicit by design, but an
     /// explicit-only feature opens on a blank screen forever — this is what the empty trade list
     /// offers to flag for you.
@@ -486,10 +500,23 @@ struct TinAllCardsRoute: Hashable {}
 final class CardSearchIndex {
     private var haystacks: [String: String] = [:]
     private var names: [String: String] = [:]
+    /// cardId → record, including misses (a `nil` value is a cached "not in this catalog", so a
+    /// missing card isn't re-queried on every pass). Double-optional subscript is deliberate.
+    private var cards: [String: CardRecord?] = [:]
+
+    /// The catalog record for a card, cached. `CollectionView.riffleCards` spreads up to seven
+    /// cards per divider and re-ran this query for every one of them on every body pass — ~280
+    /// SQLite reads to draw a 40-divider tin.
+    func card(id cardId: String, store: CatalogStore) -> CardRecord? {
+        if let cached = cards[cardId] { return cached }
+        let record = try? store.card(id: cardId)
+        cards[cardId] = record
+        return record
+    }
 
     func name(for entry: CollectionEntry, store: CatalogStore) -> String {
         if let cached = names[entry.cardId] { return cached }
-        let name = (try? store.card(id: entry.cardId))?.name ?? entry.cardId
+        let name = card(id: entry.cardId, store: store)?.name ?? entry.cardId
         names[entry.cardId] = name
         return name
     }
@@ -508,7 +535,7 @@ final class CardSearchIndex {
     private func haystack(for entry: CollectionEntry, store: CatalogStore) -> String {
         if let cached = haystacks[entry.cardId] { return cached }
         var parts = [entry.cardId]
-        if let card = try? store.card(id: entry.cardId) {
+        if let card = card(id: entry.cardId, store: store) {
             parts.append(contentsOf: [card.name, card.setId, card.number])
             if let set = try? store.set(id: card.setId) { parts.append(set.name) }
         }
@@ -520,6 +547,7 @@ final class CardSearchIndex {
     func clear() {
         haystacks.removeAll()
         names.removeAll()
+        cards.removeAll()
     }
 }
 
@@ -875,12 +903,14 @@ struct CollectionView: View {
         NavigationLink(value: value) { EmptyView() }.opacity(0)
     }
 
-    /// The distinct cards a row spreads, newest first.
+    /// The distinct cards a row spreads, newest first. Reads through `searchIndex`'s card cache —
+    /// this runs for every divider on every body pass, so uncached it was the single biggest
+    /// source of SQLite traffic on the tin's landing screen.
     private func riffleCards(_ entries: [CollectionEntry]) -> [CardRecord] {
         var seen = Set<String>()
         var out: [CardRecord] = []
         for e in entries where seen.insert(e.cardId).inserted {
-            if let c = try? store.card(id: e.cardId) { out.append(c) }
+            if let c = searchIndex.card(id: e.cardId, store: store) { out.append(c) }
             if out.count == Self.riffleLimit { break }
         }
         return out

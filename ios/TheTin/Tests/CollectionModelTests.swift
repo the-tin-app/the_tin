@@ -138,6 +138,66 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(model.allOwnedEntries.count, model.entries.count)
     }
 
+    /// The cached per-divider totals must equal what a direct `GroupStats.totalValue` over that
+    /// divider's entries returns — the whole point of bucketing in one pass is that nobody can
+    /// tell it happened. Ungrouped entries ("" groupId) are their own bucket and must not leak
+    /// into a named divider's total.
+    func testCachedGroupTotalsMatchDirectComputation() async throws {
+        await model.createGroup(name: "Binder A")
+        await model.createGroup(name: "Binder B")
+        await waitForStreams()
+        let a = try XCTUnwrap(model.groups.first).id
+        let b = try XCTUnwrap(model.groups.last).id
+        XCTAssertNotEqual(a, b)
+
+        for (card, group) in [("swsh7-215", a), ("sv1-25", a), ("swsh7-12", b), ("ex6-58", "")] {
+            await model.saveEntry(CollectionEntry(
+                id: UUID().uuidString, cardId: card, groupId: group, qty: 1, condition: "NM",
+                grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        }
+        await waitForStreams()
+
+        for group in [a, b, ""] {
+            let direct = GroupStats.totalValue(
+                entries: model.entries(in: group), prices: model.prices,
+                variantsByCard: model.variantsByCard, conditionsByCard: model.conditionsByCard,
+                matrixByCard: model.matrixByCard,
+                gradedByPrintingByCard: model.gradedByPrintingByCard)
+            let cached = model.groupValue(group)
+            XCTAssertEqual(cached.total, direct.total, accuracy: 0.001, "group \(group)")
+            XCTAssertEqual(cached.pricedCards, direct.pricedCards, "group \(group)")
+            XCTAssertEqual(cached.totalCards, direct.totalCards, "group \(group)")
+        }
+
+        // The whole tin is every bucket, so its card count is the sum of theirs.
+        XCTAssertEqual(model.tinValue.totalCards, 4)
+        XCTAssertEqual(model.tinValue.total,
+                       [a, b, ""].reduce(0) { $0 + model.groupValue($1).total }, accuracy: 0.001)
+        // A divider that has never held a card has no bucket at all.
+        XCTAssertEqual(model.groupValue("never-existed").totalCards, 0)
+    }
+
+    /// The trade list is cached alongside the totals; deleting the last flagged copy has to empty
+    /// it, or the tin's "For Trade" row keeps counting a card that isn't there.
+    func testCachedTradeListTracksTheForTradeFlag() async throws {
+        let entry = CollectionEntry(
+            id: "t1", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date())
+        await model.saveEntry(entry)
+        await waitForStreams()
+        XCTAssertTrue(model.tradeEntries.isEmpty)
+
+        await model.setForTrade(try XCTUnwrap(model.entries.first), true)
+        await waitForStreams()
+        XCTAssertEqual(model.tradeEntries.map(\.cardId), ["swsh7-215"])
+        XCTAssertEqual(model.tradeValue.totalCards, 1)
+
+        await model.setForTrade(try XCTUnwrap(model.entries.first), false)
+        await waitForStreams()
+        XCTAssertTrue(model.tradeEntries.isEmpty)
+        XCTAssertEqual(model.tradeValue.totalCards, 0)
+    }
+
     func testEntriesChangePublishesWidgetSnapshot() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

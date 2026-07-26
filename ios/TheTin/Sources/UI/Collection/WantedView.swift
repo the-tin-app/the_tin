@@ -49,21 +49,12 @@ struct SetGoalsListView: View {
 
     private var ownedIds: Set<String> { Set((collection?.entries ?? []).map(\.cardId)) }
 
-    /// Recomputed per body pass from the catalog. One `cards(inSet:)` + one price read per chased
-    /// set — a handful of sets, not a scan of the catalog.
-    private var progress: [SetGoalProgress] {
-        let owned = ownedIds
-        let rows = (goals?.setIds ?? []).compactMap { setId -> SetGoalProgress? in
-            guard let set = try? store.set(id: setId) else { return nil }
-            let cards = (try? store.cards(inSet: setId)) ?? []
-            let prices = (try? store.previewPrices(cardIds: cards.map(\.id))) ?? [:]
-            return SetGoals.progress(set: set, cards: cards, ownedCardIds: owned, prices: prices)
-        }
-        return SetGoals.sorted(rows)
-    }
+    /// The per-set catalog reads, cached. The IO is what's expensive and what's stable; the
+    /// progress arithmetic on top of it is neither, so only the IO is held.
+    @State private var catalog = SetGoalCatalog()
 
     var body: some View {
-        let rows = progress
+        let rows = catalog.progress(setIds: goals?.setIds ?? [], ownedCardIds: ownedIds, store: store)
         List {
             ForEach(rows) { row in
                 NavigationLink(value: SetID(raw: row.set.id)) {
@@ -81,6 +72,7 @@ struct SetGoalsListView: View {
                 }
             }
         }
+        .onChange(of: collection?.catalogGeneration) { catalog.clear() }
         .navigationDestination(for: SetID.self) { setID in
             if let set = try? store.set(id: setID.raw) {
                 SetDetailView(model: SetDetailModel(store: store, set: set, filter: .missing),
@@ -89,6 +81,46 @@ struct SetGoalsListView: View {
             }
         }
     }
+}
+
+/// Per-set catalog reads for the goals list, held across body passes.
+///
+/// Same reference-type-in-`@State` pattern as `CardSearchIndex` and `WishlistCatalog`. This
+/// screen ran one `cards(inSet:)` plus one price read **per chased set, per body pass** — forty
+/// goals is roughly 8,000 rows of SQLite every time SwiftUI looks at the list.
+///
+/// Only the catalog side is cached. `SetGoals.progress` is recomputed live against the caller's
+/// owned-card set, so acquiring a card moves the bar immediately without any invalidation — the
+/// cheap half stays honest by construction.
+fileprivate final class SetGoalCatalog {
+    private struct Cached {
+        let set: SetRecord
+        let cards: [CardRecord]
+        let prices: [String: Double]
+    }
+    private var bySet: [String: Cached] = [:]
+
+    func progress(setIds: Set<String>, ownedCardIds: Set<String>,
+                  store: CatalogStore) -> [SetGoalProgress] {
+        let rows = setIds.compactMap { setId -> SetGoalProgress? in
+            guard let cached = cached(setId, store: store) else { return nil }
+            return SetGoals.progress(set: cached.set, cards: cached.cards,
+                                     ownedCardIds: ownedCardIds, prices: cached.prices)
+        }
+        return SetGoals.sorted(rows)
+    }
+
+    private func cached(_ setId: String, store: CatalogStore) -> Cached? {
+        if let hit = bySet[setId] { return hit }
+        guard let set = try? store.set(id: setId) else { return nil }
+        let cards = (try? store.cards(inSet: setId)) ?? []
+        let prices = (try? store.previewPrices(cardIds: cards.map(\.id))) ?? [:]
+        let entry = Cached(set: set, cards: cards, prices: prices)
+        bySet[setId] = entry
+        return entry
+    }
+
+    func clear() { bySet.removeAll() }
 }
 
 /// One chased set: cover art, how far in you are, and what the rest costs.
