@@ -171,8 +171,34 @@ describe("applyExport with skuMeta (printing labels)", () => {
       ],
       asOf: "2026-07-19",
     }, idByTcg, skuMeta);
-    expect(db.prepare("SELECT raw_usd FROM price_latest WHERE card_id='base1-4'").get())
-      .toEqual({ raw_usd: 400 }); // 1st Edition (priority 0), not last-written Unlimited
+    expect(db.prepare("SELECT raw_usd, raw_printing FROM price_latest WHERE card_id='base1-4'").get())
+      .toEqual({ raw_usd: 400, raw_printing: "1st Edition" }); // priority 0, not last-written Unlimited
+  });
+
+  // The basis flip that made a card read +1800% while its own detail screen said +0.2%: the
+  // primary printing has no market price tonight, so the pick falls through to a printing an
+  // order of magnitude away. raw_printing is what lets the delta join notice.
+  it("falls through to the next printing when the primary has no market price, and records it", () => {
+    const db = makeDb();
+    applyExport(db, {
+      cards: [
+        { tcgPlayerId: 100, name: "", setId: "", cardNumber: "", marketPrice: null, lowPrice: null, sellers: null, lastPriceUpdate: "" },
+        { tcgPlayerId: 200, name: "", setId: "", cardNumber: "", marketPrice: 50, lowPrice: null, sellers: null, lastPriceUpdate: "" },
+      ],
+      asOf: "2026-07-19",
+    }, idByTcg, skuMeta);
+    expect(db.prepare("SELECT raw_usd, raw_printing FROM price_latest WHERE card_id='base1-4'").get())
+      .toEqual({ raw_usd: 50, raw_printing: "Unlimited" }); // NOT 1st Edition — it had no price
+  });
+
+  it("records a null basis when the winning SKU has no printing label", () => {
+    const db = makeDb();
+    applyExport(db, {
+      cards: [{ tcgPlayerId: 100, name: "", setId: "", cardNumber: "", marketPrice: 400, lowPrice: null, sellers: null, lastPriceUpdate: "" }],
+      asOf: "2026-07-19",
+    }, idByTcg);   // no skuMeta
+    expect(db.prepare("SELECT raw_usd, raw_printing FROM price_latest WHERE card_id='base1-4'").get())
+      .toEqual({ raw_usd: 400, raw_printing: null });
   });
 
   it("writes per-printing graded rows and keeps psaN on the highest-priority SKU", () => {
