@@ -2,14 +2,11 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { monthStartIso, computeSnapshot, writeFundingBlock, refreshFunding } from "../scripts/refresh-funding";
-import { FetchLike } from "../src/upstream/openCollective";
+import { computeSnapshot, readSupporters, writeManifestBlocks, refreshFunding } from "../scripts/refresh-funding";
+import { FetchLike } from "../src/upstream/githubSponsors";
 
-describe("monthStartIso", () => {
-  it("returns the first instant of the current UTC month", () => {
-    expect(monthStartIso(new Date("2026-07-12T18:19:00Z"))).toBe("2026-07-01T00:00:00Z");
-  });
-});
+const tmp = () => mkdtempSync(join(tmpdir(), "funding-"));
+const manifestIn = (dir: string) => JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
 
 describe("computeSnapshot", () => {
   it("computes fundedPct as raised/goal", () => {
@@ -24,38 +21,105 @@ describe("computeSnapshot", () => {
   });
 });
 
-describe("writeFundingBlock", () => {
+describe("readSupporters", () => {
+  const write = (dir: string, body: unknown) =>
+    writeFileSync(join(dir, "supporters.json"), JSON.stringify(body));
+
+  it("returns [] when nobody is listed yet (no file)", () => {
+    expect(readSupporters(tmp())).toEqual([]);
+  });
+
+  it("reads name, tier and link", () => {
+    const dir = tmp();
+    write(dir, { supporters: [{ name: "Ada", tier: "secret-rare", url: "https://example.com" }] });
+    expect(readSupporters(dir)).toEqual([{ name: "Ada", tier: "secret-rare", url: "https://example.com" }]);
+  });
+
+  it("drops entries with no usable name instead of shipping a blank row", () => {
+    const dir = tmp();
+    write(dir, { supporters: [{ name: "  " }, { tier: "holo" }, "Ada", null, { name: "Grace" }] });
+    expect(readSupporters(dir)).toEqual([{ name: "Grace" }]);
+  });
+
+  it("strips non-https links rather than sending one to a phone", () => {
+    const dir = tmp();
+    write(dir, { supporters: [{ name: "Ada", url: "javascript:alert(1)" }, { name: "Bob", url: "http://x.test" }] });
+    expect(readSupporters(dir)).toEqual([{ name: "Ada" }, { name: "Bob" }]);
+  });
+
+  it("tolerates a file whose supporters key is missing or not an array", () => {
+    const dir = tmp();
+    write(dir, { note: "placeholder" });
+    expect(readSupporters(dir)).toEqual([]);
+  });
+});
+
+describe("writeManifestBlocks", () => {
   it("merges funding into an existing manifest without clobbering catalog fields", () => {
-    const dir = mkdtempSync(join(tmpdir(), "funding-"));
+    const dir = tmp();
     writeFileSync(join(dir, "manifest.json"), JSON.stringify({ version: 7, core: { path: "core-v7.sqlite.gz" } }));
     const snap = computeSnapshot(6300, 15000, new Date("2026-07-12T00:00:00Z"));
-    writeFundingBlock(dir, snap);
-    const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+    writeManifestBlocks(dir, { funding: snap });
+    const m = manifestIn(dir);
     expect(m.version).toBe(7);
     expect(m.core.path).toBe("core-v7.sqlite.gz");
     expect(m.funding).toEqual(snap);
   });
 
+  it("writes supporters without disturbing an existing funding block", () => {
+    const dir = tmp();
+    const snap = computeSnapshot(6300, 15000, new Date("2026-07-12T00:00:00Z"));
+    writeManifestBlocks(dir, { funding: snap });
+    writeManifestBlocks(dir, { supporters: [{ name: "Ada" }] });
+    const m = manifestIn(dir);
+    expect(m.funding).toEqual(snap);
+    expect(m.supporters).toEqual([{ name: "Ada" }]);
+  });
+
+  it("publishes an empty supporters list — an emptied file must clear the screen", () => {
+    const dir = tmp();
+    writeManifestBlocks(dir, { supporters: [{ name: "Ada" }] });
+    writeManifestBlocks(dir, { supporters: [] });
+    expect(manifestIn(dir).supporters).toEqual([]);
+  });
+
   it("creates a manifest when none exists yet", () => {
-    const dir = mkdtempSync(join(tmpdir(), "funding-"));
+    const dir = tmp();
     const snap = computeSnapshot(0, 15000, new Date("2026-07-12T00:00:00Z"));
-    writeFundingBlock(dir, snap);
-    expect(JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")).funding).toEqual(snap);
+    writeManifestBlocks(dir, { funding: snap });
+    expect(manifestIn(dir).funding).toEqual(snap);
   });
 });
 
 describe("refreshFunding", () => {
-  it("fetches OC, computes, and writes the block", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "funding-"));
+  const respond = (org: unknown): FetchLike => async () => ({
+    ok: true, status: 200, json: async () => ({ data: { organization: org } }),
+  });
+
+  it("fetches GitHub, computes, and writes the block", async () => {
+    const dir = tmp();
     writeFileSync(join(dir, "manifest.json"), JSON.stringify({ version: 7 }));
-    const fetchFn: FetchLike = async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ data: { account: { stats: { totalAmountReceived: { valueInCents: 7500 }, balance: { valueInCents: 20000 } } } } }),
+    const snap = await refreshFunding({
+      catalogDir: dir, login: "the-tin-app", token: "tok", goalCents: 15000,
+      now: new Date("2026-07-12T00:00:00Z"),
+      fetchFn: respond({ monthlyEstimatedSponsorsIncomeInCents: 7500, sponsorsListing: null }),
     });
-    const snap = await refreshFunding({ catalogDir: dir, ocSlug: "the-tin", goalCents: 15000, now: new Date("2026-07-12T00:00:00Z"), fetchFn });
     expect(snap.raisedCents).toBe(7500);
     expect(snap.fundedPct).toBeCloseTo(0.5);
-    expect(JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")).funding.raisedCents).toBe(7500);
+    expect(manifestIn(dir).funding.raisedCents).toBe(7500);
+    expect(manifestIn(dir).version).toBe(7);
+  });
+
+  it("prefers the goal configured on the Sponsors page over the CLI fallback", async () => {
+    const snap = await refreshFunding({
+      catalogDir: tmp(), login: "the-tin-app", token: "tok", goalCents: 15000,
+      now: new Date("2026-07-12T00:00:00Z"),
+      fetchFn: respond({
+        monthlyEstimatedSponsorsIncomeInCents: 25000,
+        sponsorsListing: { activeGoal: { kind: "MONTHLY_SPONSORSHIP_AMOUNT", targetValue: 500 } },
+      }),
+    });
+    expect(snap.monthlyGoalCents).toBe(50000);
+    expect(snap.fundedPct).toBeCloseTo(0.5);
   });
 });
