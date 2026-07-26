@@ -61,6 +61,11 @@ struct GroupDetailView: View {
     @State private var choosingDestination = false
     @State private var showingNewDivider = false
     @State private var newDividerName = ""
+    @State private var sellingEntry: CollectionEntry?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The "Gone" section starts closed: it's history, not inventory, and on a collection sold
+    /// down over years it would otherwise be the biggest thing on the screen.
+    @State private var showingGone = false
 
     var body: some View {
         List(selection: $selection) {
@@ -79,6 +84,10 @@ struct GroupDetailView: View {
                                    header: "Behind dividers", showDivider: true)
                 }
                 }
+                // Outside the empty branch on purpose: sell your last card and the stack IS
+                // empty of things you own, but the history of what was there is exactly what
+                // you'd have come looking for.
+                if !isSelecting { goneSection }
             } else {
                 searchResults
             }
@@ -118,6 +127,14 @@ struct GroupDetailView: View {
                                   matrix: model.matrixByCard[entry.cardId] ?? []) { updated in
                         await model.saveEntry(updated)
                     }
+                }
+            }
+        }
+        .sheet(item: $sellingEntry) { entry in
+            NavigationStack {
+                MarkSoldSheet(card: try? store.card(id: entry.cardId), entry: entry,
+                              marketValue: model.entryValue(entry)) { date, amount in
+                    await model.markSold(entry, on: date, for: amount)
                 }
             }
         }
@@ -326,6 +343,61 @@ struct GroupDetailView: View {
         }
     }
 
+    /// Cards that have left this stack. Collapsed, below everything, and never part of a total —
+    /// the point of recording a sale is that it stops counting, while the card stays on the
+    /// record. Empty ⇒ no section at all, so nobody who has never sold anything sees it.
+    @ViewBuilder private var goneSection: some View {
+        let gone = group.map { g in model.soldEntries.filter { $0.groupId == g.id } }
+            ?? model.soldEntries
+        if !gone.isEmpty {
+            Section {
+                if showingGone {
+                    ForEach(gone) { entry in
+                        CollectionEntryRow(card: try? store.card(id: entry.cardId), entry: entry,
+                                           dividerName: goneCaption(entry), value: nil)
+                            .foregroundStyle(.secondary)
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    Task { await model.markUnsold(entry) }
+                                } label: { Label("Bring back", systemImage: "arrow.uturn.backward") }
+                                    .tint(.blue)
+                            }
+                            .swipeActions(allowsFullSwipe: false) {
+                                Button("Delete", role: .destructive) {
+                                    Task { await model.deleteEntry(id: entry.id) }
+                                }
+                            }
+                    }
+                }
+            } header: {
+                // An explicit toggle rather than `Section(isExpanded:)`: that API renders
+                // differently across list styles, and this screen's style isn't pinned.
+                Button {
+                    withAnimation(reduceMotion ? nil : .default) { showingGone.toggle() }
+                } label: {
+                    HStack {
+                        Text("Gone · \(gone.cardCount) \(gone.cardCount == 1 ? "card" : "cards")")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .rotationEffect(.degrees(showingGone ? 90 : 0))
+                            .font(.caption2)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Gone, \(gone.cardCount) \(gone.cardCount == 1 ? "card" : "cards")")
+                .accessibilityHint(showingGone ? "Collapses the list" : "Expands the list")
+            }
+        }
+    }
+
+    /// "Sold 4 Mar for $180" / "Gone 4 Mar" when there was no cash figure (a trade or a gift).
+    private func goneCaption(_ entry: CollectionEntry) -> String {
+        let when = (entry.soldAt ?? Date()).formatted(.dateTime.day().month(.abbreviated))
+        guard let got = entry.soldFor else { return "Gone \(when)" }
+        return "Sold \(when) for \(got.formatted(.currency(code: "USD")))"
+    }
+
     @ViewBuilder
     private func entriesSection(_ entries: [CollectionEntry], header: String?, showDivider: Bool) -> some View {
         if !entries.isEmpty {
@@ -378,12 +450,17 @@ struct GroupDetailView: View {
             Button("Remove", role: .destructive) {
                 Task { await model.deleteEntry(id: entry.id) }
             }
+            // Beside Remove, because Remove is what people used to press for this — and it
+            // erased the card, its cost basis and any record the sale ever happened.
+            Button { sellingEntry = entry } label: { Label("Sold", systemImage: "bag") }
+                .tint(.indigo)
         }
         .swipeActions(edge: .leading) {
             Button { editingEntry = entry } label: { Label("Edit", systemImage: "pencil") }
         }
         .contextMenu {
             Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
+            Button { sellingEntry = entry } label: { Label("Sold or traded…", systemImage: "bag") }
         }
     }
 

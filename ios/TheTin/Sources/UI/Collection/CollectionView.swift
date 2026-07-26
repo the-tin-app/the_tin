@@ -8,11 +8,20 @@ final class CollectionModel {
     /// Portfolio-history model, app-lifetime so its series cache survives screen pushes.
     let portfolio: PortfolioModel
     private(set) var groups: [CardGroup] = []
+    /// The cards you own. **Sold copies are filtered out of this**, which is what gives roughly
+    /// forty consumers — GroupStats, Movers, PortfolioHistory, ScanKnowledge, set completion, the
+    /// widget, every grid badge — the right answer without knowing the feature exists.
     private(set) var entries: [CollectionEntry] = [] {
         // Launch-tab signal: MainTabView reads this synchronously at init (the entries stream
         // hasn't delivered yet there) to open on The Tin once a collection exists.
         didSet { UserDefaults.standard.set(!entries.isEmpty, forKey: "hasCards") }
     }
+    /// Every row the repository holds, owned and sold alike. Only for the places that genuinely
+    /// mean "everything on file": whole-collection rewrites (undo) and CSV export. Using
+    /// `entries` for either of those would silently drop every sold row from the file.
+    private(set) var allEntries: [CollectionEntry] = []
+    /// Copies that have left, most recently gone first.
+    private(set) var soldEntries: [CollectionEntry] = []
     private(set) var prices: [String: PriceRecord] = [:]
     private(set) var variantsByCard: [String: [VariantPrice]] = [:]
     private(set) var conditionsByCard: [String: [ConditionPrice]] = [:]
@@ -59,8 +68,16 @@ final class CollectionModel {
         })
         streamTasks.append(Task { [weak self] in
             guard let stream = self?.repository.entriesStream() else { return }
-            for await entries in stream {
-                self?.entries = entries
+            for await all in stream {
+                // The one place the owned/sold split is made. Everything downstream reads a list
+                // that is already correct, rather than each consumer remembering to exclude sold
+                // rows — which is the version of this feature that would have quietly broken the
+                // tin total the first time somebody added a screen.
+                self?.allEntries = all
+                self?.entries = all.filter { !$0.isSold }
+                self?.soldEntries = all.filter(\.isSold).sorted {
+                    ($0.soldAt ?? .distantPast) > ($1.soldAt ?? .distantPast)
+                }
                 self?.reloadPrices()
                 self?.publishWidgetSnapshot()
             }
@@ -294,7 +311,10 @@ final class CollectionModel {
         // old position rather than at the end.
         restoredGroups.sort { $0.sortOrder < $1.sortOrder }
 
-        var restoredEntries = entries
+        // `allEntries`, NOT `entries`: this hands `replaceAll` the complete file. Built from the
+        // sold-filtered list it would rewrite the collection without a single sold row in it —
+        // pressing Undo would silently delete your entire sale history.
+        var restoredEntries = allEntries
         for entry in undone.entries {
             // Overwrite rather than append when the row still exists: deleting a divider "keeping
             // its cards" leaves them behind with groupId "", and this is what files them back.
@@ -344,7 +364,10 @@ final class CollectionModel {
 
     @discardableResult
     func saveEntry(_ entry: CollectionEntry) async -> Bool {
-        if entries.contains(where: { $0.id == entry.id }) {
+        // `allEntries`: a sold row edited from the Gone section is not in `entries`, and looking
+        // there would send an existing id down the *add* path — minting a duplicate of a row that
+        // already exists rather than updating it.
+        if allEntries.contains(where: { $0.id == entry.id }) {
             await write("save the card") { try await repository.updateEntry(entry) }
         } else {
             await write("save the card") { try await addOrIncrement(entry) }
@@ -404,8 +427,38 @@ final class CollectionModel {
         }
     }
 
+    // MARK: Sold / traded away
+
+    /// Record that a copy has gone. Not a delete: the row keeps its card, its condition, its
+    /// cost basis and its acquisition detail, and stops counting toward what you own.
+    ///
+    /// Undoable through the same six-second toast as a delete, because the two gestures sit next
+    /// to each other and one of them used to be the only option.
+    func markSold(_ entry: CollectionEntry, on date: Date, for amount: Double?) async {
+        var sold = entry
+        sold.soldAt = date
+        sold.soldFor = amount
+        // The copy is gone, so it can't still be on offer — leaving the flag would keep it on a
+        // trade list you'd bring to a meetup.
+        sold.forTrade = nil
+        let ok = await write("record that sale") { try await repository.updateEntry(sold) }
+        guard ok else { return }
+        offerUndo(UndoableDelete(message: "Marked \(cardName(entry.cardId)) as gone",
+                                 groups: [], entries: [entry]))
+    }
+
+    /// Put a sold copy back among the cards you own — the sale fell through, or it was a mis-tap.
+    func markUnsold(_ entry: CollectionEntry) async {
+        var restored = entry
+        restored.soldAt = nil
+        restored.soldFor = nil
+        await write("bring that card back") { try await repository.updateEntry(restored) }
+    }
+
     func deleteEntry(id: String) async {
-        let removed = entries.first { $0.id == id }
+        // Sold rows are deletable too (from the Gone section), so look in the full list — else
+        // the write lands but the undo offer never appears.
+        let removed = allEntries.first { $0.id == id }
         let ok = await write("remove the card") { try await repository.deleteEntry(id: id) }
         guard ok, let removed else { return }
         offerUndo(UndoableDelete(message: "Removed \(cardName(removed.cardId))",

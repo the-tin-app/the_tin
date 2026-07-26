@@ -385,7 +385,9 @@ struct SettingsView: View {
     /// mirrors `runImport`, so a 20k-entry export can't freeze the UI either.
     private func makeExportDocument() async -> CSVDocument? {
         guard let collection = app.collection, let store = app.store else { return nil }
-        let entries = collection.entries
+        // `allEntries`: an export is the whole file. Using the owned-only list would drop every
+        // sold copy — the one place a silent omission looks exactly like a successful backup.
+        let entries = collection.allEntries
         let groups = collection.groups
         let prices = collection.prices
         let variantsByCard = collection.variantsByCard

@@ -201,6 +201,103 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(model.entryValue(triple)), unit * 3, accuracy: 0.001)
     }
 
+    // MARK: sold / traded away
+
+    /// A sold copy leaves everything that measures what you own, and keeps everything that
+    /// records what happened.
+    func testSoldEntryLeavesTheTotalsButKeepsItsHistory() async throws {
+        await model.saveEntry(CollectionEntry(
+            id: "keep", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: "psa10",
+            pricePaid: 400, acquiredAt: nil, acquiredFrom: "a card show", addedAt: Date()))
+        await model.saveEntry(CollectionEntry(
+            id: "gone", cardId: "sv1-25", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: 30, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        let before = model.tinValue
+        XCTAssertEqual(before.totalCards, 2)
+
+        let gone = try XCTUnwrap(model.entries.first { $0.id == "gone" })
+        await model.markSold(gone, on: Date(), for: 25)
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.map(\.id), ["keep"], "sold copies leave `entries`")
+        XCTAssertEqual(model.soldEntries.map(\.id), ["gone"])
+        XCTAssertEqual(model.allEntries.count, 2, "and stay on file")
+        XCTAssertEqual(model.tinValue.totalCards, 1, "and stop counting toward what you own")
+        XCTAssertEqual(model.entries(in: "").map(\.id), ["keep"])
+
+        let sold = try XCTUnwrap(model.soldEntries.first)
+        XCTAssertEqual(sold.soldFor, 25)
+        XCTAssertEqual(sold.pricePaid, 30, "cost basis survives the sale — that's the whole point")
+    }
+
+    /// The trap this feature is most likely to spring: `undoLastDelete` hands `replaceAll` a
+    /// complete collection. Built from the owned-only list it would rewrite the file without a
+    /// single sold row — one tap on Undo silently erasing every sale you'd ever recorded.
+    func testUndoAfterASaleDoesNotWipeTheSoldRows() async throws {
+        await model.saveEntry(CollectionEntry(
+            id: "sold", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: 100, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await model.saveEntry(CollectionEntry(
+            id: "doomed", cardId: "sv1-25", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        await model.markSold(try XCTUnwrap(model.entries.first { $0.id == "sold" }),
+                             on: Date(), for: 90)
+        await waitForStreams()
+
+        await model.deleteEntry(id: "doomed")
+        await waitForStreams()
+        await model.undoLastDelete()
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.map(\.id), ["doomed"], "the delete is undone")
+        XCTAssertEqual(model.soldEntries.map(\.id), ["sold"], "and the sale survived it")
+        XCTAssertEqual(model.soldEntries.first?.soldFor, 90)
+    }
+
+    /// Selling is reversible, and editing a sold row updates it rather than minting a twin —
+    /// `saveEntry` decides update-vs-add by searching, and the owned-only list wouldn't find it.
+    func testSoldCopyCanComeBackAndCanBeEditedInPlace() async throws {
+        await model.saveEntry(CollectionEntry(
+            id: "e", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        await model.markSold(try XCTUnwrap(model.entries.first), on: Date(), for: 10)
+        await waitForStreams()
+
+        var edited = try XCTUnwrap(model.soldEntries.first)
+        edited.acquiredFrom = "traded at the meetup"
+        await model.saveEntry(edited)
+        await waitForStreams()
+        XCTAssertEqual(model.allEntries.count, 1, "edited in place, not duplicated")
+
+        await model.markUnsold(try XCTUnwrap(model.soldEntries.first))
+        await waitForStreams()
+        XCTAssertTrue(model.soldEntries.isEmpty)
+        XCTAssertEqual(model.entries.map(\.id), ["e"])
+        XCTAssertEqual(model.entries.first?.acquiredFrom, "traded at the meetup")
+    }
+
+    /// Re-buying a card you once sold must not resurrect the sold row into a "×2".
+    func testBuyingAgainDoesNotFoldIntoASoldCopy() async throws {
+        await model.saveEntry(CollectionEntry(
+            id: "old", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        await model.markSold(try XCTUnwrap(model.entries.first), on: Date(), for: 500)
+        await waitForStreams()
+
+        await model.saveEntry(CollectionEntry(
+            id: "new", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.map(\.id), ["new"])
+        XCTAssertEqual(model.entries.first?.qty, 1, "the sold copy must not be revived as a ×2")
+        XCTAssertEqual(model.soldEntries.first?.soldFor, 500)
+    }
+
     /// The trade list is cached alongside the totals; deleting the last flagged copy has to empty
     /// it, or the tin's "For Trade" row keeps counting a card that isn't there.
     func testCachedTradeListTracksTheForTradeFlag() async throws {
