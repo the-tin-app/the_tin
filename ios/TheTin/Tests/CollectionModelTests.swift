@@ -177,6 +177,30 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(model.groupValue("never-existed").totalCards, 0)
     }
 
+    /// `entryValue` returns the value of the WHOLE row (unit × qty), not one copy.
+    ///
+    /// The card screen's "paid → now" line leans on this: it compares `entryValue` against
+    /// `pricePaid`, which is spec-locked as the row total. If this ever became a per-copy figure,
+    /// a ×4 row would silently compare one copy's value against four copies' cost and report a
+    /// 75% loss on a card that hadn't moved.
+    func testEntryValueIsTheRowTotalNotOneCopy() async throws {
+        let one = CollectionEntry(
+            id: "one", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: "psa10",
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date())
+        await model.saveEntry(one)
+        await waitForStreams()
+        let unit = try XCTUnwrap(model.entryValue(try XCTUnwrap(model.entries.first)))
+
+        // A separate row for the same card, three copies — differing qty alone keeps it its own
+        // row only if something blocks the merge, so use a distinct divider.
+        await model.saveEntry(CollectionEntry(
+            id: "three", cardId: "swsh7-215", groupId: "elsewhere", qty: 3, condition: "NM",
+            grade: "psa10", pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        let triple = try XCTUnwrap(model.entries.first { $0.id == "three" })
+        XCTAssertEqual(try XCTUnwrap(model.entryValue(triple)), unit * 3, accuracy: 0.001)
+    }
+
     /// The trade list is cached alongside the totals; deleting the last flagged copy has to empty
     /// it, or the tin's "For Trade" row keeps counting a card that isn't there.
     func testCachedTradeListTracksTheForTradeFlag() async throws {

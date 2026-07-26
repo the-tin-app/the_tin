@@ -457,12 +457,15 @@ struct CardDetailView: View {
                     .foregroundStyle(.tint)
                 ForEach(entries) { entry in
                     Button { editingEntry = entry } label: {
-                        HStack(spacing: 6) {
-                            Text(sleeveText(entry)).font(.caption)
-                            Text("·").font(.caption).foregroundStyle(.tertiary)
-                            Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(sleeveText(entry)).font(.caption)
+                                Text("·").font(.caption).foregroundStyle(.tertiary)
+                                Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                            }
+                            paidLine(entry)
                         }
                         .contentShape(Rectangle())
                     }
@@ -487,6 +490,35 @@ struct CardDetailView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// "paid $360 → $520 · +44%" — how this copy has done since you bought it.
+    ///
+    /// The card screen renders a graded price ladder, a condition matrix, a population histogram
+    /// and a whole expected-value grading model, and until now said nothing at all about the one
+    /// number on it that is actually yours. You typed the price in; it reached a portfolio chart
+    /// line and two PDFs and never came back to the card.
+    ///
+    /// Both sides are ROW totals, deliberately: `pricePaid` is spec-locked as the total for the
+    /// entry and `entryValue` already multiplies by qty, so a ×4 row compares four copies against
+    /// what four copies cost. Dividing to a per-copy figure would be the same percentage with an
+    /// extra chance to be wrong. Shown only when `entryValue` is non-nil — that's the
+    /// exactly-priced gate, so a copy whose condition has no price of its own says nothing rather
+    /// than comparing your money against a fallback estimate.
+    @ViewBuilder private func paidLine(_ entry: CollectionEntry) -> some View {
+        if let paid = entry.pricePaid, paid > 0, let now = collection?.entryValue(entry) {
+            let change = now - paid
+            HStack(spacing: 4) {
+                Text("paid \(paid, format: .currency(code: "USD"))")
+                Image(systemName: "arrow.right").font(.system(size: 8))
+                Text(now, format: .currency(code: "USD"))
+                Text("· \(change >= 0 ? "+" : "−")\(abs(change) / paid, format: .percent.precision(.fractionLength(0)))")
+                    .foregroundStyle(change >= 0 ? .green : .red)
+            }
+            .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Paid \(paid.formatted(.currency(code: "USD"))), now worth \(now.formatted(.currency(code: "USD"))), \(change >= 0 ? "up" : "down") \((abs(change) / paid).formatted(.percent.precision(.fractionLength(0))))")
         }
     }
 
