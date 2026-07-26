@@ -249,6 +249,15 @@ struct PriceRecord: Equatable {
     let sellers: Int?
     let listings: Int?
     let lowUsd: Double?
+    /// Which printing `rawUsd` is quoting, when the pipeline recorded one.
+    ///
+    /// `raw_usd` picks one SKU per card, and WHICH one it picks can change between nightly
+    /// artifacts — so a "price move" on a card sold as both Unlimited and 1st Edition can really
+    /// be the spread between two printings (PRs #83/#84 added the column so deltas stop diffing
+    /// them). **nil is a real and common answer**: every artifact published before 2026-07-26
+    /// lacks the column entirely, and base-tcgcsv-priced cards carry no label even now. Compare
+    /// it the way the pipeline does — `IS`, not `=`, so unlabelled-vs-unlabelled still matches.
+    let rawPrinting: String?
     let asOf: String
 
     /// Grades default to nil so call sites name only the columns they care about. Labels must
@@ -257,12 +266,14 @@ struct PriceRecord: Equatable {
          psa1: Double? = nil, psa2: Double? = nil, psa3: Double? = nil, psa4: Double? = nil,
          psa5: Double? = nil, psa6: Double? = nil, psa7: Double? = nil, psa8: Double? = nil,
          psa9: Double? = nil, psa10: Double? = nil,
-         sellers: Int? = nil, listings: Int? = nil, lowUsd: Double? = nil, asOf: String) {
+         sellers: Int? = nil, listings: Int? = nil, lowUsd: Double? = nil,
+         rawPrinting: String? = nil, asOf: String) {
         self.cardId = cardId; self.rawUsd = rawUsd; self.rawEur = rawEur
         self.psa1 = psa1; self.psa2 = psa2; self.psa3 = psa3; self.psa4 = psa4
         self.psa5 = psa5; self.psa6 = psa6; self.psa7 = psa7; self.psa8 = psa8
         self.psa9 = psa9; self.psa10 = psa10
-        self.sellers = sellers; self.listings = listings; self.lowUsd = lowUsd; self.asOf = asOf
+        self.sellers = sellers; self.listings = listings; self.lowUsd = lowUsd
+        self.rawPrinting = rawPrinting; self.asOf = asOf
     }
 
     /// Default display currency is USD; a set grade falls back to raw_usd when that column is null.
