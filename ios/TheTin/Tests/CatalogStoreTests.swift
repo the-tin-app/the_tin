@@ -35,6 +35,15 @@ final class CatalogStoreTests: XCTestCase {
         XCTAssertEqual(cards[2].attacks, []) // NULL attacks column → empty, never a decode crash
     }
 
+    /// The fixture has no `raw_printing` column — which is exactly what every catalog artifact
+    /// published before 2026-07-26 looks like. Reading it must yield nil rather than throwing:
+    /// the alert basis guard depends on this being a survivable absence, and treats nil as
+    /// "unknown basis, don't claim a flip" rather than as a change.
+    func testRawPrintingIsNilOnAnArtifactThatPredatesTheColumn() throws {
+        let p = try XCTUnwrap(store.price(cardId: "swsh7-215"))
+        XCTAssertNil(p.rawPrinting)
+    }
+
     func testPriceLookupAndGradeFallback() throws {
         let p = try XCTUnwrap(store.price(cardId: "swsh7-215"))
         XCTAssertEqual(p.rawUsd, 92.5)

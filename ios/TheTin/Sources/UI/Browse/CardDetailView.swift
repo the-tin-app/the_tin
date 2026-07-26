@@ -212,6 +212,7 @@ struct CardDetailView: View {
                             Text("low \(low, format: .currency(code: "USD"))")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                        cardmarketLine(price)
                         // Liquidity: how many sellers/listings back the market price right now.
                         // PPT sometimes reports a literal 0 for a count it doesn't really have
                         // (e.g. "22 sellers · 0 listings" — 22 sellers implies listings > 0), so
@@ -490,6 +491,43 @@ struct CardDetailView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// The Cardmarket price in euros, beside the dollar one. Two real markets, never a conversion.
+    ///
+    /// This is deliberately NOT an app-wide currency setting, and the reason is in the schema:
+    /// `raw_eur` is the ONLY euro column the catalog has. `price_by_variant`,
+    /// `price_by_condition`, `price_matrix`, `graded_by_printing`, `psa1..psa10`, `price_history`
+    /// and `sealed_product` are all USD-only. A "Currency: EUR" toggle would therefore convert
+    /// the headline and a few grid tiles while the tin total, the portfolio, Movers, every
+    /// condition and graded tile and the whole history chart silently stayed in dollars — most of
+    /// the numbers in the app, unmarked. One honest line beats a setting that misreports the rest
+    /// of the screen. (Real currency support is a pipeline job: Cardmarket does publish condition
+    /// and printing prices, they just aren't in the artifact.)
+    ///
+    /// Cardmarket and TCGplayer are genuinely different markets with different prices, which is
+    /// exactly why the euro figure is worth showing and a converted dollar figure would not be.
+    ///
+    /// Coverage is good — 19,437 of 20,933 rows on the served catalog, slightly better than
+    /// `raw_usd` — and 1,082 cards carry a euro price with no dollar one at all. Those used to
+    /// show no price whatsoever; now they show the price that exists.
+    ///
+    /// `raw_eur` is a card-level raw price with no per-printing counterpart, so on a
+    /// multi-printing card it says so rather than appearing to describe the selected printing —
+    /// same caveat the graded, condition and history sections already carry.
+    @ViewBuilder private func cardmarketLine(_ price: PriceRecord) -> some View {
+        if let eur = price.rawEur {
+            HStack(spacing: 4) {
+                Text(eur, format: .currency(code: "EUR")).monospacedDigit()
+                Text(currentPrinting == nil ? "Cardmarket" : "Cardmarket · card overall")
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Cardmarket price \(eur.formatted(.currency(code: "EUR")))"
+                                + (currentPrinting == nil ? "" : ", for the card overall"))
         }
     }
 
