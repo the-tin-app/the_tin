@@ -6,6 +6,23 @@ import CoreVideo
 final class ScanModelTests: XCTestCase {
     private func bundle() -> Bundle { Bundle(for: Self.self) }
 
+    // `ScanModel.isLookUpMode` seeds itself from `AppConfig.scanLookUpMode` and its `didSet`
+    // writes straight back to UserDefaults — so the look-up tests below used to leave the flag
+    // ON, in a domain that survives the test process. Every ScanModel built afterwards then
+    // started in look-up mode and staged nothing, which took out `testLockAppends…` (and, via
+    // its `staging.drafts[0]`, the entire suite with an index-out-of-range fatal) on the NEXT
+    // run rather than this one. Pin it at both ends: a known state going in, a clean one coming
+    // out, so no test can depend on — or poison — ambient device state.
+    override func setUp() async throws {
+        try await super.setUp()
+        AppConfig.scanLookUpMode = false
+    }
+
+    override func tearDown() async throws {
+        AppConfig.scanLookUpMode = false
+        try await super.tearDown()
+    }
+
     private struct ReplaySource: FrameSource {
         let buffer: CVPixelBuffer; let count: Int
         func stream() -> AsyncStream<CVPixelBuffer> {
@@ -77,8 +94,10 @@ final class ScanModelTests: XCTestCase {
         XCTAssertFalse(staging.drafts.isEmpty)
         XCTAssertTrue(repo.entries.isEmpty, "staged scans must NOT be owned before commit")
 
-        // Commit one and verify it becomes owned.
-        let ok = await collection.commitScan(staging.drafts[0], to: .tin)
+        // Commit one and verify it becomes owned. XCTUnwrap, not `[0]`: an empty tray here is a
+        // legitimate test failure, and subscripting turned it into a process-killing fatal that
+        // took the other ~460 tests down with it.
+        let ok = await collection.commitScan(try XCTUnwrap(staging.drafts.first), to: .tin)
         XCTAssertTrue(ok)
         XCTAssertEqual(repo.entries.count, 1)
     }
