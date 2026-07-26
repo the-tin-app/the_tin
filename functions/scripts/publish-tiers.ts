@@ -98,12 +98,29 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
         const upsert = (select: string) => db.exec(`
           INSERT INTO price_delta(card_id, kind, key, ${lb.col}) ${select}
           ON CONFLICT(card_id, kind, key) DO UPDATE SET ${lb.col} = excluded.${lb.col}`);
-        upsert(`SELECT n.card_id, 'raw', '', (n.raw_usd - o.raw_usd) / o.raw_usd
-                FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id
-                WHERE n.raw_usd > 0 AND o.raw_usd > 0`);
-        // Artifacts published before the psa1-10 widening only carry psa8-10.
         const oldCols = new Set((db.pragma("old.table_info(price_latest)") as
           { name: string }[]).map((c) => c.name));
+        // raw_usd quotes whichever printing had a market price that night, so the same column can
+        // describe a different printing in each artifact. Diffing across a flip measures the SPREAD
+        // BETWEEN TWO PRINTINGS, not a price move (+1800% rows, 2026-07-25). Requiring the basis to
+        // match means a flipped card simply yields no raw delta that window — the honest answer,
+        // since a move cannot be measured across a change of subject.
+        //
+        // Artifacts published before this column existed can't be checked. Those fall back to the
+        // old card_id-only join rather than blacking out every raw delta for the 30 days it takes
+        // the ledger to age over: 1d is correct after one nightly, 7d after a week, 30d after a
+        // month, and the client's implausible-pct clamp still covers the gap.
+        const basisMatch = oldCols.has("raw_printing")
+          ? "AND (o.raw_printing IS n.raw_printing)"   // IS, not =: NULL basis must match NULL basis
+          : "";
+        if (!basisMatch) {
+          console.warn(`[publish-tiers] ${lb.col} lookback vs ${artifact} predates raw_printing —` +
+            " raw deltas for this window are unverified (basis flips can still slip through)");
+        }
+        upsert(`SELECT n.card_id, 'raw', '', (n.raw_usd - o.raw_usd) / o.raw_usd
+                FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id ${basisMatch}
+                WHERE n.raw_usd > 0 AND o.raw_usd > 0`);
+        // Artifacts published before the psa1-10 widening only carry psa8-10.
         for (let g = 1; g <= 10; g++) {
           if (!oldCols.has(`psa${g}`)) continue;
           upsert(`SELECT n.card_id, 'psa', '${g}', (n.psa${g} - o.psa${g}) / o.psa${g}

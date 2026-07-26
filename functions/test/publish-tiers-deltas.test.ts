@@ -24,11 +24,20 @@ const PRICE_SCHEMA = `
 interface SnapshotPrices {
   raw?: number | null; psa10?: number | null;
   nm?: number | null; holo?: number | null; matrix?: number | null;
+  /** Which printing raw_usd quotes. Only written when the schema carries the column. */
+  basis?: string | null;
 }
 
 function insertPrices(db: Database.Database, p: SnapshotPrices) {
-  db.prepare(`INSERT INTO price_latest(card_id, raw_usd, psa10, as_of)
-              VALUES ('c1', ?, ?, '2026-07-18')`).run(p.raw ?? null, p.psa10 ?? null);
+  const hasBasis = (db.pragma("table_info(price_latest)") as { name: string }[])
+    .some((c) => c.name === "raw_printing");
+  if (hasBasis) {
+    db.prepare(`INSERT INTO price_latest(card_id, raw_usd, psa10, raw_printing, as_of)
+                VALUES ('c1', ?, ?, ?, '2026-07-18')`).run(p.raw ?? null, p.psa10 ?? null, p.basis ?? null);
+  } else {
+    db.prepare(`INSERT INTO price_latest(card_id, raw_usd, psa10, as_of)
+                VALUES ('c1', ?, ?, '2026-07-18')`).run(p.raw ?? null, p.psa10 ?? null);
+  }
   if (p.nm != null)
     db.prepare(`INSERT INTO price_by_condition VALUES ('c1', 'Near Mint', ?, '2026-07-18')`).run(p.nm);
   if (p.holo != null)
@@ -40,6 +49,10 @@ function insertPrices(db: Database.Database, p: SnapshotPrices) {
 /** Pre-psa-widening artifact schema (production ≤ v13): only psa8-10 columns exist. */
 const LEGACY_SCHEMA = PRICE_SCHEMA.replace(
   /psa1 REAL.*psa7 REAL,\s*/s, "");
+
+/** Current schema: price_latest records WHICH printing raw_usd quotes. Artifacts published before
+ *  this column use bare PRICE_SCHEMA, which is what every other test in this file exercises. */
+const BASIS_SCHEMA = PRICE_SCHEMA.replace("raw_usd REAL,", "raw_usd REAL, raw_printing TEXT,");
 
 /** Schema including price_matrix (Task 2) — old artifacts published before that feature use
  *  bare PRICE_SCHEMA instead, exercising the same legacy-tolerance pattern as LEGACY_SCHEMA above. */
@@ -175,6 +188,52 @@ describe("computePriceDeltas", () => {
     const raw = deltaRows(src).find(r => r.kind === "raw");
     expect(raw?.pct_1d).toBeNull();
     expect(raw?.pct_7d).toBeCloseTo(0.5);                      // 7d survived the 1d failure
+  });
+
+  // --- raw_usd's printing basis -------------------------------------------------------------
+  // raw_usd quotes whichever printing had a market price that night, so the same column can mean
+  // a different printing in each artifact. Diffing across that measures the spread between two
+  // printings, not a price move.
+
+  it("emits no raw delta when the printing basis flipped between artifacts", () => {
+    // Yesterday the primary printing had no price, so raw_usd fell through to 1st Edition at $900;
+    // tonight Unlimited is priced again at $5. Naively that reads as -99.4%.
+    makeSnapshot(catalogDir, 7, 1, { raw: 900, basis: "1st Edition" }, BASIS_SCHEMA);
+    const src = makeSource(dir, { raw: 5, basis: "Unlimited" }, BASIS_SCHEMA);
+    computePriceDeltas(src, catalogDir, NOW);
+    expect(deltaRows(src).filter(r => r.kind === "raw")).toHaveLength(0);
+  });
+
+  it("emits the raw delta normally when the basis held", () => {
+    makeSnapshot(catalogDir, 7, 1, { raw: 2.0, basis: "Unlimited" }, BASIS_SCHEMA);
+    const src = makeSource(dir, { raw: 3.0, basis: "Unlimited" }, BASIS_SCHEMA);
+    computePriceDeltas(src, catalogDir, NOW);
+    expect(deltaRows(src).find(r => r.kind === "raw")?.pct_1d).toBeCloseTo(0.5);
+  });
+
+  it("treats an unlabeled basis on both sides as a match (NULL IS NULL)", () => {
+    // Cards priced off the base tcgcsv path carry no printing label. Those must keep their deltas
+    // rather than silently vanishing — a plain `=` comparison would drop every one of them.
+    makeSnapshot(catalogDir, 7, 1, { raw: 2.0, basis: null }, BASIS_SCHEMA);
+    const src = makeSource(dir, { raw: 3.0, basis: null }, BASIS_SCHEMA);
+    computePriceDeltas(src, catalogDir, NOW);
+    expect(deltaRows(src).find(r => r.kind === "raw")?.pct_1d).toBeCloseTo(0.5);
+  });
+
+  it("a labeled basis and an unlabeled one do not match", () => {
+    makeSnapshot(catalogDir, 7, 1, { raw: 2.0, basis: null }, BASIS_SCHEMA);
+    const src = makeSource(dir, { raw: 3.0, basis: "Unlimited" }, BASIS_SCHEMA);
+    computePriceDeltas(src, catalogDir, NOW);
+    expect(deltaRows(src).filter(r => r.kind === "raw")).toHaveLength(0);
+  });
+
+  it("falls back to the card-id join against an artifact predating raw_printing", () => {
+    // Deliberate: blacking out every raw delta until the 30d ledger ages over would gut Movers for
+    // a month. 1d becomes verified after one nightly, 7d after a week, 30d after a month.
+    makeSnapshot(catalogDir, 7, 1, { raw: 2.0 });                       // no raw_printing column
+    const src = makeSource(dir, { raw: 3.0, basis: "Unlimited" }, BASIS_SCHEMA);
+    computePriceDeltas(src, catalogDir, NOW);
+    expect(deltaRows(src).find(r => r.kind === "raw")?.pct_1d).toBeCloseTo(0.5);
   });
 
   it("creates an empty table when no artifacts exist, and re-runs idempotently", () => {
