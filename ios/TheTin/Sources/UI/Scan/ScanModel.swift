@@ -139,6 +139,13 @@ final class ScanModel {
     var isLookUpMode: Bool = AppConfig.scanLookUpMode {
         didSet { AppConfig.scanLookUpMode = isLookUpMode }
     }
+    /// The condition new drafts are staged at. Every capture used to be Near Mint with nothing
+    /// asked and nothing shown, so a played collection valued itself as mint — and since the
+    /// review screen's per-card menu is a per-card tap, nobody was ever going to correct 300 of
+    /// them. Set it once for the stack you're holding. Persisted for the same reason as the mode.
+    var stagingCondition: CardCondition = AppConfig.scanCondition {
+        didSet { AppConfig.scanCondition = stagingCondition }
+    }
     /// Set when a lock resolves in look-up mode. The view presents that card and clears this,
     /// which also resets the scanner so the next card (or the same one again) can be read.
     var lookedUpCardId: String?
@@ -199,9 +206,20 @@ final class ScanModel {
             guidance = "Frame the card inside the box"
             return
         }
-        let price = (try? store.price(cardId: cardId))?.rawUsd
+        // Price the draft at the condition it's actually being staged at, through the same
+        // resolver the review screen and the tin use. A raw-market snapshot would leave the
+        // tray's running total quoting mint money for a stack you've just told it is played —
+        // and that total is the number you watch while scanning, so it has to be the honest one.
+        // Three single-card indexed reads, against a per-frame ORB match that dwarfs them.
+        let variant = CardVariant.defaultFor(rarity: card?.rarity)
+        let price = GroupStats.unitPrice(
+            condition: stagingCondition, variant: variant,
+            price: try? store.price(cardId: cardId),
+            variants: (try? store.variantPrices(cardId: cardId)) ?? [],
+            conditions: (try? store.conditionPrices(cardId: cardId)) ?? [],
+            matrix: (try? store.matrixPrices(cardId: cardId)) ?? [])
         let draft = ScanDraft(id: UUID().uuidString, cardId: cardId,
-                              variant: .defaultFor(rarity: card?.rarity), condition: .nm,
+                              variant: variant, condition: stagingCondition,
                               qty: 1, addedAt: Date(), priceUsdSnapshot: price)
         staging.append(draft)
         // The card's name, not its catalog id — this line read "Added swsh7-215 — next card".

@@ -131,6 +131,17 @@ enum AppConfig {
         set { UserDefaults.standard.set(newValue, forKey: "scanLookUpMode") }
     }
 
+    /// The condition every scanned card is staged at. Defaults to NM — but it used to BE NM,
+    /// unconditionally and invisibly, so a shoebox of played 1999 commons was valued as if it
+    /// were mint and the tin total quietly inherited the lie. Sticky like `scanLookUpMode`: the
+    /// condition of the stack in your hands holds for the stack, not for one card, and asking
+    /// per card is exactly the per-scan tap the review screen exists to defer.
+    /// An unrecognised stored value reads as NM rather than crashing an old install.
+    static var scanCondition: CardCondition {
+        get { CardCondition(rawValue: UserDefaults.standard.string(forKey: "scanCondition") ?? "") ?? .nm }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "scanCondition") }
+    }
+
     /// Alert sensitivity in whole percent — 5, 10, or 20; anything else reads as the default 10.
     static var priceAlertSensitivityPct: Int {
         get {

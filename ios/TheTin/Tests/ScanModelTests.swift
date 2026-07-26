@@ -13,13 +13,17 @@ final class ScanModelTests: XCTestCase {
     // its `staging.drafts[0]`, the entire suite with an index-out-of-range fatal) on the NEXT
     // run rather than this one. Pin it at both ends: a known state going in, a clean one coming
     // out, so no test can depend on — or poison — ambient device state.
+    /// Every persisted scanner setting belongs in both of these. `scanCondition` is the second
+    /// one and arrived knowing exactly how the first went wrong.
     override func setUp() async throws {
         try await super.setUp()
         AppConfig.scanLookUpMode = false
+        AppConfig.scanCondition = .nm
     }
 
     override func tearDown() async throws {
         AppConfig.scanLookUpMode = false
+        AppConfig.scanCondition = .nm
         try await super.tearDown()
     }
 
@@ -72,6 +76,51 @@ final class ScanModelTests: XCTestCase {
 
         XCTAssertFalse(staging.drafts.isEmpty, "a confident lock should stage a draft")
         XCTAssertNotNil(staging.drafts.first?.condition) // defaulted (NM)
+    }
+
+    /// A capture is staged at the chosen condition, not at a hardcoded NM — and it's priced at
+    /// that condition, so the tray's running total can't quote mint money for a played stack.
+    func testStagedDraftUsesTheChosenConditionAndPricesAtIt() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: staging, store: catalog, fingerThrottle: 1)
+        model.stagingCondition = .mp
+        await model.run(source: ReplaySource(buffer: pb, count: 6))
+
+        let draft = try XCTUnwrap(staging.drafts.first)
+        XCTAssertEqual(draft.condition, .mp, "the draft must carry the chosen condition")
+        // Whatever the fixture prices this at, it must agree with the shared resolver asked the
+        // same question — the point is that condition reaches the price, not a specific figure.
+        let expected = GroupStats.unitPrice(
+            condition: .mp, variant: draft.variant,
+            price: try? catalog.price(cardId: draft.cardId),
+            variants: (try? catalog.variantPrices(cardId: draft.cardId)) ?? [],
+            conditions: (try? catalog.conditionPrices(cardId: draft.cardId)) ?? [],
+            matrix: (try? catalog.matrixPrices(cardId: draft.cardId)) ?? [])
+        XCTAssertEqual(draft.priceUsdSnapshot, expected)
+    }
+
+    /// The choice outlives the model, because the stack in your hands outlives one launch.
+    func testStagingConditionPersists() async throws {
+        XCTAssertEqual(AppConfig.scanCondition, .nm)
+        let catalog = try FixtureCatalog.make()
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: try Matcher(store: store, codebook: try Codebook.bundled(in: bundle())),
+                              detector: CardDetector(), textGate: TextGate(index: index),
+                              narrowing: StubNarrowing(), staging: .inMemory(), store: catalog)
+        model.stagingCondition = .lp
+        XCTAssertEqual(AppConfig.scanCondition, .lp)
+        XCTAssertEqual(model.stagingCondition, .lp)
     }
 
     func testStagedDraftsAreNotOwnedUntilCommitted() async throws {

@@ -53,10 +53,14 @@ struct ScanView: View {
                                     in: Capsule())
                     if model.ambiguous.isEmpty {
                         modePicker
+                        // Only in Add mode: look-up stages nothing, so a condition for the thing
+                        // it isn't recording would be one more control saying nothing.
+                        if !model.isLookUpMode { conditionPicker }
                         // In look-up mode the tray is noise until something is actually staged —
                         // but staged cards from an earlier session still need their way back.
                         if !model.isLookUpMode || !staging.drafts.isEmpty {
                             StagingTray(staging: staging, store: store,
+                                        condition: model.isLookUpMode ? nil : model.stagingCondition,
                                         knowledge: latestKnowledge) { showingReview = true }
                         }
                     } else {
@@ -101,6 +105,22 @@ struct ScanView: View {
         .accessibilityHint(model.isLookUpMode
                            ? "Scanned cards are shown, not saved"
                            : "Scanned cards are staged for review")
+    }
+
+    /// The condition every capture is staged at, until you change it. A per-card question in the
+    /// rapid loop is exactly what spec D5 emptied out of it — but the answer was silently "Near
+    /// Mint" for everything, so a bulk lot of played commons valued itself as mint. One control,
+    /// set once per stack, sticky across launches like the mode picker beside it.
+    private var conditionPicker: some View {
+        Picker("Condition", selection: $model.stagingCondition) {
+            ForEach(CardCondition.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 260)
+        .padding(4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityLabel("Condition for scanned cards")
+        .accessibilityHint("New scans are staged at this condition")
     }
 
     /// Bridges the model's looked-up card id to `.sheet(item:)`. Dismissing clears it AND resets
@@ -188,6 +208,10 @@ private struct AmbiguousChooser: View {
 private struct StagingTray: View {
     let staging: ScanStagingStore
     let store: CatalogStore
+    /// The condition captures are being staged at; nil in look-up mode, where nothing is staged.
+    /// Shown because the running total is computed at it — an assumption behind a number on
+    /// screen should be visible next to that number.
+    let condition: CardCondition?
     /// What the tin already knows about the newest capture; nil when the tray is empty.
     let knowledge: ScanKnowledge?
     let onReview: () -> Void
@@ -214,8 +238,13 @@ private struct StagingTray: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("^[\(staging.drafts.count) card](inflect: true) staged").font(.subheadline.bold())
-                Text(staging.totalUsd, format: .currency(code: "USD"))
-                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(staging.totalUsd, format: .currency(code: "USD"))
+                    if let condition {
+                        Text("at \(condition.rawValue)").foregroundStyle(.tertiary)
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
                 // Only when there's something to say — a card you neither own nor want stays quiet
                 // so the line means something when it does appear.
                 if let caption = knowledge?.caption {
@@ -237,7 +266,8 @@ private struct StagingTray: View {
     }
 
     private var trayAccessibilityLabel: String {
-        let base = "\(staging.drafts.count) \(staging.drafts.count == 1 ? "card" : "cards") staged, \(staging.totalUsd.formatted(.currency(code: "USD")))"
+        var base = "\(staging.drafts.count) \(staging.drafts.count == 1 ? "card" : "cards") staged, \(staging.totalUsd.formatted(.currency(code: "USD")))"
+        if let condition { base += ", at \(condition.rawValue)" }
         guard let caption = knowledge?.caption else { return base }
         return base + ". Latest: " + caption
     }
