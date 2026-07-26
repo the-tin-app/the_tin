@@ -463,7 +463,15 @@ struct SettingsView: View {
             }
             .padding(.vertical, 2)
             if FundingModel.isLive {
-                Link("Support on Open Collective", destination: AppConfig.supportURL)
+                // Label and destination must always name the same platform — a button naming one
+                // and opening another reads as a scam. Both live in this one commit for that reason.
+                Link("Sponsor The Tin on GitHub", destination: AppConfig.supportURL)
+            }
+            // Shown once the served list has names, or once funding is live. Data-driven on
+            // purpose: the first listed sponsor makes this appear with no app update, and until
+            // then nobody is sent to a guaranteed-empty screen.
+            if !app.supporters.isEmpty || FundingModel.isLive {
+                NavigationLink("Supporters") { SupportersView(supporters: app.supporters) }
             }
         }
     }

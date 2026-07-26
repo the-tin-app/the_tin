@@ -23,8 +23,8 @@ private final class PathHTTP: HTTPClient {
 final class SelfHostedCatalogRemoteTests: XCTestCase {
     private let base = URL(string: "https://apithetin.reyes.ai")!
 
-    private func manifestJSON() -> Data {
-        try! JSONSerialization.data(withJSONObject: [
+    private func manifestJSON(extra: [String: Any] = [:]) -> Data {
+        var obj: [String: Any] = [
             "version": 7,
             "generatedAt": "2026-07-12T00:00:00.000Z",
             "tiers": [
@@ -32,7 +32,9 @@ final class SelfHostedCatalogRemoteTests: XCTestCase {
                 "average": ["path": "average-v7.sqlite.gz", "sha256": "avg", "sizeBytes": 22],
                 "expert":  ["path": "expert-v7.sqlite.gz",  "sha256": "exp", "sizeBytes": 33],
             ],
-        ])
+        ]
+        obj.merge(extra) { _, new in new }
+        return try! JSONSerialization.data(withJSONObject: obj)
     }
 
     func testFetchManifestSelectsConfiguredTier() async throws {
@@ -45,6 +47,35 @@ final class SelfHostedCatalogRemoteTests: XCTestCase {
                                           sizeBytes: 22, generatedAt: "2026-07-12T00:00:00.000Z",
                                           funding: nil, tier: "average"))
         XCTAssertEqual(http.sent.first?.value(forHTTPHeaderField: "Authorization"), "Bearer fresh")
+    }
+
+    /// Regression: the NAS is the ONLY place `refresh-funding.ts` writes these blocks, and this
+    /// remote used to hardcode `funding: nil` — leaving the nightly feed with no reader at all on
+    /// the primary path.
+    func testFetchManifestCarriesFundingAndSupporters() async throws {
+        let http = PathHTTP()
+        http.responses["/catalog/manifest.json"] = [(200, manifestJSON(extra: [
+            "funding": ["fundedPct": 0.42, "monthlyGoalCents": 15000,
+                        "raisedCents": 6300, "updatedAt": "2026-07-12T00:00:00.000Z"],
+            "supporters": [["name": "Ada", "tier": "secret-rare", "url": "https://example.com"]],
+        ]))]
+        let remote = SelfHostedCatalogRemote(baseURL: base, session: TokenStub(), http: http, tier: "average")
+
+        let m = try await remote.fetchManifest()
+        XCTAssertEqual(m.funding?.raisedCents, 6300)
+        XCTAssertEqual(m.funding?.monthlyGoalCents, 15000)
+        XCTAssertEqual(m.supporters, [Supporter(name: "Ada", tier: "secret-rare", url: "https://example.com")])
+    }
+
+    /// Both blocks are absent until the nightly's step 7 has run against a live platform — that
+    /// must stay a plain nil, not a decode failure that blocks catalog updates.
+    func testFetchManifestWithoutFundingOrSupportersStillDecodes() async throws {
+        let http = PathHTTP()
+        http.responses["/catalog/manifest.json"] = [(200, manifestJSON())]
+        let remote = SelfHostedCatalogRemote(baseURL: base, session: TokenStub(), http: http, tier: "average")
+        let m = try await remote.fetchManifest()
+        XCTAssertNil(m.funding)
+        XCTAssertNil(m.supporters)
     }
 
     func testFetchManifestCasualTier() async throws {

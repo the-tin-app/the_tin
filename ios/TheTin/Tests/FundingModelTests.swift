@@ -99,4 +99,48 @@ final class FundingModelTests: XCTestCase {
         XCTAssertEqual(FundingModel.dollars(9_312), "$93")
         XCTAssertEqual(FundingModel.dollars(0), "$0")
     }
+
+    // MARK: - Supporter (served credits list — recognition only, anonymity by omission)
+
+    private func decodeSupporters(_ json: String) throws -> [Supporter] {
+        try JSONDecoder().decode([Supporter].self, from: Data(json.utf8))
+    }
+
+    func test_supporter_decodesNameTierAndURL() throws {
+        let list = try decodeSupporters("""
+        [{"name": "Ada", "tier": "secret-rare", "url": "https://example.com"}]
+        """)
+        XCTAssertEqual(list, [Supporter(name: "Ada", tier: "secret-rare", url: "https://example.com")])
+    }
+
+    func test_supporter_missingOptionalKeys_decode_doesNotThrow() throws {
+        XCTAssertEqual(try decodeSupporters(#"[{"name": "Ada"}]"#), [Supporter(name: "Ada")])
+    }
+
+    /// The served list is hand-curated, so a typo must not throw — that would take the whole
+    /// catalog update down with it, not just this screen.
+    func test_supporter_missingName_decodesToBlank_doesNotThrow() throws {
+        XCTAssertEqual(try decodeSupporters(#"[{"tier": "holo"}]"#).first?.name, "")
+    }
+
+    func test_supporters_dropsBlankNames() {
+        let filtered = FundingModel.supporters(from: [
+            Supporter(name: "Ada"), Supporter(name: "   "), Supporter(name: ""), Supporter(name: "Grace"),
+        ])
+        XCTAssertEqual(filtered.map(\.name), ["Ada", "Grace"])
+    }
+
+    func test_supporters_nilList_isEmpty_notAnError() {
+        XCTAssertEqual(FundingModel.supporters(from: nil), [])
+    }
+
+    /// Served data driving `openURL` is a trust boundary: only https ever produces a link.
+    func test_supporter_link_onlyHTTPS() {
+        XCTAssertEqual(Supporter(name: "Ada", url: "https://example.com").link,
+                       URL(string: "https://example.com"))
+        XCTAssertNil(Supporter(name: "Ada", url: "http://example.com").link)
+        XCTAssertNil(Supporter(name: "Ada", url: "javascript:alert(1)").link)
+        XCTAssertNil(Supporter(name: "Ada", url: "thetin://card/xy1-1").link)
+        XCTAssertNil(Supporter(name: "Ada").link)
+    }
 }

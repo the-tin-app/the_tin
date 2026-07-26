@@ -18,6 +18,9 @@ struct CatalogState: Codable, Equatable {
     var priceAsOf: String?
     /// Community-funding snapshot, refreshed independently of `version` (see `ensureLatest`).
     var funding: FundingSnapshot? = nil
+    /// Listed sponsors, refreshed on the same independent cadence as `funding`. Cached here so the
+    /// Supporters screen still renders the last-known list offline.
+    var supporters: [Supporter]? = nil
     /// Which tier is installed. Part of the install identity so a same-version tier switch still
     /// re-downloads. Nil for catalogs installed before tiering (compares equal to a nil manifest tier).
     var tier: String? = nil
@@ -69,13 +72,13 @@ final class CatalogUpdater {
             let current = state.version >= manifest.version && state.tier == manifest.tier
             let unwantedTier = manifest.tier != state.tier && manifest.tier != desiredTier
             if current || unwantedTier {
-                // Funding refreshes far more often than the catalog version does, so refresh it
-                // here even though no download is needed — preserving version/priceAsOf.
-                if let manifestFunding = manifest.funding, state.funding != manifestFunding {
-                    var updated = state
-                    updated.funding = manifestFunding
-                    try saveState(updated)
-                }
+                // Funding and the supporters list refresh far more often than the catalog version
+                // does, so refresh them here even though no download is needed — preserving
+                // version/priceAsOf.
+                var updated = state
+                if let manifestFunding = manifest.funding { updated.funding = manifestFunding }
+                if let manifestSupporters = manifest.supporters { updated.supporters = manifestSupporters }
+                if updated != state { try saveState(updated) }
                 return .alreadyCurrent(version: state.version)
             }
         }
@@ -123,6 +126,7 @@ final class CatalogUpdater {
 
         try saveState(CatalogState(version: manifest.version, priceAsOf: nil,
                                    funding: manifest.funding ?? installedState()?.funding,
+                                   supporters: manifest.supporters ?? installedState()?.supporters,
                                    tier: manifest.tier))
         return .installed(version: manifest.version)
     }
