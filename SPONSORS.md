@@ -7,8 +7,7 @@ developer account renews every year.
 
 The people below pay for that, so nobody has to pay to use it. Thank you.
 
-**[Sponsor The Tin →](https://github.com/sponsors/the-tin-app)** ·
-**[Open Collective →](https://opencollective.com/the-tin)**
+**[Sponsor The Tin →](https://github.com/sponsors/the-tin-app)**
 
 ---
 
