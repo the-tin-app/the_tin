@@ -138,6 +138,10 @@ struct CardDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 CardImageView(card: model.card, quality: "high")
+                    // Cap, then re-centre. Uncapped, iPad renders the card ~820pt wide and
+                    // pushes every price a full screen below the fold. 420 never binds on
+                    // iPhone — the widest content width we ship is ~408pt (17 Pro Max).
+                    .frame(maxWidth: 420)
                     .frame(maxWidth: .infinity)
 
                 VStack(alignment: .leading, spacing: 4) {

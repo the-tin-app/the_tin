@@ -1083,8 +1083,15 @@ struct CollectionView: View {
 
 private extension View {
     /// Strip List chrome so riffle rows read as trays in the tin, not table cells.
+    ///
+    /// Capped and re-centred, the same way card detail caps its art. Uncapped, an iPad stretches
+    /// every tray to ~1000pt while the card spread still occupies ~220pt of it — a very wide,
+    /// mostly empty box with the count and value stranded at the far right. 700 never binds on
+    /// iPhone: the widest content width we ship is ~408pt on the 17 Pro Max.
     func tinRow() -> some View {
-        self.listRowSeparator(.hidden)
+        self.frame(maxWidth: 700)
+            .frame(maxWidth: .infinity)
+            .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
     }

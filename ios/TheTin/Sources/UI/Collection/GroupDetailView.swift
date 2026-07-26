@@ -8,6 +8,9 @@ struct CollectionEntryRow: View {
     var dividerName: String? = nil
     let value: Double?
     var delta: DeltaRecord? = nil
+    /// Sold rows have no current value *by definition*, so they leave the price column empty
+    /// rather than claiming the catalog failed them.
+    var hidesNoData: Bool = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -25,7 +28,7 @@ struct CollectionEntryRow: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
-                    PriceLabel(value: value)
+                    PriceLabel(value: value, hidesNoData: hidesNoData)
                     DeltaBadge(record: delta)
                 }
             } else {
@@ -353,8 +356,11 @@ struct GroupDetailView: View {
             Section {
                 if showingGone {
                     ForEach(gone) { entry in
+                        // No value, and no "no data" either: what it went for is already in the
+                        // caption, and this column reports what a card is worth *now*.
                         CollectionEntryRow(card: try? store.card(id: entry.cardId), entry: entry,
-                                           dividerName: goneCaption(entry), value: nil)
+                                           dividerName: goneCaption(entry), value: nil,
+                                           hidesNoData: true)
                             .foregroundStyle(.secondary)
                             .swipeActions(edge: .leading) {
                                 Button {
