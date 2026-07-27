@@ -80,6 +80,7 @@ struct ImportedRow {
     var addedAt: Date? = nil
     var note: String? = nil          // merged into acquiredFrom (e.g. "Grade: CGC 9.5")
     var forTrade: Bool = false       // The Tin only — round-trips the trade-list flag
+    var acquiredVia: String? = nil   // The Tin only — AcquiredVia rawValue, nil if unreadable
 }
 
 enum MatchResult: Equatable {
@@ -366,7 +367,8 @@ enum CollectionCSVImport {
                                pricePaid: row.pricePaid, acquiredAt: row.acquiredAt,
                                acquiredFrom: from.isEmpty ? nil : from,
                                addedAt: row.addedAt ?? now, variant: row.variant,
-                               forTrade: row.forTrade ? true : nil)
+                               forTrade: row.forTrade ? true : nil,
+                               acquiredVia: row.acquiredVia)
     }
 
     /// skipped-rows.csv: the file's original columns + a trailing skip_reason column.
@@ -400,6 +402,11 @@ enum CollectionCSVImport {
             row.forTrade = (h.value("for_trade", in: f)?.lowercased()).map {
                 $0 == "true" || $0 == "yes" || $0 == "1"
             } ?? false
+            // Validated against the enum, so an unrecognised value becomes "not recorded"
+            // rather than an unreadable string sitting in the model. The ROW still imports —
+            // a provenance label is not worth failing a card over.
+            row.acquiredVia = h.value("acquired_via", in: f)
+                .flatMap(AcquiredVia.init(rawValue:))?.rawValue
             return .row(row)   // divider/current_value/value_as_of columns intentionally ignored
         })
 
