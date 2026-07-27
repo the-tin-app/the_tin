@@ -46,12 +46,22 @@ enum Movers {
         var id: String { cardId }
     }
 
-    /// A guard against basis flips, not a claim about the market. `price_latest.raw_usd` can
-    /// change WHICH printing it quotes between nightly artifacts, and the resulting "change" is
-    /// the spread between two printings — that's how a card sat at +1800% while its own detail
-    /// screen said +0.2%. A genuine daily move past 500% doesn't happen at this price floor;
-    /// something arithmetic did.
-    /// ponytail: a flat ceiling. The real fix is a stable per-printing basis in the pipeline.
+    /// A guard against quotes that were wrong yesterday, not a claim about the market.
+    ///
+    /// It was built for basis flips — `price_latest.raw_usd` changing WHICH printing it quoted
+    /// between nightly artifacts, so the "change" was the spread between two printings, which is
+    /// how a card sat at +1800% while its own detail screen said +0.2%. The pipeline fixed that
+    /// (`raw_printing`, IMPROVEMENTS #3): raw deltas past 500% went **47 → 2** between v23 and
+    /// v25, and the 100–500% band 450 → 8.
+    ///
+    /// The ceiling stays because the residue has a different cause. Measured on v25 (2026-07-27),
+    /// six rows catalog-wide still clear 500%, and they're thin-market SKUs correcting a stale
+    /// quote: `neo4-107` Shining Charizard went $20 → $3998.99 overnight with `raw_printing`
+    /// unchanged on both sides. A corrected quote is not a move your tin made, and `topMovers`
+    /// sorts by `ABS(pct)`, so without this the least trustworthy row in the catalog leads the
+    /// screen.
+    /// ponytail: a flat ceiling, deliberately. Upgrade path is a sanity check on the *previous*
+    /// price (was it quoted from a real sale?), not a bigger number here.
     static let implausiblePct: Double = 5.0
 
     /// Below this the list fills with commons whose "moves" are rounding noise on a few cents.
