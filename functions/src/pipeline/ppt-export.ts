@@ -181,6 +181,68 @@ export interface ExportInputs {
 export interface ExportApplyStats {
   rawRows: number; gradedRows: number; sealedRows: number; popRows: number; unmatched: number;
   gradedPrintingRows: number;
+  /** Sealed rows whose PPT set couldn't be resolved to one of ours — they keep a NULL set_id and
+   *  so appear nowhere per-set. Worth watching: a jump means the card export stopped covering a
+   *  set the sealed export still lists. */
+  sealedUnmappedSets: number;
+}
+
+/**
+ * PPT's `setId` → our TCGdex set id, learned from the card rows that DO join.
+ *
+ * PPT numbers its sets ("648", "3170"); our catalog keys them by TCGdex id ("me05", "swsh7").
+ * Sealed rows only ever carry PPT's, and it was written straight through — so every
+ * `sealed_product.set_id` matched no row in `set_info`, and the per-set "Sealed products" section
+ * in the app rendered for ZERO sets, silently, from the day it shipped. (Verified on the served
+ * catalog 2026-07-26: 2,510 sealed rows, `JOIN set_info` → 0.)
+ *
+ * Cards are the Rosetta stone: PPT's card export carries both its own `setId` and a
+ * `tcgPlayerId` we already map to our card id, and our card knows its TCGdex set. So a PPT set
+ * resolves to whichever of our sets most of its cards belong to.
+ *
+ * Majority vote rather than first-wins, because promos and mis-filed singles shouldn't decide a
+ * whole set; ties break lexicographically so two runs over the same dump agree.
+ */
+export function buildSetIdMap(
+  db: Database, cards: CardsExportRow[], idByTcg: Map<number, string>,
+): Map<string, string> {
+  const setByCardId = new Map<string, string>();
+  try {
+    for (const row of db.prepare("SELECT id, set_id FROM card WHERE set_id IS NOT NULL").all() as
+         { id: string; set_id: string }[]) {
+      setByCardId.set(row.id, row.set_id);
+    }
+  } catch {
+    // A `card` table without `set_id` (minimal fixtures, very old artifacts). No evidence to map
+    // on, so every sealed row lands with a NULL set — same as an unresolvable id, and better than
+    // throwing partway through an ingest that has already written prices.
+    return new Map();
+  }
+
+  const votes = new Map<string, Map<string, number>>();
+  for (const c of cards) {
+    if (!c.setId) continue;
+    const cardId = idByTcg.get(c.tcgPlayerId);
+    if (!cardId) continue;
+    const ours = setByCardId.get(cardId);
+    if (!ours) continue;
+    let tally = votes.get(c.setId);
+    if (!tally) { tally = new Map(); votes.set(c.setId, tally); }
+    tally.set(ours, (tally.get(ours) ?? 0) + 1);
+  }
+
+  const out = new Map<string, string>();
+  for (const [pptSet, tally] of votes) {
+    let best: string | null = null;
+    let bestCount = 0;
+    for (const [ours, count] of tally) {
+      if (count > bestCount || (count === bestCount && best !== null && ours < best)) {
+        best = ours; bestCount = count;
+      }
+    }
+    if (best) out.set(pptSet, best);
+  }
+  return out;
 }
 
 function buildIdByTcgFromDb(db: Database): Map<number, string> {
@@ -203,6 +265,7 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
   skuMeta?: Map<number, { printing: string; priority: number }>): ExportApplyStats {
   const stats: ExportApplyStats = {
     rawRows: 0, gradedRows: 0, sealedRows: 0, popRows: 0, unmatched: 0, gradedPrintingRows: 0,
+    sealedUnmappedSets: 0,
   };
 
   // tcgPlayerId → our card id. The build pipeline passes a map covering EVERY printing SKU of
@@ -296,8 +359,15 @@ export function applyExport(db: Database, inputs: ExportInputs, idByTcgOverride?
       stats.gradedRows++;
     }
 
+    // Translate PPT's set id to ours. NULL when it can't be resolved — an unmapped PPT id is
+    // not a set id, and storing one that matches nothing is worse than storing nothing: it
+    // reads as an association the data doesn't have. (A sealed-only run with no `cards` input
+    // resolves nothing, which is correct: without cards there is no evidence to map on.)
+    const setIdByPpt = buildSetIdMap(db, inputs.cards ?? [], idByTcg);
     for (const s of inputs.sealed ?? []) {
-      upSealed.run({ tcg: s.tcgPlayerId, name: s.name, set: s.setId || null, type: s.productType || null,
+      const ourSet = s.setId ? setIdByPpt.get(s.setId) ?? null : null;
+      if (s.setId && !ourSet) stats.sealedUnmappedSets++;
+      upSealed.run({ tcg: s.tcgPlayerId, name: s.name, set: ourSet, type: s.productType || null,
         market: s.marketPrice, low: s.lowPrice, as_of: inputs.asOf });
       stats.sealedRows++;
     }
