@@ -789,4 +789,63 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertNil(model.entries.first?.forTrade,
                      "an unmarked entry should look exactly like one that was never marked")
     }
+
+    // MARK: acquisition source (Phase 1 provenance)
+
+    /// Two copies of the same card pulled from the same pack are interchangeable — they must
+    /// still fold into a ×2 row, or a pack rip produces one row per card.
+    func testPulledCopiesOfTheSameCardAreTheSameCopy() {
+        let a = Self.plainEntry(acquiredVia: AcquiredVia.pulled.rawValue)
+        let b = Self.plainEntry(acquiredVia: AcquiredVia.pulled.rawValue)
+        XCTAssertTrue(a.isSameCopy(as: b))
+    }
+
+    /// A pull and a purchase are NOT interchangeable. Merging them destroys the provenance with
+    /// nothing to notice it by — the same failure `forTrade` had before it joined this check.
+    func testPulledAndBoughtCopiesAreNotTheSameCopy() {
+        let pulled = Self.plainEntry(acquiredVia: AcquiredVia.pulled.rawValue)
+        let bought = Self.plainEntry(acquiredVia: AcquiredVia.bought.rawValue)
+        XCTAssertFalse(pulled.isSameCopy(as: bought))
+    }
+
+    /// nil is "not recorded", which is not the same claim as "bought".
+    func testUnrecordedAndBoughtCopiesAreNotTheSameCopy() {
+        let unknown = Self.plainEntry(acquiredVia: nil)
+        let bought = Self.plainEntry(acquiredVia: AcquiredVia.bought.rawValue)
+        XCTAssertFalse(unknown.isSameCopy(as: bought))
+    }
+
+    /// The source alone is not "acquisition detail" — that gate exists to stop rows with real
+    /// per-copy facts (a price, a date, a seller) from being folded away. A bare source label
+    /// carries none of those, so it must not block merging.
+    func testSourceAloneIsNotAcquisitionDetail() {
+        XCTAssertFalse(Self.plainEntry(acquiredVia: AcquiredVia.pulled.rawValue)
+            .hasAcquisitionDetail)
+    }
+
+    /// THE regression test for the Codable trap: a collection.json written before this field
+    /// existed has no `acquiredVia` key. A defaulted non-optional would make Decodable demand
+    /// it and every existing file would fail to decode — silently, at restore time.
+    func testEntryWrittenBeforeThisFieldStillDecodes() throws {
+        let legacy = """
+        {"id":"e1","cardId":"swsh7-215","groupId":"","qty":1,"addedAt":770000000}
+        """
+        let entry = try JSONDecoder().decode(CollectionEntry.self, from: Data(legacy.utf8))
+        XCTAssertNil(entry.acquiredVia)
+        XCTAssertNil(entry.acquiredViaValue)
+        XCTAssertEqual(entry.qty, 1)
+    }
+
+    /// An unrecognised rawValue (hand-edited file, newer app version) reads as "not recorded"
+    /// rather than crashing or inventing a case.
+    func testUnknownSourceRawValueReadsAsNil() {
+        XCTAssertNil(Self.plainEntry(acquiredVia: "ripped-from-a-cereal-box").acquiredViaValue)
+    }
+
+    private static func plainEntry(acquiredVia: String?) -> CollectionEntry {
+        CollectionEntry(id: UUID().uuidString, cardId: "swsh7-215", groupId: "", qty: 1,
+                        condition: "NM", grade: nil, pricePaid: nil, acquiredAt: nil,
+                        acquiredFrom: nil, addedAt: Date(), variant: "regular",
+                        acquiredVia: acquiredVia)
+    }
 }
