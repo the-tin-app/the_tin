@@ -259,6 +259,12 @@ final class CollectionModel {
         let message: String
         let groups: [CardGroup]
         let entries: [CollectionEntry]
+        /// When this offer lapses. Stamped by `offerUndo`, and carried on the offer rather than
+        /// left to the toast so the countdown bar stays HONEST: SwiftUI can tear the toast down
+        /// and rebuild it mid-window (the entries stream re-evaluates that subtree right after a
+        /// delete — see `undoExpiry` below), and a view-owned timer would restart from full and
+        /// promise time that isn't there. The deadline is the truth; the bar just reads it.
+        var expiresAt: Date = .distantFuture
     }
     private(set) var undoable: UndoableDelete?
 
@@ -273,6 +279,9 @@ final class CollectionModel {
 
     /// How long an undo stays on offer.
     static let undoWindow: Duration = .seconds(6)
+    /// The same window as a `TimeInterval`, for the toast's countdown bar. Derived, not a second
+    /// literal — two numbers that must agree eventually stop agreeing.
+    static var undoWindowSeconds: TimeInterval { TimeInterval(undoWindow.components.seconds) }
 
     func clearUndo() {
         undoExpiry?.cancel()
@@ -283,6 +292,8 @@ final class CollectionModel {
     /// Raise an undo offer and start its countdown, replacing any offer already standing.
     private func offerUndo(_ offer: UndoableDelete) {
         undoExpiry?.cancel()
+        var offer = offer
+        offer.expiresAt = Date().addingTimeInterval(Self.undoWindowSeconds)
         undoable = offer
         undoExpiry = Task { [weak self] in
             try? await Task.sleep(for: Self.undoWindow)

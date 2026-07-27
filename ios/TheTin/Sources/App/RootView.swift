@@ -387,19 +387,44 @@ private struct UndoToast: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let undoable: CollectionModel.UndoableDelete
     let onUndo: () -> Void
+    /// Share of the undo window still left, 1 → 0. Drives the countdown bar.
+    @State private var remaining: CGFloat = 1
 
     var body: some View {
-        HStack(spacing: 12) {
-            Text(undoable.message)
-                .font(.subheadline)
-                .lineLimit(2)
-            Spacer(minLength: 8)
-            Button("Undo", action: onUndo)
-                .font(.subheadline.weight(.semibold))
-                .buttonStyle(.borderless)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text(undoable.message)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Button("Undo", action: onUndo)
+                    .font(.subheadline.weight(.semibold))
+                    .buttonStyle(.borderless)
+            }
+            // How long you have left. The offer used to vanish with no warning, so the only way
+            // to learn the window was to miss it.
+            //
+            // Driven off `undoable.expiresAt`, not a local timer: if SwiftUI rebuilds this toast
+            // mid-window the bar picks up where the clock actually is instead of restarting full.
+            // A scaled Capsule rather than ProgressView so it reads as a depleting bar, not a
+            // task that's loading.
+            Capsule()
+                .fill(.tint)
+                .frame(height: 3)
+                .scaleEffect(x: remaining, y: 1, anchor: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityHidden(true)   // the label below already says undo is available
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
+        // Not gated on Reduce Motion: this is the state itself, not decoration. A 3pt bar
+        // shrinking is not the kind of motion that setting exists to suppress, and freezing it
+        // would leave a bar that lies about how long is left.
+        .task(id: undoable.id) {
+            let left = max(0, undoable.expiresAt.timeIntervalSinceNow)
+            remaining = CGFloat(left / CollectionModel.undoWindowSeconds)
+            withAnimation(.linear(duration: left)) { remaining = 0 }
+        }
         // Flat Tin Rule: chrome earns separation from a system material, never a shadow.
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .padding(.horizontal, 12)
