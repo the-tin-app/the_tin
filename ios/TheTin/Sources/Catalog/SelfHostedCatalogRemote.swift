@@ -10,19 +10,26 @@ struct SelfHostedCatalogRemote: CatalogRemote {
     var http: HTTPClient = URLSessionHTTPClient()
     var tier: String = AppConfig.catalogTier
 
-    /// Server manifest shape (`functions/scripts/publish-tiers.ts`). We consume one tier.
+    /// Server manifest shape (`functions/scripts/publish-tiers.ts`), plus the two blocks
+    /// `refresh-funding.ts` merges in after publish. Both are optional: they're absent on a
+    /// manifest written before the nightly's step 7, and absent until the funding platform is live.
     private struct NasManifest: Decodable {
         struct Tier: Decodable { let path: String; let sha256: String; let sizeBytes: Int }
         let version: Int
         let generatedAt: String
         let tiers: [String: Tier]
+        let funding: FundingSnapshot?
+        let supporters: [Supporter]?
     }
 
     func fetchManifest() async throws -> CatalogManifest {
         let m = try JSONDecoder().decode(NasManifest.self, from: try await get("manifest.json"))
         guard let t = m.tiers[tier] else { throw CatalogError.badResponse }
+        // The NAS is the only place `refresh-funding.ts` writes, so dropping these here (as this
+        // did until 2026-07-25) left the nightly feed with no reader at all on the primary path.
         return CatalogManifest(version: m.version, path: t.path, sha256: t.sha256,
-                               sizeBytes: t.sizeBytes, generatedAt: m.generatedAt, funding: nil, tier: tier)
+                               sizeBytes: t.sizeBytes, generatedAt: m.generatedAt,
+                               funding: m.funding, supporters: m.supporters, tier: tier)
     }
 
     /// Authed manifest fetch that surfaces the version + every tier's download size — powers the
