@@ -11,6 +11,15 @@ enum ScanGuide {
     /// Pokémon card aspect (63×88mm) — matches ScanView's guide RoundedRectangle.
     static let cardAspect: CGFloat = 0.717
 
+    /// How much of the preview the drawn guide box spans, as a fraction of the limiting side.
+    ///
+    /// Lives here rather than in the view so the guide the user aims with and the window the
+    /// detector accepts are derived from the same place. `cropRect` below uses 0.92 of the camera
+    /// frame; the drawn box is deliberately tighter, because it must be *fillable* — a box the
+    /// user cannot fill leaves the card small in frame, and `quadPasses` rejects anything under
+    /// 40% of the window's long side.
+    static let guideFrameFraction: CGFloat = 0.82
+
     /// Largest centered card-aspect rect fitting 92% of the frame, expanded by a 10% margin
     /// (detection tolerates loose framing; the margin keeps slightly-off aim inside the crop),
     /// clamped to the frame.

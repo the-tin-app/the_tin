@@ -27,10 +27,25 @@ struct ScanView: View {
             CameraPreview(session: source.session).ignoresSafeArea()
             // Visual guide only — the pipeline analyzes the matching central window defined by
             // ScanGuide.cropRect (single source of truth for "what the scanner looks at").
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(.white.opacity(0.85), lineWidth: 3)
-                .aspectRatio(0.717, contentMode: .fit)
-                .padding(28)
+            //
+            // Sized as a FRACTION of the frame, mirroring cropRect's own maths. It used to be
+            // `.padding(28)` — a fixed inset, so the box grew with the screen: ~334pt wide on a
+            // phone, but roughly 734×1024pt on a 10" iPad. A card-shaped target the size of the
+            // display is not something you can fill, which is both why it read as meaningless
+            // ("you can't quite make out what it might be trying to get you to do") and,
+            // plausibly, why detection stalled: `ScanGuide.quadPasses` needs the card's long side
+            // to be ≥40% of the window's, and an unfillable box keeps the card small in frame.
+            // Reported on an iPad 7th gen, 2026-07-27.
+            GeometryReader { geo in
+                let side = min(geo.size.width * ScanGuide.guideFrameFraction,
+                               geo.size.height * ScanGuide.guideFrameFraction * ScanGuide.cardAspect)
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(.white.opacity(0.85), lineWidth: 3)
+                    .aspectRatio(ScanGuide.cardAspect, contentMode: .fit)
+                    .frame(width: side, height: side / ScanGuide.cardAspect)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)   // centred in the preview
+            }
+            .allowsHitTesting(false)
             VStack {
                 HStack(alignment: .top) {
                     settingsControl
