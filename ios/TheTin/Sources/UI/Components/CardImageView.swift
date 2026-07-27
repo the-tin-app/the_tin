@@ -9,6 +9,13 @@ struct CardImageView: View {
     let card: CardRecord?
     let quality: String // "low" for grids, "high" for detail
     @State private var image: Image?
+    /// Downloading right now, as opposed to "there is no art" or "the fetch failed".
+    ///
+    /// The placeholder used to render identically in all three states, so a slow queue was
+    /// indistinguishable from a broken one — reported 2026-07-27 as "no way to see if a card is
+    /// actively downloading, stuck, etc.", after a too-tight download cap made every grid look
+    /// like it was missing its assets.
+    @State private var isLoading = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -28,6 +35,15 @@ struct CardImageView: View {
         if let image {
             image.resizable().aspectRatio(contentMode: .fit)
                 .transition(.opacity) // cross-fades in over the placeholder instead of popping
+        } else if isLoading {
+            // A spinner while the bytes are on their way; the informative placeholder (set/number,
+            // or the printed facts at detail size) is what you get once we know there's nothing
+            // coming. Two different messages — "wait" and "this is all there is" — that used to
+            // look the same.
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.quaternary)
+                .overlay { ProgressView().controlSize(.small) }
+                .accessibilityLabel("Loading image for \(card.name)")
         } else {
             placeholder(for: card)
         }
@@ -35,8 +51,12 @@ struct CardImageView: View {
 
     private func load(_ card: CardRecord) async {
         image = nil
-        guard let url = card.imageURL(quality: quality),
-              let data = await ImageCache.shared.image(for: url) else { return }
+        // No art for this card at all: never a loading state, so the placeholder shows immediately
+        // rather than spinning at something that will never arrive.
+        guard let url = card.imageURL(quality: quality) else { return }
+        isLoading = true
+        defer { isLoading = false }
+        guard let data = await ImageCache.shared.image(for: url) else { return }
         let decoded = await Task.detached(priority: .utility) { UIImage(data: data) }.value
         guard let decoded, !Task.isCancelled else { return }
         if reduceMotion {

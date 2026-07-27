@@ -83,10 +83,20 @@ actor ImageCache {
 
     /// How many card images may be downloading at once.
     ///
-    /// ponytail: a flat cap, not a bandwidth-aware scheduler. Four keeps a grid filling visibly
-    /// fast while leaving the connection responsive for the catalog and the scanner pack; raise it
-    /// only if art demonstrably lags behind scrolling on a fast network.
-    private static let maxConcurrentDownloads = 4
+    /// Was 4, which was far too tight: on device it felt "10x slower than it used to" (2026-07-27)
+    /// and read as broken rather than slow. Card art comes off an HTTP/2 CDN, where parallel
+    /// requests multiplex over a single connection instead of fighting for sockets — so the thing
+    /// #90 actually needed to prevent was *hundreds* of requests on a fast scroll, not twelve.
+    /// URLSession's own default per-host limit is 4–6 connections, so a cap of 4 was stricter than
+    /// the platform would ever have been on its own.
+    ///
+    /// ponytail: a flat cap, not a bandwidth-aware scheduler, and not adaptive to scroll state.
+    /// Twelve is a felt number, not a measured one — if a fast scroll ever saturates the
+    /// connection again, make it adaptive rather than just lowering this.
+    ///
+    /// Not private: the cap test asserts against this rather than a literal, so changing the
+    /// number here can't silently leave a test claiming to verify a cap that no longer exists.
+    static let maxConcurrentDownloads = 12
     private var activeDownloads = 0
     private var downloadWaiters: [CheckedContinuation<Void, Never>] = []
 

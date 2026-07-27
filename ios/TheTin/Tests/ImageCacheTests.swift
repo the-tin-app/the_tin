@@ -191,13 +191,18 @@ extension ImageCacheTests {
             }
         }
 
+        // Read the cap rather than repeating it: this test asserted a literal 4, so raising the
+        // real cap to 12 broke it — which is the good failure, but only because the numbers
+        // happened to differ. Bound to the source of truth, it can't drift silently.
+        let cap = ImageCache.maxConcurrentDownloads
+
         // Wait for the gate to fill, then read the peak.
         for _ in 0..<300 {
-            if await spy.parked() >= 4 { break }
+            if await spy.parked() >= cap { break }
             try await Task.sleep(for: .milliseconds(10))
         }
         let peak = await spy.peakSeen()
-        XCTAssertLessThanOrEqual(peak, 4, "at most 4 downloads in flight; saw \(peak)")
+        XCTAssertLessThanOrEqual(peak, cap, "at most \(cap) downloads in flight; saw \(peak)")
         XCTAssertGreaterThan(peak, 1, "the cap must not serialise everything to one at a time")
 
         // Drain: each release admits the next waiter, so keep releasing until all 30 resolve.
@@ -223,7 +228,7 @@ extension ImageCacheTests {
         let resolved = results.compactMap { $0 }.count
         let finalPeak = await spy.peakSeen()
         XCTAssertEqual(resolved, urls.count, "every card still resolves")
-        XCTAssertLessThanOrEqual(finalPeak, 4, "the cap holds for the whole drain")
+        XCTAssertLessThanOrEqual(finalPeak, cap, "the cap holds for the whole drain")
     }
 
     /// A cache hit must not touch the downloader — the common case on every launch after the
@@ -276,8 +281,11 @@ extension ImageCacheTests {
                                    .appendingPathComponent(UUID().uuidString),
                                download: { try await spy.fetch($0) })
 
-        // Eight scrolled-past cards: four occupy the slots, four queue up behind them.
-        let old = (0..<8).map { URL(string: "https://example.test/old\($0).jpg")! }
+        // Enough scrolled-past cards to fill every slot AND leave four waiting behind them —
+        // sized off the real cap, because a fixed count silently stops queueing anything the
+        // moment the cap is raised past it, and the test then proves nothing.
+        let cap = ImageCache.maxConcurrentDownloads
+        let old = (0..<(cap + 4)).map { URL(string: "https://example.test/old\($0).jpg")! }
         let running = Task {
             await withTaskGroup(of: Data?.self) { g in
                 for u in old { g.addTask { await cache.image(for: u) } }
@@ -286,7 +294,7 @@ extension ImageCacheTests {
                 return out
             }
         }
-        for _ in 0..<300 where await spy.startedCount() < 4 {
+        for _ in 0..<300 where await spy.startedCount() < cap {
             try await Task.sleep(for: .milliseconds(10))
         }
         // Give the remaining four time to reach the waiter queue before the newest arrives.
@@ -299,13 +307,13 @@ extension ImageCacheTests {
 
         // Free exactly one slot.
         await spy.releaseOne()
-        for _ in 0..<300 where await spy.startedCount() < 5 {
+        for _ in 0..<300 where await spy.startedCount() < cap + 1 {
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        let fifth = await spy.startedURLs()[4]
-        XCTAssertEqual(fifth, onScreen,
-                       "a freed slot must go to the newest request; went to \(fifth.lastPathComponent)")
+        let admitted = await spy.startedURLs()[cap]
+        XCTAssertEqual(admitted, onScreen,
+                       "a freed slot must go to the newest request; went to \(admitted.lastPathComponent)")
 
         newest.cancel(); running.cancel()
     }
