@@ -371,7 +371,10 @@ struct SettingsView: View {
             if model.alertsDenied {
                 Text("Notifications are off for The Tin. Enable them in iOS Settings to get price alerts.")
             } else {
-                Text("Get notified when a wishlist card's price moves. Alerts arrive when new prices download — not real-time.")
+                // Target hits are named explicitly: they don't obey the sensitivity picker above
+                // it, and a target you set months ago is the one alert here you're actually
+                // waiting for.
+                Text("Get notified when a wishlist card drops to the target price you set, or when its price moves by the amount above. Alerts arrive when new prices download — not real-time.")
             }
         }
     }
@@ -382,7 +385,9 @@ struct SettingsView: View {
     /// mirrors `runImport`, so a 20k-entry export can't freeze the UI either.
     private func makeExportDocument() async -> CSVDocument? {
         guard let collection = app.collection, let store = app.store else { return nil }
-        let entries = collection.entries
+        // `allEntries`: an export is the whole file. Using the owned-only list would drop every
+        // sold copy — the one place a silent omission looks exactly like a successful backup.
+        let entries = collection.allEntries
         let groups = collection.groups
         let prices = collection.prices
         let variantsByCard = collection.variantsByCard

@@ -86,7 +86,20 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     /// written before this existed still decodes untouched.
     var forTrade: Bool? = nil
 
+    /// When this copy left the collection — sold, traded away, given to a nephew.
+    ///
+    /// A card could enter the tin and never leave it: selling meant `deleteEntry`, which erased
+    /// the row, and `PortfolioView`'s "Change vs. paid" is computed from the cost basis of the
+    /// SURVIVING entries — so selling at a loss made that number *improve*, because the loss left
+    /// the dataset along with the card. A sold copy keeps its history and its cost basis and
+    /// stops counting toward what you own.
+    var soldAt: Date? = nil
+    /// What you got for it. nil for a trade or a gift, where there was no cash figure — the copy
+    /// is still gone, we just can't say what it realised. USD, like `pricePaid` (OQ1).
+    var soldFor: Double? = nil
+
     var isForTrade: Bool { forTrade == true }
+    var isSold: Bool { soldAt != nil }
 
     var gradeValue: Grade? { grade.flatMap(Grade.init(rawValue:)) }
     var variantValue: CardVariant? { variant.flatMap(CardVariant.init(rawValue:)) }
@@ -110,8 +123,14 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     /// physical copy — so you can keep one and trade the other three — a kept copy and a
     /// for-trade copy stopped being interchangeable. Leaving it out silently folded them back
     /// together on the next bulk move, destroying exactly the distinction the split creates.
+    /// A sold copy is never the same copy as anything: it is a closed record, and folding a card
+    /// you still own into one you've already sold would resurrect it in the totals while
+    /// destroying what it realised. Belt and braces — sold rows are filtered out of
+    /// `CollectionModel.entries`, which is the only pool the merge paths search — but this is the
+    /// rule itself, and it should hold wherever the rule is asked.
     func isSameCopy(as other: CollectionEntry) -> Bool {
-        cardId == other.cardId && groupId == other.groupId
+        !isSold && !other.isSold
+            && cardId == other.cardId && groupId == other.groupId
             && condition == other.condition && grade == other.grade
             && variantValue == other.variantValue
             && isForTrade == other.isForTrade

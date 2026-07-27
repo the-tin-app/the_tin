@@ -42,7 +42,8 @@ struct PokemonDetailView: View {
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
 
-    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
+    // `.top`, matching every other card grid — see the note in `SetsListView`.
+    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12, alignment: .top)]
     private static let sortOptions = CardSort.allCases
 
     private var owned: Set<String> { Set(entries.map(\.cardId)) }

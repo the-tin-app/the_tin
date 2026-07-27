@@ -138,6 +138,187 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(model.allOwnedEntries.count, model.entries.count)
     }
 
+    /// The cached per-divider totals must equal what a direct `GroupStats.totalValue` over that
+    /// divider's entries returns — the whole point of bucketing in one pass is that nobody can
+    /// tell it happened. Ungrouped entries ("" groupId) are their own bucket and must not leak
+    /// into a named divider's total.
+    func testCachedGroupTotalsMatchDirectComputation() async throws {
+        await model.createGroup(name: "Binder A")
+        await model.createGroup(name: "Binder B")
+        await waitForStreams()
+        let a = try XCTUnwrap(model.groups.first).id
+        let b = try XCTUnwrap(model.groups.last).id
+        XCTAssertNotEqual(a, b)
+
+        for (card, group) in [("swsh7-215", a), ("sv1-25", a), ("swsh7-12", b), ("ex6-58", "")] {
+            await model.saveEntry(CollectionEntry(
+                id: UUID().uuidString, cardId: card, groupId: group, qty: 1, condition: "NM",
+                grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        }
+        await waitForStreams()
+
+        for group in [a, b, ""] {
+            let direct = GroupStats.totalValue(
+                entries: model.entries(in: group), prices: model.prices,
+                variantsByCard: model.variantsByCard, conditionsByCard: model.conditionsByCard,
+                matrixByCard: model.matrixByCard,
+                gradedByPrintingByCard: model.gradedByPrintingByCard)
+            let cached = model.groupValue(group)
+            XCTAssertEqual(cached.total, direct.total, accuracy: 0.001, "group \(group)")
+            XCTAssertEqual(cached.pricedCards, direct.pricedCards, "group \(group)")
+            XCTAssertEqual(cached.totalCards, direct.totalCards, "group \(group)")
+        }
+
+        // The whole tin is every bucket, so its card count is the sum of theirs.
+        XCTAssertEqual(model.tinValue.totalCards, 4)
+        XCTAssertEqual(model.tinValue.total,
+                       [a, b, ""].reduce(0) { $0 + model.groupValue($1).total }, accuracy: 0.001)
+        // A divider that has never held a card has no bucket at all.
+        XCTAssertEqual(model.groupValue("never-existed").totalCards, 0)
+    }
+
+    /// `entryValue` returns the value of the WHOLE row (unit × qty), not one copy.
+    ///
+    /// The card screen's "paid → now" line leans on this: it compares `entryValue` against
+    /// `pricePaid`, which is spec-locked as the row total. If this ever became a per-copy figure,
+    /// a ×4 row would silently compare one copy's value against four copies' cost and report a
+    /// 75% loss on a card that hadn't moved.
+    func testEntryValueIsTheRowTotalNotOneCopy() async throws {
+        let one = CollectionEntry(
+            id: "one", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: "psa10",
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date())
+        await model.saveEntry(one)
+        await waitForStreams()
+        let unit = try XCTUnwrap(model.entryValue(try XCTUnwrap(model.entries.first)))
+
+        // A separate row for the same card, three copies — differing qty alone keeps it its own
+        // row only if something blocks the merge, so use a distinct divider.
+        await model.saveEntry(CollectionEntry(
+            id: "three", cardId: "swsh7-215", groupId: "elsewhere", qty: 3, condition: "NM",
+            grade: "psa10", pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        let triple = try XCTUnwrap(model.entries.first { $0.id == "three" })
+        XCTAssertEqual(try XCTUnwrap(model.entryValue(triple)), unit * 3, accuracy: 0.001)
+    }
+
+    // MARK: sold / traded away
+
+    /// A sold copy leaves everything that measures what you own, and keeps everything that
+    /// records what happened.
+    func testSoldEntryLeavesTheTotalsButKeepsItsHistory() async throws {
+        await model.saveEntry(CollectionEntry(
+            id: "keep", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: "psa10",
+            pricePaid: 400, acquiredAt: nil, acquiredFrom: "a card show", addedAt: Date()))
+        await model.saveEntry(CollectionEntry(
+            id: "gone", cardId: "sv1-25", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: 30, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        let before = model.tinValue
+        XCTAssertEqual(before.totalCards, 2)
+
+        let gone = try XCTUnwrap(model.entries.first { $0.id == "gone" })
+        await model.markSold(gone, on: Date(), for: 25)
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.map(\.id), ["keep"], "sold copies leave `entries`")
+        XCTAssertEqual(model.soldEntries.map(\.id), ["gone"])
+        XCTAssertEqual(model.allEntries.count, 2, "and stay on file")
+        XCTAssertEqual(model.tinValue.totalCards, 1, "and stop counting toward what you own")
+        XCTAssertEqual(model.entries(in: "").map(\.id), ["keep"])
+
+        let sold = try XCTUnwrap(model.soldEntries.first)
+        XCTAssertEqual(sold.soldFor, 25)
+        XCTAssertEqual(sold.pricePaid, 30, "cost basis survives the sale — that's the whole point")
+    }
+
+    /// The trap this feature is most likely to spring: `undoLastDelete` hands `replaceAll` a
+    /// complete collection. Built from the owned-only list it would rewrite the file without a
+    /// single sold row — one tap on Undo silently erasing every sale you'd ever recorded.
+    func testUndoAfterASaleDoesNotWipeTheSoldRows() async throws {
+        await model.saveEntry(CollectionEntry(
+            id: "sold", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: 100, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await model.saveEntry(CollectionEntry(
+            id: "doomed", cardId: "sv1-25", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        await model.markSold(try XCTUnwrap(model.entries.first { $0.id == "sold" }),
+                             on: Date(), for: 90)
+        await waitForStreams()
+
+        await model.deleteEntry(id: "doomed")
+        await waitForStreams()
+        await model.undoLastDelete()
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.map(\.id), ["doomed"], "the delete is undone")
+        XCTAssertEqual(model.soldEntries.map(\.id), ["sold"], "and the sale survived it")
+        XCTAssertEqual(model.soldEntries.first?.soldFor, 90)
+    }
+
+    /// Selling is reversible, and editing a sold row updates it rather than minting a twin —
+    /// `saveEntry` decides update-vs-add by searching, and the owned-only list wouldn't find it.
+    func testSoldCopyCanComeBackAndCanBeEditedInPlace() async throws {
+        await model.saveEntry(CollectionEntry(
+            id: "e", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        await model.markSold(try XCTUnwrap(model.entries.first), on: Date(), for: 10)
+        await waitForStreams()
+
+        var edited = try XCTUnwrap(model.soldEntries.first)
+        edited.acquiredFrom = "traded at the meetup"
+        await model.saveEntry(edited)
+        await waitForStreams()
+        XCTAssertEqual(model.allEntries.count, 1, "edited in place, not duplicated")
+
+        await model.markUnsold(try XCTUnwrap(model.soldEntries.first))
+        await waitForStreams()
+        XCTAssertTrue(model.soldEntries.isEmpty)
+        XCTAssertEqual(model.entries.map(\.id), ["e"])
+        XCTAssertEqual(model.entries.first?.acquiredFrom, "traded at the meetup")
+    }
+
+    /// Re-buying a card you once sold must not resurrect the sold row into a "×2".
+    func testBuyingAgainDoesNotFoldIntoASoldCopy() async throws {
+        await model.saveEntry(CollectionEntry(
+            id: "old", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+        await model.markSold(try XCTUnwrap(model.entries.first), on: Date(), for: 500)
+        await waitForStreams()
+
+        await model.saveEntry(CollectionEntry(
+            id: "new", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date()))
+        await waitForStreams()
+
+        XCTAssertEqual(model.entries.map(\.id), ["new"])
+        XCTAssertEqual(model.entries.first?.qty, 1, "the sold copy must not be revived as a ×2")
+        XCTAssertEqual(model.soldEntries.first?.soldFor, 500)
+    }
+
+    /// The trade list is cached alongside the totals; deleting the last flagged copy has to empty
+    /// it, or the tin's "For Trade" row keeps counting a card that isn't there.
+    func testCachedTradeListTracksTheForTradeFlag() async throws {
+        let entry = CollectionEntry(
+            id: "t1", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM", grade: nil,
+            pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date())
+        await model.saveEntry(entry)
+        await waitForStreams()
+        XCTAssertTrue(model.tradeEntries.isEmpty)
+
+        await model.setForTrade(try XCTUnwrap(model.entries.first), true)
+        await waitForStreams()
+        XCTAssertEqual(model.tradeEntries.map(\.cardId), ["swsh7-215"])
+        XCTAssertEqual(model.tradeValue.totalCards, 1)
+
+        await model.setForTrade(try XCTUnwrap(model.entries.first), false)
+        await waitForStreams()
+        XCTAssertTrue(model.tradeEntries.isEmpty)
+        XCTAssertEqual(model.tradeValue.totalCards, 0)
+    }
+
     func testEntriesChangePublishesWidgetSnapshot() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

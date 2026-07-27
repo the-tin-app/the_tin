@@ -138,6 +138,10 @@ struct CardDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 CardImageView(card: model.card, quality: "high")
+                    // Cap, then re-centre. Uncapped, iPad renders the card ~820pt wide and
+                    // pushes every price a full screen below the fold. 420 never binds on
+                    // iPhone — the widest content width we ship is ~408pt (17 Pro Max).
+                    .frame(maxWidth: 420)
                     .frame(maxWidth: .infinity)
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -212,6 +216,7 @@ struct CardDetailView: View {
                             Text("low \(low, format: .currency(code: "USD"))")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                        cardmarketLine(price)
                         // Liquidity: how many sellers/listings back the market price right now.
                         // PPT sometimes reports a literal 0 for a count it doesn't really have
                         // (e.g. "22 sellers · 0 listings" — 22 sellers implies listings > 0), so
@@ -457,12 +462,15 @@ struct CardDetailView: View {
                     .foregroundStyle(.tint)
                 ForEach(entries) { entry in
                     Button { editingEntry = entry } label: {
-                        HStack(spacing: 6) {
-                            Text(sleeveText(entry)).font(.caption)
-                            Text("·").font(.caption).foregroundStyle(.tertiary)
-                            Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(sleeveText(entry)).font(.caption)
+                                Text("·").font(.caption).foregroundStyle(.tertiary)
+                                Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                            }
+                            paidLine(entry)
                         }
                         .contentShape(Rectangle())
                     }
@@ -487,6 +495,72 @@ struct CardDetailView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// The Cardmarket price in euros, beside the dollar one. Two real markets, never a conversion.
+    ///
+    /// This is deliberately NOT an app-wide currency setting, and the reason is in the schema:
+    /// `raw_eur` is the ONLY euro column the catalog has. `price_by_variant`,
+    /// `price_by_condition`, `price_matrix`, `graded_by_printing`, `psa1..psa10`, `price_history`
+    /// and `sealed_product` are all USD-only. A "Currency: EUR" toggle would therefore convert
+    /// the headline and a few grid tiles while the tin total, the portfolio, Movers, every
+    /// condition and graded tile and the whole history chart silently stayed in dollars — most of
+    /// the numbers in the app, unmarked. One honest line beats a setting that misreports the rest
+    /// of the screen. (Real currency support is a pipeline job: Cardmarket does publish condition
+    /// and printing prices, they just aren't in the artifact.)
+    ///
+    /// Cardmarket and TCGplayer are genuinely different markets with different prices, which is
+    /// exactly why the euro figure is worth showing and a converted dollar figure would not be.
+    ///
+    /// Coverage is good — 19,437 of 20,933 rows on the served catalog, slightly better than
+    /// `raw_usd` — and 1,082 cards carry a euro price with no dollar one at all. Those used to
+    /// show no price whatsoever; now they show the price that exists.
+    ///
+    /// `raw_eur` is a card-level raw price with no per-printing counterpart, so on a
+    /// multi-printing card it says so rather than appearing to describe the selected printing —
+    /// same caveat the graded, condition and history sections already carry.
+    @ViewBuilder private func cardmarketLine(_ price: PriceRecord) -> some View {
+        if let eur = price.rawEur {
+            HStack(spacing: 4) {
+                Text(eur, format: .currency(code: "EUR")).monospacedDigit()
+                Text(currentPrinting == nil ? "Cardmarket" : "Cardmarket · card overall")
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Cardmarket price \(eur.formatted(.currency(code: "EUR")))"
+                                + (currentPrinting == nil ? "" : ", for the card overall"))
+        }
+    }
+
+    /// "paid $360 → $520 · +44%" — how this copy has done since you bought it.
+    ///
+    /// The card screen renders a graded price ladder, a condition matrix, a population histogram
+    /// and a whole expected-value grading model, and until now said nothing at all about the one
+    /// number on it that is actually yours. You typed the price in; it reached a portfolio chart
+    /// line and two PDFs and never came back to the card.
+    ///
+    /// Both sides are ROW totals, deliberately: `pricePaid` is spec-locked as the total for the
+    /// entry and `entryValue` already multiplies by qty, so a ×4 row compares four copies against
+    /// what four copies cost. Dividing to a per-copy figure would be the same percentage with an
+    /// extra chance to be wrong. Shown only when `entryValue` is non-nil — that's the
+    /// exactly-priced gate, so a copy whose condition has no price of its own says nothing rather
+    /// than comparing your money against a fallback estimate.
+    @ViewBuilder private func paidLine(_ entry: CollectionEntry) -> some View {
+        if let paid = entry.pricePaid, paid > 0, let now = collection?.entryValue(entry) {
+            let change = now - paid
+            HStack(spacing: 4) {
+                Text("paid \(paid, format: .currency(code: "USD"))")
+                Image(systemName: "arrow.right").font(.system(size: 8))
+                Text(now, format: .currency(code: "USD"))
+                Text("· \(change >= 0 ? "+" : "−")\(abs(change) / paid, format: .percent.precision(.fractionLength(0)))")
+                    .foregroundStyle(change >= 0 ? .green : .red)
+            }
+            .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Paid \(paid.formatted(.currency(code: "USD"))), now worth \(now.formatted(.currency(code: "USD"))), \(change >= 0 ? "up" : "down") \((abs(change) / paid).formatted(.percent.precision(.fractionLength(0))))")
         }
     }
 

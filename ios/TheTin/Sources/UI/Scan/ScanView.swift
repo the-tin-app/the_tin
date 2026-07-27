@@ -10,6 +10,9 @@ struct ScanView: View {
     let source: AVCaptureFrameSource
     var wants: WantsModel? = nil
     @State private var showingReview = false
+    /// Collapsed by default — mode and condition are set once per stack, not per card.
+    @State private var showingSettings = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// What the tin already knows about the card that just landed in the tray — the "do I need
     /// this?" answer, read at the moment your hands are still on the card.
@@ -29,7 +32,8 @@ struct ScanView: View {
                 .aspectRatio(0.717, contentMode: .fit)
                 .padding(28)
             VStack {
-                HStack {
+                HStack(alignment: .top) {
+                    settingsControl
                     Spacer()
                     // Escape hatch: clears the scanner to a clean slate (votes, lock, chooser, and
                     // any rejected-card suppression). Does NOT drop staged cards. Available in every
@@ -46,13 +50,18 @@ struct ScanView: View {
                 Spacer()
                 VStack(spacing: 8) {
                     CoverageRing(value: model.coverage)
-                    // Amber while a chooser is frozen ("Scanning paused"), material otherwise.
-                    Text(model.guidance).font(.headline).padding(8)
-                        .background(model.ambiguous.isEmpty ? AnyShapeStyle(.ultraThinMaterial)
-                                                            : AnyShapeStyle(Color.orange.opacity(0.9)),
-                                    in: Capsule())
+                    // Only when it has something to say. "Frame the card inside the box" is what
+                    // the frame rectangle already is, so showing it too was a permanent line of
+                    // chrome over the thing you're trying to point the camera at.
+                    if model.guidance != ScanModel.idleGuidance {
+                        // Amber while a chooser is frozen ("Scanning paused"), material otherwise.
+                        Text(model.guidance).font(.headline).padding(8)
+                            .background(model.ambiguous.isEmpty ? AnyShapeStyle(.ultraThinMaterial)
+                                                                : AnyShapeStyle(Color.orange.opacity(0.9)),
+                                        in: Capsule())
+                            .transition(.opacity)
+                    }
                     if model.ambiguous.isEmpty {
-                        modePicker
                         // In look-up mode the tray is noise until something is actually staged —
                         // but staged cards from an earlier session still need their way back.
                         if !model.isLookUpMode || !staging.drafts.isEmpty {
@@ -86,6 +95,54 @@ struct ScanView: View {
         .task { await model.run(source: source) }
     }
 
+    /// Both scanner settings behind one chip: "Add · MP", or just "Look up".
+    ///
+    /// Mode and condition are set once per stack and then not touched again, but as two permanent
+    /// segmented controls they sat over the camera for the entire session — with the guidance
+    /// text, the ring, the tray and Reset, the viewfinder had six things competing with the card
+    /// (reported on device 2026-07-26). Collapsed, the frame is left to do its job, and the chip
+    /// still states both answers so nothing is hidden — which matters, because the condition
+    /// silently prices everything you capture.
+    @ViewBuilder private var settingsControl: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
+                    showingSettings.toggle()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(settingsSummary).font(.footnote.weight(.medium))
+                    Image(systemName: "chevron.down").font(.caption2)
+                        .rotationEffect(.degrees(showingSettings ? 180 : 0))
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Scanner settings, \(settingsSummary)")
+            .accessibilityHint(showingSettings ? "Hides the settings" : "Shows mode and condition")
+
+            if showingSettings {
+                VStack(spacing: 8) {
+                    modePicker
+                    // Only in Add mode: look-up stages nothing, so a condition for the thing it
+                    // isn't recording would be one more control saying nothing.
+                    if !model.isLookUpMode { conditionPicker }
+                }
+                .padding(8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    /// "Add · MP" while staging, "Look up" when nothing is being recorded — naming a condition
+    /// there would describe a decision the mode has switched off.
+    private var settingsSummary: String {
+        model.isLookUpMode ? "Look up" : "Add · \(model.stagingCondition.rawValue)"
+    }
+
     /// Add vs. look up. Two different questions get asked of a card in hand — "file this" while
     /// cataloguing a box, and "what is this?" standing in a shop — and the scanner only ever
     /// answered the first, so asking the second cost a stage-then-delete round trip.
@@ -101,6 +158,22 @@ struct ScanView: View {
         .accessibilityHint(model.isLookUpMode
                            ? "Scanned cards are shown, not saved"
                            : "Scanned cards are staged for review")
+    }
+
+    /// The condition every capture is staged at, until you change it. A per-card question in the
+    /// rapid loop is exactly what spec D5 emptied out of it — but the answer was silently "Near
+    /// Mint" for everything, so a bulk lot of played commons valued itself as mint. One control,
+    /// set once per stack, sticky across launches like the mode picker beside it.
+    private var conditionPicker: some View {
+        Picker("Condition", selection: $model.stagingCondition) {
+            ForEach(CardCondition.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 260)
+        .padding(4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityLabel("Condition for scanned cards")
+        .accessibilityHint("New scans are staged at this condition")
     }
 
     /// Bridges the model's looked-up card id to `.sheet(item:)`. Dismissing clears it AND resets
@@ -214,6 +287,9 @@ private struct StagingTray: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("^[\(staging.drafts.count) card](inflect: true) staged").font(.subheadline.bold())
+                // The condition this total is priced at lives in the settings chip at the top of
+                // the screen, which is always visible — repeating it here was one more line in
+                // the viewfinder saying something already on screen.
                 Text(staging.totalUsd, format: .currency(code: "USD"))
                     .font(.caption).foregroundStyle(.secondary)
                 // Only when there's something to say — a card you neither own nor want stays quiet

@@ -834,7 +834,11 @@ final class CatalogStore {
                     psa1: r["psa1"], psa2: r["psa2"], psa3: r["psa3"], psa4: r["psa4"],
                     psa5: r["psa5"], psa6: r["psa6"], psa7: r["psa7"], psa8: r["psa8"],
                     psa9: r["psa9"], psa10: r["psa10"],
-                    sellers: r["sellers"], listings: r["listings"], lowUsd: r["low_usd"], asOf: r["as_of"])
+                    sellers: r["sellers"], listings: r["listings"], lowUsd: r["low_usd"],
+                    // Absent from every artifact published before 2026-07-26; `SELECT *` simply
+                    // doesn't return it there and it reads as nil, same as the pre-all-grades
+                    // psa columns above.
+                    rawPrinting: r["raw_printing"], asOf: r["as_of"])
     }
 }
 

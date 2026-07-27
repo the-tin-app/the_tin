@@ -42,9 +42,25 @@ final class CollectionCSVTests: XCTestCase {
         // current_value: psa10 505 × qty 2 = 1010.00 (same GroupStats.entryValue the app shows).
         // acquiredFrom contains a comma → quoted.
         // for_trade is blank, not "false": an entry that was never marked exports as it always did.
+        // …and sold_at/sold_for blank for a card you still own.
         XCTAssertEqual(out[1],
             "swsh7-215,Rayquaza VMAX,swsh7,Evolving Skies,215,Rare Rainbow,2,holo,NM,psa10," +
-            "300.00,1970-01-02T00:00:00Z,\"trade, local show\",1970-01-01T00:00:00Z,Binder,1010.00,2026-07-13,")
+            "300.00,1970-01-02T00:00:00Z,\"trade, local show\",1970-01-01T00:00:00Z,Binder,1010.00,2026-07-13,,,")
+    }
+
+    /// An export is the whole file, so a copy that has left has to appear in it — with what it
+    /// went for. Dropping sold rows would look exactly like a successful backup.
+    func testExportCarriesSoldCopies() {
+        let entry = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "g1", qty: 1,
+                                    condition: "NM", grade: nil, pricePaid: 300, acquiredAt: nil,
+                                    acquiredFrom: nil, addedAt: Date(timeIntervalSince1970: 0),
+                                    variant: "holo",
+                                    soldAt: Date(timeIntervalSince1970: 86_400), soldFor: 420)
+        let group = CardGroup(id: "g1", name: "Binder", sortOrder: 0, createdAt: Date())
+        let data = CollectionCSV.export(entries: [entry], groups: [group],
+                                        cards: [card.id: card], sets: [set.id: set],
+                                        prices: [card.id: price])
+        XCTAssertTrue(lines(data)[1].hasSuffix(",1970-01-02T00:00:00Z,420.00"), "got \(lines(data)[1])")
     }
 
     /// The trade flag has to survive "your data is yours": export then re-import must not quietly
@@ -58,7 +74,8 @@ final class CollectionCSVTests: XCTestCase {
         let data = CollectionCSV.export(entries: [entry], groups: [group],
                                         cards: [card.id: card], sets: [set.id: set],
                                         prices: [card.id: price])
-        XCTAssertTrue(lines(data)[1].hasSuffix(",true"), "got \(lines(data)[1])")
+        // for_trade is followed by the (empty) sold_at/sold_for columns.
+        XCTAssertTrue(lines(data)[1].hasSuffix(",true,,"), "got \(lines(data)[1])")
     }
 
     func testExportUnknownCardAndUngroupedGoesBlankNotCrash() {
@@ -66,7 +83,7 @@ final class CollectionCSVTests: XCTestCase {
                                     grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
                                     addedAt: Date(timeIntervalSince1970: 0))
         let data = CollectionCSV.export(entries: [entry], groups: [], cards: [:], sets: [:], prices: [:])
-        XCTAssertEqual(lines(data)[1], "gone-1,,,,,,1,,,,,,,1970-01-01T00:00:00Z,,,,")
+        XCTAssertEqual(lines(data)[1], "gone-1,,,,,,1,,,,,,,1970-01-01T00:00:00Z,,,,,,")
     }
 
     func testWishlistExport() {

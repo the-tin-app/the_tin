@@ -76,6 +76,88 @@ final class PriceAlertsServiceTests: XCTestCase {
         XCTAssertFalse(alerts[0].body.contains("Snorlax"), "digest names only the top 3")
     }
 
+    // MARK: target crossings
+
+    func testCrossingFiresOnlyOnTheEdge() {
+        let targets = ["crossed": 100.0, "stillAbove": 100.0, "alreadyBelow": 100.0]
+        let old = ["crossed": 120.0, "stillAbove": 120.0, "alreadyBelow": 90.0]
+        let new = ["crossed": 95.0, "stillAbove": 110.0, "alreadyBelow": 85.0]
+        let hits = PriceAlertsService.targetCrossings(old: old, new: new, targets: targets)
+        // `alreadyBelow` was under target last night too — announcing it again every night is
+        // how an alert becomes something you swipe away without reading.
+        XCTAssertEqual(hits.map(\.cardId), ["crossed"])
+        XCTAssertEqual(hits.first?.newUsd, 95.0)
+        XCTAssertEqual(hits.first?.target, 100.0)
+    }
+
+    func testLandingExactlyOnTheTargetCounts() {
+        let hits = PriceAlertsService.targetCrossings(
+            old: ["a": 120.0], new: ["a": 100.0], targets: ["a": 100.0])
+        XCTAssertEqual(hits.map(\.cardId), ["a"], "\"I'll pay $100\" includes $100")
+    }
+
+    func testCardWithNoTargetOrNoBaselineNeverCrosses() {
+        // No target: the user never named a price, so there is no promise to keep.
+        XCTAssertTrue(PriceAlertsService.targetCrossings(
+            old: ["a": 120.0], new: ["a": 10.0], targets: [:]).isEmpty)
+        // No baseline: hearted since the last snapshot. It may have been cheap for a year —
+        // calling that news would be a lie.
+        XCTAssertTrue(PriceAlertsService.targetCrossings(
+            old: [:], new: ["a": 10.0], targets: ["a": 100.0]).isEmpty)
+    }
+
+    func testSubDollarTargetsAreNoise() {
+        XCTAssertTrue(PriceAlertsService.targetCrossings(
+            old: ["a": 1.0], new: ["a": 0.4], targets: ["a": 0.5]).isEmpty)
+    }
+
+    /// The guard that makes this feature safe to ship on `raw_usd`: if the price is quoting a
+    /// different printing than it was last night, the two numbers aren't comparable and any
+    /// "crossing" between them is arithmetic on a basis flip.
+    func testChangedPrintingBasisSuppressesTheCrossing() {
+        let args = (old: ["a": 600.0], new: ["a": 80.0], targets: ["a": 550.0])
+        XCTAssertEqual(PriceAlertsService.targetCrossings(
+            old: args.old, new: args.new, targets: args.targets).map(\.cardId), ["a"])
+        XCTAssertTrue(PriceAlertsService.targetCrossings(
+            old: args.old, new: args.new, targets: args.targets,
+            changedBasis: ["a"]).isEmpty,
+            "a 1st Edition price replaced by an Unlimited one is not a card getting cheaper")
+    }
+
+    func testCrossingsLeadWithTheBestDeal() {
+        let hits = PriceAlertsService.targetCrossings(
+            old: ["ok": 100.0, "steal": 100.0],
+            new: ["ok": 99.0, "steal": 50.0],
+            targets: ["ok": 99.5, "steal": 99.5])
+        XCTAssertEqual(hits.map(\.cardId), ["steal", "ok"])
+    }
+
+    func testTargetAlertCopyNamesTheTargetAndDigestsPastThree() {
+        let names = ["a": "Blastoise", "b": "Umbreon", "c": "Lugia", "d": "Ho-Oh"]
+        let one = PriceAlertsService.targetAlerts(
+            for: [.init(cardId: "a", target: 550, newUsd: 540)], names: names)
+        XCTAssertEqual(one.first?.title, "Blastoise hit your target — $540")
+        XCTAssertEqual(one.first?.body, "You were watching for $550.")
+
+        let many = PriceAlertsService.targetAlerts(
+            for: ["a", "b", "c", "d"].map { .init(cardId: $0, target: 100, newUsd: 90) },
+            names: names)
+        XCTAssertEqual(many.count, 1)
+        XCTAssertEqual(many.first?.title, "4 wishlist cards hit your target")
+    }
+
+    /// A snapshot written before `printings` existed must still decode — otherwise the first
+    /// run after updating throws away the baseline and nobody gets an alert that night. (This
+    /// caught exactly that: a defaulted non-optional property does NOT make the key optional
+    /// for a synthesized `Decodable`.)
+    func testSnapshotWithoutPrintingsStillDecodes() throws {
+        let json = #"{"catalogVersion":3,"asOf":"2026-07-25","prices":{"a":10}}"#
+        let snapshot = try JSONDecoder().decode(PriceAlertsService.Snapshot.self,
+                                                from: Data(json.utf8))
+        XCTAssertEqual(snapshot.prices["a"], 10)
+        XCTAssertNil(snapshot.printings, "nil means 'predates the basis column', not 'no basis'")
+    }
+
     // MARK: runAfterInstall (regression: new {id: WantEntry} wants.json format)
 
     func testRunAfterInstallReadsNewFormatWantsJSON() async throws {

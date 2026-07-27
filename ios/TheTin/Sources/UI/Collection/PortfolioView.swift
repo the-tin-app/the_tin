@@ -54,7 +54,7 @@ struct PortfolioView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.entries) {
-            await model.portfolio.refresh(entries: model.entries, prices: model.prices,
+            await model.portfolio.refresh(entries: model.allEntries, prices: model.prices,
                                           variantsByCard: model.variantsByCard,
                                           conditionsByCard: model.conditionsByCard,
                                           matrixByCard: model.matrixByCard,
@@ -134,16 +134,32 @@ struct PortfolioView: View {
         }
     }
 
-    /// Variant B's 3-up card row below the chart: what you paid, change vs. paid, coverage.
+    /// Variant B's card row below the chart: what you paid, change vs. paid, coverage — plus what
+    /// you've realised once anything has been sold.
+    ///
+    /// "Change vs. paid" is `(what you hold + what you got for what you sold) − what you paid`.
+    /// All three terms are needed. Comparing only held value against total basis reports a phantom
+    /// loss the size of everything you've ever sold; dropping sold cards from both sides instead —
+    /// which is what happened when the entries list became sold-filtered — makes a losing sale
+    /// *improve* the number, by exactly the realised loss (measured on device: paid 170, worth 163,
+    /// sold 155, number went UP $7).
     private func statCardRow(_ series: PortfolioSeries) -> some View {
         let pts = sliced(series.points)
         let now = pts.last?.value ?? 0
         let basis = pts.last?.costBasis ?? 0
+        let realised = pts.last?.realised ?? 0
+        let change = now + realised - basis
         return HStack(spacing: 8) {
             if basis > 0 {
                 statCard(label: "You paid", value: basis.formatted(.currency(code: "USD")), tint: .secondary)
-                statCard(label: "Change vs. paid", value: signed(now - basis),
-                         tint: now - basis >= 0 ? .green : .red)
+                statCard(label: "Change vs. paid", value: signed(change),
+                         tint: change >= 0 ? .green : .red)
+            }
+            // Only once something has actually gone — otherwise it's a row of zero for a thing
+            // most people never do.
+            if realised > 0 {
+                statCard(label: "Sold for", value: realised.formatted(.currency(code: "USD")),
+                         tint: .secondary)
             }
             statCard(label: "Coverage", value: "\(series.cardsWithHistory) / \(series.totalCards)", tint: .primary)
         }

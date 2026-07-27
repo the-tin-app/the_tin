@@ -8,7 +8,12 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     CODE_SIGN_STYLE: Automatic
-    TARGETED_DEVICE_FAMILY: "1"
+    # iPhone + iPad. The App Store listing has carried 12.9" iPad screenshots since 1.0 while the
+    # binary was iPhone-only — a store page promising something the build didn't have, on an app
+    # Apple has already rejected once. Deliberately NO NavigationSplitView adaptation: a
+    # stretched-but-native iPhone layout is a respectable thing to ship, and a second layout is a
+    # maintenance cost forever.
+    TARGETED_DEVICE_FAMILY: "1,2"
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
 packages:

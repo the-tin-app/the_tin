@@ -3,8 +3,16 @@ import Foundation
 /// One weekly bucket of the portfolio series.
 struct PortfolioPoint: Equatable {
     let date: Date
+    /// What you HELD at this date, at that date's prices. Deliberately excludes anything already
+    /// sold, so the last bucket still equals the tin header exactly.
     let value: Double
+    /// What you'd paid for everything acquired by this date — including copies since sold, because
+    /// the money was spent either way.
     let costBasis: Double
+    /// Cash from copies sold by this date. Separate from `value` precisely so the chart can keep
+    /// meaning "what I hold" while the comparison against `costBasis` can still be honest.
+    /// Defaulted so existing constructions (and tests) compile unchanged.
+    var realised: Double = 0
 }
 
 /// The series plus history coverage (UI: "based on X of Y cards" when < 100%).
@@ -15,8 +23,19 @@ struct PortfolioSeries: Equatable {
 }
 
 /// Reconstructs the collection's value over time from per-card weekly `price_history`. Pure —
-/// no I/O, no clock reads beyond the injected `now`. The series is always recomputed from live
-/// entries (no tombstones): it shows the *current* collection's past value, by design.
+/// no I/O, no clock reads beyond the injected `now`.
+///
+/// **Sold copies stay in the series.** Pass them in and a sold card keeps its cost in the basis
+/// forever (you did spend that money) and switches from market value to what you actually got for
+/// it on the day it went. Drop them instead — which is what happened when `entries` became
+/// sold-filtered — and both sides vanish together, so selling at a loss makes "Change vs. paid"
+/// *improve*:
+///
+///     paid 170, worth 163, sold for 155  →  basis −170, value −163  →  the number went UP $7
+///     on a $15 loss (measured on device, 2026-07-26)
+///
+/// The error is exactly the realised gain or loss, which is precisely the thing the number is
+/// supposed to be reporting.
 enum PortfolioHistory {
     private static let week: TimeInterval = 7 * 86_400
 
@@ -31,7 +50,10 @@ enum PortfolioHistory {
                        matrixByCard: [String: [MatrixPrice]] = [:],
                        gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:],
                        now: Date = Date()) -> PortfolioSeries {
-        let cardIds = Set(entries.map(\.cardId))
+        // Coverage describes the CHART's completeness, so it counts what you still own — a sold
+        // card contributes a flat known number, never an interpolated one, so it can't be
+        // "missing history".
+        let cardIds = Set(entries.filter { !$0.isSold }.map(\.cardId))
         let covered = cardIds.filter { !(histories[$0] ?? []).isEmpty }.count
         // Per-entry constants, hoisted out of the bucket loop.
         let ownedDates = entries.map { ownedFrom($0, now: now) }
@@ -62,9 +84,18 @@ enum PortfolioHistory {
         let points = dates.enumerated().map { (bucket, date) -> PortfolioPoint in
             var value = 0.0
             var basis = 0.0
+            var realised = 0.0
             let isNow = bucket == dates.count - 1
             for (i, entry) in entries.enumerated() where ownedDates[i] <= date {
                 basis += entry.pricePaid ?? 0   // per-entry TOTAL — never × qty (spec, resolved 2026-07-14)
+                // Already sold by this bucket: it is no longer part of what you hold, so it adds
+                // nothing to `value` — that's what keeps the headline equal to the tin total.
+                // What you got for it lands in `realised` instead. `soldFor` is nil for a trade or
+                // a gift: no cash came in, and whatever was received counts as its own entry.
+                if let soldAt = entry.soldAt, soldAt <= date {
+                    realised += entry.soldFor ?? 0
+                    continue
+                }
                 let history = histories[entry.cardId] ?? []
                 // The "now" bucket prices at TODAY's prices — identical math to the tin header,
                 // so the portfolio headline always agrees with it (weekly history lags the daily
@@ -76,7 +107,7 @@ enum PortfolioHistory {
                     value += raw * scales[i] * Double(entry.qty)
                 }
             }
-            return PortfolioPoint(date: date, value: value, costBasis: basis)
+            return PortfolioPoint(date: date, value: value, costBasis: basis, realised: realised)
         }
         return PortfolioSeries(points: points, cardsWithHistory: covered, totalCards: cardIds.count)
     }

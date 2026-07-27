@@ -66,7 +66,8 @@ translation of the app, released on Google Play.
 - **Condition & graded pricing** — per-condition prices and PSA graded prices
   (funded by community donations), plus population data.
 - **Grading ROI** — see whether grading a card is worth it before you send it in.
-- **Sealed products** — track tins, ETBs, and booster boxes, not just singles.
+- **Sealed products** — see market prices for tins, ETBs, and booster boxes
+  alongside each set.
 
 ### Browse & discover
 - **Full card catalog** — browse and search every set, with a Pokédex view to

@@ -127,7 +127,10 @@ final class ScanModel {
     private let store: CatalogStore
     private let pipeline: ScanPipeline
 
-    var guidance: String = "Frame the card inside the box"
+    /// Shown while nothing is detected. The frame rectangle on screen already says this, so
+    /// the view suppresses it — named here so the two can't drift apart.
+    static let idleGuidance = "Frame the card inside the box"
+    var guidance: String = ScanModel.idleGuidance
     var coverage: Double = 0
     var bestGuess: String?
     var ambiguous: [ChooserOption] = []
@@ -138,6 +141,13 @@ final class ScanModel {
     /// want follows what you're doing this week, not this launch.
     var isLookUpMode: Bool = AppConfig.scanLookUpMode {
         didSet { AppConfig.scanLookUpMode = isLookUpMode }
+    }
+    /// The condition new drafts are staged at. Every capture used to be Near Mint with nothing
+    /// asked and nothing shown, so a played collection valued itself as mint — and since the
+    /// review screen's per-card menu is a per-card tap, nobody was ever going to correct 300 of
+    /// them. Set it once for the stack you're holding. Persisted for the same reason as the mode.
+    var stagingCondition: CardCondition = AppConfig.scanCondition {
+        didSet { AppConfig.scanCondition = stagingCondition }
     }
     /// Set when a lock resolves in look-up mode. The view presents that card and clears this,
     /// which also resets the scanner so the next card (or the same one again) can be read.
@@ -157,7 +167,7 @@ final class ScanModel {
     func run(source: FrameSource) async {
         for await pb in source.stream() {
             let out = await pipeline.process(pb)          // runs OFF the main actor
-            if out.noCard { guidance = "Frame the card inside the box"; bestGuess = nil; continue }
+            if out.noCard { guidance = Self.idleGuidance; bestGuess = nil; continue }
             coverage = out.coverage
             if let event = out.event { await handle(event) }
         }
@@ -196,12 +206,23 @@ final class ScanModel {
         let card = try? store.card(id: cardId)
         guard !isLookUpMode else {
             lookedUpCardId = cardId
-            guidance = "Frame the card inside the box"
+            guidance = Self.idleGuidance
             return
         }
-        let price = (try? store.price(cardId: cardId))?.rawUsd
+        // Price the draft at the condition it's actually being staged at, through the same
+        // resolver the review screen and the tin use. A raw-market snapshot would leave the
+        // tray's running total quoting mint money for a stack you've just told it is played —
+        // and that total is the number you watch while scanning, so it has to be the honest one.
+        // Three single-card indexed reads, against a per-frame ORB match that dwarfs them.
+        let variant = CardVariant.defaultFor(rarity: card?.rarity)
+        let price = GroupStats.unitPrice(
+            condition: stagingCondition, variant: variant,
+            price: try? store.price(cardId: cardId),
+            variants: (try? store.variantPrices(cardId: cardId)) ?? [],
+            conditions: (try? store.conditionPrices(cardId: cardId)) ?? [],
+            matrix: (try? store.matrixPrices(cardId: cardId)) ?? [])
         let draft = ScanDraft(id: UUID().uuidString, cardId: cardId,
-                              variant: .defaultFor(rarity: card?.rarity), condition: .nm,
+                              variant: variant, condition: stagingCondition,
                               qty: 1, addedAt: Date(), priceUsdSnapshot: price)
         staging.append(draft)
         // The card's name, not its catalog id — this line read "Added swsh7-215 — next card".
@@ -242,7 +263,7 @@ final class ScanModel {
     func reset() async {
         ambiguous = []
         bestGuess = nil
-        guidance = "Frame the card inside the box"
+        guidance = Self.idleGuidance
         await pipeline.reset()
     }
     func reject(_ draft: ScanDraft) async {

@@ -15,7 +15,8 @@ struct PokedexListView: View {
     @State private var sort: PokemonSort = .dex
     @State private var query = ""
 
-    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
+    // `.top`, matching every other card grid — see the note in `SetsListView`.
+    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12, alignment: .top)]
 
     init(store: CatalogStore, entries: [CollectionEntry] = [], collection: CollectionModel? = nil, wants: WantsModel? = nil) {
         self.store = store

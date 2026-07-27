@@ -8,17 +8,40 @@ final class CollectionModel {
     /// Portfolio-history model, app-lifetime so its series cache survives screen pushes.
     let portfolio: PortfolioModel
     private(set) var groups: [CardGroup] = []
+    /// The cards you own. **Sold copies are filtered out of this**, which is what gives roughly
+    /// forty consumers — GroupStats, Movers, PortfolioHistory, ScanKnowledge, set completion, the
+    /// widget, every grid badge — the right answer without knowing the feature exists.
     private(set) var entries: [CollectionEntry] = [] {
         // Launch-tab signal: MainTabView reads this synchronously at init (the entries stream
         // hasn't delivered yet there) to open on The Tin once a collection exists.
         didSet { UserDefaults.standard.set(!entries.isEmpty, forKey: "hasCards") }
     }
+    /// Every row the repository holds, owned and sold alike. Only for the places that genuinely
+    /// mean "everything on file": whole-collection rewrites (undo) and CSV export. Using
+    /// `entries` for either of those would silently drop every sold row from the file.
+    private(set) var allEntries: [CollectionEntry] = []
+    /// Copies that have left, most recently gone first.
+    private(set) var soldEntries: [CollectionEntry] = []
     private(set) var prices: [String: PriceRecord] = [:]
     private(set) var variantsByCard: [String: [VariantPrice]] = [:]
     private(set) var conditionsByCard: [String: [ConditionPrice]] = [:]
     private(set) var matrixByCard: [String: [MatrixPrice]] = [:]
     private(set) var gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]
     private(set) var deltasByCard: [String: [DeltaRecord]] = [:]
+    /// Derived value read-outs, recomputed once per entries/prices change instead of per access.
+    /// Every one of these used to be a computed property, and every one was read from inside
+    /// `body`: `CollectionView.groupRow` called `groupValue` for each divider on each body pass
+    /// (an O(n) filter plus a full `GroupStats.totalValue` every time — 40 dividers over 5,000
+    /// entries is 200k filter steps to draw one list), and `tradeLink` called `tradeEntries`,
+    /// which SORTS the trade subset, purely to render its count. They change exactly when the
+    /// entries stream fires or the catalog is swapped, which is where they're now computed.
+    private(set) var valuesByGroup: [String: (total: Double, pricedCards: Int, totalCards: Int)] = [:]
+    private(set) var tinValue: (total: Double, pricedCards: Int, totalCards: Int) = (0, 0, 0)
+    /// Copies you've marked as available to trade, most valuable first — your spares are the
+    /// currency of this hobby, and the app had no notion of them.
+    private(set) var tradeEntries: [CollectionEntry] = []
+    /// What the trade list is worth, in the same best-effort terms as the tin total.
+    private(set) var tradeValue: (total: Double, pricedCards: Int, totalCards: Int) = (0, 0, 0)
     private var streamTasks: [Task<Void, Never>] = []
     /// Mirrors the header's numbers to the home-screen widget. nil until AppModel injects one
     /// (and in unit tests that don't care) — publishing is then a no-op.
@@ -45,8 +68,16 @@ final class CollectionModel {
         })
         streamTasks.append(Task { [weak self] in
             guard let stream = self?.repository.entriesStream() else { return }
-            for await entries in stream {
-                self?.entries = entries
+            for await all in stream {
+                // The one place the owned/sold split is made. Everything downstream reads a list
+                // that is already correct, rather than each consumer remembering to exclude sold
+                // rows — which is the version of this feature that would have quietly broken the
+                // tin total the first time somebody added a screen.
+                self?.allEntries = all
+                self?.entries = all.filter { !$0.isSold }
+                self?.soldEntries = all.filter(\.isSold).sorted {
+                    ($0.soldAt ?? .distantPast) > ($1.soldAt ?? .distantPast)
+                }
                 self?.reloadPrices()
                 self?.publishWidgetSnapshot()
             }
@@ -83,6 +114,29 @@ final class CollectionModel {
         matrixByCard = (try? store.matrixPrices(cardIds: ids)) ?? [:]
         gradedByPrintingByCard = (try? store.gradedPrintingPrices(cardIds: ids)) ?? [:]
         deltasByCard = (try? store.deltas(cardIds: ids)) ?? [:]
+        recomputeValues()
+    }
+
+    /// One bucketing pass over `entries`, then one `totalValue` per bucket — O(2n) for the whole
+    /// screen, where per-divider `groupValue` calls were O(n × dividers).
+    private func recomputeValues() {
+        var byGroup: [String: [CollectionEntry]] = [:]
+        for entry in entries { byGroup[entry.groupId, default: []].append(entry) }
+        valuesByGroup = byGroup.mapValues { totalValue($0) }
+        tinValue = totalValue(entries)
+        let forTrade = entries.filter(\.isForTrade)
+        tradeEntries = GroupStats.sortedByValueDescending(
+            entries: forTrade, prices: prices,
+            variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+            matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
+        tradeValue = totalValue(forTrade)
+    }
+
+    /// `GroupStats.totalValue` with this model's price tables already threaded in.
+    private func totalValue(_ entries: [CollectionEntry]) -> (total: Double, pricedCards: Int, totalCards: Int) {
+        GroupStats.totalValue(entries: entries, prices: prices,
+                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
+                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
     }
 
     func entries(in groupId: String) -> [CollectionEntry] {
@@ -107,17 +161,10 @@ final class CollectionModel {
                                      matrix: matrix, gradedByPrinting: gradedByPrinting)
     }
 
+    /// A divider's value. Served from `valuesByGroup`; a divider with no entries has no bucket
+    /// and reads as zero, which is what an empty divider is worth.
     func groupValue(_ groupId: String) -> (total: Double, pricedCards: Int, totalCards: Int) {
-        GroupStats.totalValue(entries: entries(in: groupId), prices: prices,
-                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
-                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
-    }
-
-    /// The whole tin's value across every group and ungrouped card.
-    var tinValue: (total: Double, pricedCards: Int, totalCards: Int) {
-        GroupStats.totalValue(entries: entries, prices: prices,
-                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
-                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
+        valuesByGroup[groupId] ?? (0, 0, 0)
     }
 
     /// The catalog's price date — prices always carry their as-of stamp (Caption Ledger Rule).
@@ -264,7 +311,10 @@ final class CollectionModel {
         // old position rather than at the end.
         restoredGroups.sort { $0.sortOrder < $1.sortOrder }
 
-        var restoredEntries = entries
+        // `allEntries`, NOT `entries`: this hands `replaceAll` the complete file. Built from the
+        // sold-filtered list it would rewrite the collection without a single sold row in it —
+        // pressing Undo would silently delete your entire sale history.
+        var restoredEntries = allEntries
         for entry in undone.entries {
             // Overwrite rather than append when the row still exists: deleting a divider "keeping
             // its cards" leaves them behind with groupId "", and this is what files them back.
@@ -314,7 +364,10 @@ final class CollectionModel {
 
     @discardableResult
     func saveEntry(_ entry: CollectionEntry) async -> Bool {
-        if entries.contains(where: { $0.id == entry.id }) {
+        // `allEntries`: a sold row edited from the Gone section is not in `entries`, and looking
+        // there would send an existing id down the *add* path — minting a duplicate of a row that
+        // already exists rather than updating it.
+        if allEntries.contains(where: { $0.id == entry.id }) {
             await write("save the card") { try await repository.updateEntry(entry) }
         } else {
             await write("save the card") { try await addOrIncrement(entry) }
@@ -374,8 +427,38 @@ final class CollectionModel {
         }
     }
 
+    // MARK: Sold / traded away
+
+    /// Record that a copy has gone. Not a delete: the row keeps its card, its condition, its
+    /// cost basis and its acquisition detail, and stops counting toward what you own.
+    ///
+    /// Undoable through the same six-second toast as a delete, because the two gestures sit next
+    /// to each other and one of them used to be the only option.
+    func markSold(_ entry: CollectionEntry, on date: Date, for amount: Double?) async {
+        var sold = entry
+        sold.soldAt = date
+        sold.soldFor = amount
+        // The copy is gone, so it can't still be on offer — leaving the flag would keep it on a
+        // trade list you'd bring to a meetup.
+        sold.forTrade = nil
+        let ok = await write("record that sale") { try await repository.updateEntry(sold) }
+        guard ok else { return }
+        offerUndo(UndoableDelete(message: "Marked \(cardName(entry.cardId)) as gone",
+                                 groups: [], entries: [entry]))
+    }
+
+    /// Put a sold copy back among the cards you own — the sale fell through, or it was a mis-tap.
+    func markUnsold(_ entry: CollectionEntry) async {
+        var restored = entry
+        restored.soldAt = nil
+        restored.soldFor = nil
+        await write("bring that card back") { try await repository.updateEntry(restored) }
+    }
+
     func deleteEntry(id: String) async {
-        let removed = entries.first { $0.id == id }
+        // Sold rows are deletable too (from the Gone section), so look in the full list — else
+        // the write lands but the undo offer never appears.
+        let removed = allEntries.first { $0.id == id }
         let ok = await write("remove the card") { try await repository.deleteEntry(id: id) }
         guard ok, let removed else { return }
         offerUndo(UndoableDelete(message: "Removed \(cardName(removed.cardId))",
@@ -383,22 +466,6 @@ final class CollectionModel {
     }
 
     // MARK: Trade list
-
-    /// Copies you've marked as available to trade, most valuable first — your spares are the
-    /// currency of this hobby, and the app had no notion of them.
-    var tradeEntries: [CollectionEntry] {
-        GroupStats.sortedByValueDescending(
-            entries: entries.filter(\.isForTrade), prices: prices,
-            variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
-            matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
-    }
-
-    /// What the trade list is worth, in the same best-effort terms as the tin total.
-    var tradeValue: (total: Double, pricedCards: Int, totalCards: Int) {
-        GroupStats.totalValue(entries: entries.filter(\.isForTrade), prices: prices,
-                              variantsByCard: variantsByCard, conditionsByCard: conditionsByCard,
-                              matrixByCard: matrixByCard, gradedByPrintingByCard: gradedByPrintingByCard)
-    }
 
     /// Cards you hold more than one physical copy of. Marking is explicit by design, but an
     /// explicit-only feature opens on a blank screen forever — this is what the empty trade list
@@ -486,10 +553,23 @@ struct TinAllCardsRoute: Hashable {}
 final class CardSearchIndex {
     private var haystacks: [String: String] = [:]
     private var names: [String: String] = [:]
+    /// cardId → record, including misses (a `nil` value is a cached "not in this catalog", so a
+    /// missing card isn't re-queried on every pass). Double-optional subscript is deliberate.
+    private var cards: [String: CardRecord?] = [:]
+
+    /// The catalog record for a card, cached. `CollectionView.riffleCards` spreads up to seven
+    /// cards per divider and re-ran this query for every one of them on every body pass — ~280
+    /// SQLite reads to draw a 40-divider tin.
+    func card(id cardId: String, store: CatalogStore) -> CardRecord? {
+        if let cached = cards[cardId] { return cached }
+        let record = try? store.card(id: cardId)
+        cards[cardId] = record
+        return record
+    }
 
     func name(for entry: CollectionEntry, store: CatalogStore) -> String {
         if let cached = names[entry.cardId] { return cached }
-        let name = (try? store.card(id: entry.cardId))?.name ?? entry.cardId
+        let name = card(id: entry.cardId, store: store)?.name ?? entry.cardId
         names[entry.cardId] = name
         return name
     }
@@ -508,7 +588,7 @@ final class CardSearchIndex {
     private func haystack(for entry: CollectionEntry, store: CatalogStore) -> String {
         if let cached = haystacks[entry.cardId] { return cached }
         var parts = [entry.cardId]
-        if let card = try? store.card(id: entry.cardId) {
+        if let card = card(id: entry.cardId, store: store) {
             parts.append(contentsOf: [card.name, card.setId, card.number])
             if let set = try? store.set(id: card.setId) { parts.append(set.name) }
         }
@@ -520,6 +600,7 @@ final class CardSearchIndex {
     func clear() {
         haystacks.removeAll()
         names.removeAll()
+        cards.removeAll()
     }
 }
 
@@ -875,12 +956,14 @@ struct CollectionView: View {
         NavigationLink(value: value) { EmptyView() }.opacity(0)
     }
 
-    /// The distinct cards a row spreads, newest first.
+    /// The distinct cards a row spreads, newest first. Reads through `searchIndex`'s card cache —
+    /// this runs for every divider on every body pass, so uncached it was the single biggest
+    /// source of SQLite traffic on the tin's landing screen.
     private func riffleCards(_ entries: [CollectionEntry]) -> [CardRecord] {
         var seen = Set<String>()
         var out: [CardRecord] = []
         for e in entries where seen.insert(e.cardId).inserted {
-            if let c = try? store.card(id: e.cardId) { out.append(c) }
+            if let c = searchIndex.card(id: e.cardId, store: store) { out.append(c) }
             if out.count == Self.riffleLimit { break }
         }
         return out
@@ -1000,8 +1083,20 @@ struct CollectionView: View {
 
 private extension View {
     /// Strip List chrome so riffle rows read as trays in the tin, not table cells.
+    ///
+    /// Capped and re-centred, the same way card detail caps its art. Uncapped, an iPad stretches
+    /// every tray to ~1000pt while the card spread still occupies ~220pt of it — a very wide,
+    /// mostly empty box with the count and value stranded at the far right. 700 never binds on
+    /// iPhone: the widest content width we ship is ~408pt on the 17 Pro Max.
+    /// `alignment: .leading` on the inner frame is load-bearing. `.frame(maxWidth:)` centres its
+    /// content by default, so capping the header — a `VStack(alignment: .leading)` narrower than
+    /// the row — silently centred the tin total and shifted it right of where it had always sat.
+    /// Rows whose content already fills the width (the riffle trays, the pinned links) don't
+    /// notice either way.
     func tinRow() -> some View {
-        self.listRowSeparator(.hidden)
+        self.frame(maxWidth: 700, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
     }
