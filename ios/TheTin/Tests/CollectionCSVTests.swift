@@ -129,6 +129,12 @@ final class CollectionCSVTests: XCTestCase {
                                              cards: ["swsh7-215": card],
                                              sets: ["swsh7": set],
                                              prices: ["swsh7-215": price]))
-        XCTAssertTrue(try XCTUnwrap(out.last).hasSuffix(","))
+        let row = try XCTUnwrap(out.last)
+        // A bare trailing "," alone would still pass if the acquired_via column were deleted
+        // entirely, since sold_at/sold_for are already blank. Assert the field count instead, so
+        // the test fails if the column disappears rather than just staying empty.
+        XCTAssertEqual(row.components(separatedBy: ",").count, CollectionCSV.header.count,
+                       "row should have one field per header column, including a blank acquired_via: \(row)")
+        XCTAssertTrue(row.hasSuffix(","), "acquired_via should be blank: \(row)")
     }
 }

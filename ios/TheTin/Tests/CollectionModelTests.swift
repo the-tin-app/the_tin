@@ -93,7 +93,7 @@ final class CollectionModelTests: XCTestCase {
         let model = CollectionModel(repository: repo, store: try FixtureCatalog.make())
         let gid = try await repo.createGroup(name: "Binder")
         let draft = ScanDraft(id: "d1", cardId: "ex6-58", variant: .reverseHolo, condition: .lp,
-                              qty: 1, addedAt: Date(), priceUsdSnapshot: 4.0)
+                              qty: 1, addedAt: Date(), priceUsdSnapshot: 4.0, acquiredVia: .pulled)
         let ok = await model.commitScan(draft, to: .group(gid))
         XCTAssertTrue(ok)
         let entry = repo.entries.first
@@ -101,6 +101,7 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(entry?.variant, "reverseHolo")
         XCTAssertEqual(entry?.condition, "LP")
         XCTAssertEqual(entry?.cardId, "ex6-58")
+        XCTAssertEqual(entry?.acquiredVia, "pulled")
     }
 
     func testCommitScanToTinUsesEmptyGroupId() async throws {

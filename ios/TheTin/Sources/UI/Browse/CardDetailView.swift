@@ -564,8 +564,9 @@ struct CardDetailView: View {
         }
     }
 
-    /// "×2 · Reverse Holo · NM · Pulled" — what the user recorded about this copy, same
-    /// vocabulary as `CollectionEntryRow` so a copy reads identically wherever it's shown.
+    /// "×2 · Reverse Holo · NM · Pulled" — what the user recorded about this copy. Deliberately
+    /// diverges from `CollectionEntryRow`'s row string (`GroupDetailView.swift`), which stops at
+    /// condition/grade and never appends the source — a scope call for the list row, not a bug.
     /// The source is appended only when recorded; nil adds nothing rather than saying "unknown".
     private func sleeveText(_ entry: CollectionEntry) -> String {
         var parts = ["×\(entry.qty)"]

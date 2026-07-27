@@ -55,7 +55,9 @@ enum Movers {
     /// v25, and the 100–500% band 450 → 8.
     ///
     /// The ceiling stays because the residue has a different cause. Measured on v25 (2026-07-27),
-    /// six rows catalog-wide still clear 500%, and they're thin-market SKUs correcting a stale
+    /// six rows catalog-wide still clear 500% (2 `raw` + 4 `printing`, per `docs/IMPROVEMENTS.md`
+    /// — not a regression of the 47 → 2 fix above, a different, smaller basis: `printing` deltas
+    /// weren't part of that count), and they're thin-market SKUs correcting a stale
     /// quote: `neo4-107` Shining Charizard went $20 → $3998.99 overnight with `raw_printing`
     /// unchanged on both sides. A corrected quote is not a move your tin made, and `topMovers`
     /// sorts by `ABS(pct)`, so without this the least trustworthy row in the catalog leads the

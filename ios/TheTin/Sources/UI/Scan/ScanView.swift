@@ -121,14 +121,17 @@ struct ScanView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Scanner settings, \(settingsSummary)")
-            .accessibilityHint(showingSettings ? "Hides the settings" : "Shows mode and condition")
+            .accessibilityHint(showingSettings ? "Hides the settings" : "Shows mode, condition and source")
 
             if showingSettings {
                 VStack(spacing: 8) {
                     modePicker
                     // Only in Add mode: look-up stages nothing, so a condition for the thing it
                     // isn't recording would be one more control saying nothing.
-                    if !model.isLookUpMode { conditionPicker; sourcePicker }
+                    if !model.isLookUpMode {
+                        conditionPicker
+                        sourcePicker
+                    }
                 }
                 .padding(8)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -186,13 +189,14 @@ struct ScanView: View {
     /// they set last week.
     private var sourcePicker: some View {
         Picker("Source", selection: $model.stagingVia) {
-            Text("—").tag(AcquiredVia?.none)
+            Text("—").tag(AcquiredVia?.none).accessibilityLabel("Not recorded")
             ForEach(AcquiredVia.allCases) { Text($0.shortLabel).tag(AcquiredVia?.some($0)) }
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: 260)
         .padding(4)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityLabel("Source for scanned cards")
         .accessibilityHint("How the cards you're scanning were acquired")
     }
 
