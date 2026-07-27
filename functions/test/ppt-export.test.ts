@@ -4,6 +4,7 @@ import {
   parseCsv, parseCardsExport, parseSealedExport, parseEbayExport, parsePopulationExport,
   ebayGradeToPsaColumn, applyExport,
 } from "../src/pipeline/ppt-export";
+import type { CardsExportRow, SealedExportRow } from "../src/pipeline/ppt-export";
 
 // Sample CSVs use the documented export headers (api-reference, 2026-07-11).
 const CARDS_CSV =
@@ -33,7 +34,7 @@ const POP_CSV =
 function makeDb(): Database.Database {
   const db = new Database(":memory:");
   db.exec(`
-    CREATE TABLE card(id TEXT PRIMARY KEY, tcgplayer_id INTEGER);
+    CREATE TABLE card(id TEXT PRIMARY KEY, tcgplayer_id INTEGER, set_id TEXT);
     CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL,
       psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
       psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
@@ -42,7 +43,7 @@ function makeDb(): Database.Database {
     CREATE TABLE population(card_id TEXT NOT NULL, grader TEXT NOT NULL, grade TEXT NOT NULL,
       count INTEGER, gem_rate REAL, total_population INTEGER, as_of TEXT NOT NULL,
       PRIMARY KEY(card_id, grader, grade));
-    INSERT INTO card VALUES ('base1-58',100),('base1-4',200),('base1-9',300);
+    INSERT INTO card VALUES ('base1-58',100,'base1'),('base1-4',200,'base1'),('base1-9',300,'base1');
   `);
   return db;
 }
@@ -118,6 +119,8 @@ describe("applyExport", () => {
     const box = db.prepare("SELECT * FROM sealed_product WHERE tcgplayer_id=9001").get() as any;
     expect(box.market_usd).toBe(7999.99);
     expect(box.product_type).toBe("Booster Box");
+    // set_id is OUR id, resolved from the cards that share PPT's set — not PPT's own value.
+    expect(box.set_id).toBe("base1");
 
     const pop = db.prepare("SELECT grade, count FROM population WHERE card_id='base1-4' AND grade='10'").get() as any;
     expect(pop.count).toBe(2100);
@@ -313,5 +316,80 @@ describe("cards export sellers column", () => {
       "tcgPlayerId,grader,totalPopulation,gemRate,g1,g10,g9_5,auth,pristine,perfect\n" +
       "246812,BGS,120,10.5,2,50,7,3,4,1");
     expect(rows[0].grades).toEqual({ "1": 2, "10": 50, "9.5": 7, Auth: 3, Pristine: 4, Perfect: 1 });
+  });
+});
+
+describe("sealed set ids (PPT set → our set)", () => {
+  function db() {
+    const d = new Database(":memory:");
+    d.exec(`
+      CREATE TABLE card(id TEXT PRIMARY KEY, tcgplayer_id INTEGER, set_id TEXT);
+      CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL,
+        psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
+        psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
+      CREATE TABLE sealed_product(tcgplayer_id INTEGER PRIMARY KEY, name TEXT NOT NULL, set_id TEXT,
+        product_type TEXT, market_usd REAL, low_usd REAL, as_of TEXT);
+      CREATE TABLE population(card_id TEXT NOT NULL, grader TEXT NOT NULL, grade TEXT NOT NULL,
+        count INTEGER, gem_rate REAL, total_population INTEGER, as_of TEXT NOT NULL,
+        PRIMARY KEY(card_id, grader, grade));
+      INSERT INTO card VALUES ('me05-1',11,'me05'),('me05-2',12,'me05'),('me05-3',13,'me05'),
+                              ('swsh7-9',20,'swsh7');
+    `);
+    return d;
+  }
+  // PPT numbers its sets; we key them by TCGdex id. Card rows carry both.
+  const cards = (): CardsExportRow[] => [
+    { tcgPlayerId: 11, name: "a", setId: "648", cardNumber: "1", marketPrice: 1, lowPrice: null, sellers: null, lastPriceUpdate: "" },
+    { tcgPlayerId: 12, name: "b", setId: "648", cardNumber: "2", marketPrice: 1, lowPrice: null, sellers: null, lastPriceUpdate: "" },
+    // A stray: PPT files this card under 648 but ours belongs to swsh7. Majority must still win.
+    { tcgPlayerId: 20, name: "c", setId: "648", cardNumber: "9", marketPrice: 1, lowPrice: null, sellers: null, lastPriceUpdate: "" },
+  ];
+  const sealed = (setId: string): SealedExportRow[] => [
+    { tcgPlayerId: 9001, name: "Booster Box", setId, productType: "Booster Box",
+      marketPrice: 100, lowPrice: 90, lastPriceUpdate: "" },
+  ];
+
+  it("resolves PPT's set id to ours by majority vote", () => {
+    const d = db();
+    const stats = applyExport(d, { cards: cards(), sealed: sealed("648"), asOf: "2026-07-26" });
+    const row = d.prepare("SELECT set_id FROM sealed_product WHERE tcgplayer_id=9001").get() as any;
+    expect(row.set_id).toBe("me05");           // 2 votes vs swsh7's 1
+    expect(stats.sealedUnmappedSets).toBe(0);
+  });
+
+  it("writes NULL — never PPT's own id — when the set can't be resolved", () => {
+    const d = db();
+    // This is the bug being fixed: "999" is not one of our set ids, and storing it produced a
+    // sealed_product row that joined to nothing while looking like it should.
+    const stats = applyExport(d, { cards: cards(), sealed: sealed("999"), asOf: "2026-07-26" });
+    const row = d.prepare("SELECT set_id FROM sealed_product WHERE tcgplayer_id=9001").get() as any;
+    expect(row.set_id).toBeNull();
+    expect(stats.sealedUnmappedSets).toBe(1);
+  });
+
+  it("resolved rows actually join to a set", () => {
+    const d = db();
+    d.exec("CREATE TABLE set_info(id TEXT PRIMARY KEY); INSERT INTO set_info VALUES ('me05'),('swsh7');");
+    applyExport(d, { cards: cards(), sealed: sealed("648"), asOf: "2026-07-26" });
+    const n = d.prepare("SELECT COUNT(*) c FROM sealed_product p JOIN set_info s ON s.id=p.set_id").get() as any;
+    expect(n.c).toBe(1);   // the whole point: on the served catalog this count was 0
+  });
+
+  it("a card table without set_id degrades to NULL rather than throwing", () => {
+    const d = new Database(":memory:");
+    d.exec(`
+      CREATE TABLE card(id TEXT PRIMARY KEY, tcgplayer_id INTEGER);
+      CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL,
+        psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
+        psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, as_of TEXT NOT NULL);
+      CREATE TABLE sealed_product(tcgplayer_id INTEGER PRIMARY KEY, name TEXT NOT NULL, set_id TEXT,
+        product_type TEXT, market_usd REAL, low_usd REAL, as_of TEXT);
+      CREATE TABLE population(card_id TEXT NOT NULL, grader TEXT NOT NULL, grade TEXT NOT NULL,
+        count INTEGER, gem_rate REAL, total_population INTEGER, as_of TEXT NOT NULL,
+        PRIMARY KEY(card_id, grader, grade));
+    `);
+    expect(() => applyExport(d, { cards: cards(), sealed: sealed("648"), asOf: "2026-07-26" })).not.toThrow();
+    const row = d.prepare("SELECT set_id FROM sealed_product WHERE tcgplayer_id=9001").get() as any;
+    expect(row.set_id).toBeNull();
   });
 });
