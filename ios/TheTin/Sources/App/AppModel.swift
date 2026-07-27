@@ -58,9 +58,27 @@ final class AppModel {
         intentRouteToken += 1
     }
 
+    /// A CSV handed to us from Files / AirDrop / a share sheet, waiting to be imported.
+    ///
+    /// Set by `handleDeepLink`; Settings consumes it and clears it. Nil the rest of the time.
+    var pendingImportURL: URL?
+    /// Bumped with `pendingImportURL` so re-opening the SAME file twice still registers as a new
+    /// request — a plain `onChange` on the URL wouldn't fire the second time.
+    private(set) var importRouteToken = 0
+
     /// Parse a universal link. Only `/c/<id>` routes; anything else is ignored so the web
     /// pages (home/privacy/support) keep opening in the browser.
+    ///
+    /// Also the entry point for FILES opened in The Tin. `CFBundleDocumentTypes` declares CSV, and
+    /// a file URL has no `/c/<id>` shape — without this branch it would fall through the guard
+    /// below and the app would launch and sit there, which is a worse experience than never
+    /// offering "Open in The Tin" at all.
     func handleDeepLink(_ url: URL) {
+        if url.isFileURL {
+            pendingImportURL = url
+            importRouteToken += 1
+            return
+        }
         let parts = url.pathComponents   // e.g. ["/", "c", "base1-4"]
         guard parts.count >= 3, parts[1] == "c", !parts[2].isEmpty else { return }
         openCard(id: parts[2])
