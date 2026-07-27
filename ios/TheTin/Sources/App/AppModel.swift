@@ -207,6 +207,12 @@ final class AppModel {
         FundingModel.display(from: catalogState?.funding)
     }
 
+    /// Sponsors who asked to be listed, from the same cached state (so the screen still renders
+    /// offline). Empty until the served manifest carries names — which is the honest day-one state.
+    var supporters: [Supporter] {
+        FundingModel.supporters(from: catalogState?.supporters)
+    }
+
     func start() async {
         phase = .launching
 

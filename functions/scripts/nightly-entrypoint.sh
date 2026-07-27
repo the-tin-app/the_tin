@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Nightly catalog rebuild: pull PPT CSV (2/day quota, ONE call/night) -> build -> enrich ->
-# publish tiers to the NAS (+ optional Firebase casual backup) -> refresh funding block.
+# publish tiers to the NAS (+ optional Firebase casual backup) -> refresh funding + supporters.
 #
 # Runs unattended in a container. Required env:
 #   PPT_PAID (or PPT_API_KEY / PPT_BUSINESS)   — PPT Business API key
@@ -10,7 +10,13 @@
 #   GOOGLE_APPLICATION_CREDENTIALS  — path to a scoped Firebase service-account key JSON;
 #                                      when set (with the bucket), publish-tiers.ts also pushes
 #                                      the casual tier backup to Firebase Storage (--firebase)
-#   OC_SLUG, FUNDING_GOAL_CENTS     — passed through to refresh-funding.ts
+#   GITHUB_SPONSORS_LOGIN, GITHUB_TOKEN, FUNDING_GOAL_CENTS
+#                                   — passed through to refresh-funding.ts. GITHUB_TOKEN must be
+#                                      an ORG-ADMIN PAT with `read:org`: GitHub masks the sponsors
+#                                      income field to 0 for everyone else, so a weaker token
+#                                      yields a permanent $0 meter instead of an error. Without
+#                                      both, the meter is skipped; the supporters list still
+#                                      publishes (it comes from <catalogDir>/supporters.json).
 #   SKIP_EXPORT_PULL=1              — skip the PPT CSV pull, reuse whatever is already in
 #                                      .export-cache/ (for testing the rest of the chain without
 #                                      spending the day's export quota)
@@ -141,8 +147,9 @@ fi
 npx tsx scripts/publish-tiers.ts ".seed-output/catalog-v$NEXT_VERSION.sqlite" "$NEXT_VERSION" "$NAS_DIR" $FIREBASE_FLAG
 echo "[nightly] NAS manifest now: $(cat "$CATALOG_DIR/manifest.json")"
 
-# --- 7. refresh the funding block in the manifest the server just started serving ---
+# --- 7. re-merge the funding + supporters blocks into the manifest the server just started
+# serving (step 6 rewrites manifest.json from scratch, so both are re-added every night) ---
 step "7/7 refresh-funding"
-npx tsx scripts/refresh-funding.ts "$CATALOG_DIR" "${OC_SLUG:-}" "${FUNDING_GOAL_CENTS:-15000}" || echo "[nightly] WARN: funding refresh failed (non-fatal)"
+npx tsx scripts/refresh-funding.ts "$CATALOG_DIR" "${GITHUB_SPONSORS_LOGIN:-}" "${FUNDING_GOAL_CENTS:-15000}" || echo "[nightly] WARN: funding refresh failed (non-fatal)"
 
 echo "[nightly] $(date -u +%FT%TZ) === DONE — published v$NEXT_VERSION ==="
