@@ -655,6 +655,14 @@ struct CollectionView: View {
     /// mirror of the context menu's "Flip through cards" — actions can't tap the invisible
     /// NavigationLinks. (Row activation itself opens the list-first landing.)
     var openPager: ((String?) -> Void)? = nil
+    /// Opens the settings sheet, which the host owns.
+    ///
+    /// The gear used to be a SECOND `.toolbar` applied by `RootView` over this view. On iPadOS 18
+    /// that combination silently dropped it: the trailing items collapsed into a system overflow
+    /// and the separately-declared item never made it in, so Settings — and with it export,
+    /// import and backup restore — was unreachable on iPad (reported 2026-07-27). One toolbar,
+    /// one set of explicit placements, no merge to get wrong.
+    var onOpenSettings: (() -> Void)? = nil
     @State private var newGroupName = ""
     @State private var showingNewGroup = false
     @State private var renamingGroupId: String?
@@ -713,22 +721,40 @@ struct CollectionView: View {
         .collectionReportFlow(isActive: $showingReport, collection: model, store: store)
         .navigationTitle("The Tin")
         .navigationBarTitleDisplayMode(.inline)
+        // ONE toolbar for this screen, every item explicitly placed. Items used to arrive from two
+        // separate `.toolbar` modifiers — these, plus a gear applied by `RootView` — and on
+        // iPadOS 18 the gear was dropped rather than collapsed, stranding Settings.
         .toolbar {
             if model.groups.count > 1 {
-                Button {
-                    let next: EditMode = editMode == .active ? .inactive : .active
-                    if reduceMotion { editMode = next } else { withAnimation { editMode = next } }
-                } label: {
-                    Image(systemName: editMode == .active ? "checkmark" : "arrow.up.arrow.down")
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        let next: EditMode = editMode == .active ? .inactive : .active
+                        if reduceMotion { editMode = next } else { withAnimation { editMode = next } }
+                    } label: {
+                        Image(systemName: editMode == .active ? "checkmark" : "arrow.up.arrow.down")
+                    }
+                    .accessibilityLabel(editMode == .active ? "Done reordering" : "Reorder dividers")
                 }
-                .accessibilityLabel(editMode == .active ? "Done reordering" : "Reorder dividers")
             }
-            Menu {
-                Button { showingReport = true }
-                    label: { Label("Collection report (PDF)", systemImage: "doc.text") }
-                    .disabled(model.entries.isEmpty)
-            } label: { Image(systemName: "ellipsis.circle") }
-            .accessibilityLabel("More")
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { showingReport = true }
+                        label: { Label("Collection report (PDF)", systemImage: "doc.text") }
+                        .disabled(model.entries.isEmpty)
+                } label: {
+                    // A Label, not a bare Image: when iPadOS folds this into its overflow menu it
+                    // renders the label as TEXT, and an image-only label became a blank row you
+                    // had to tap on faith to find the report underneath.
+                    Label("More", systemImage: "ellipsis.circle")
+                }
+                .accessibilityLabel("More")
+            }
+            if let onOpenSettings {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: onOpenSettings) { Image(systemName: "gearshape") }
+                        .accessibilityLabel("Settings")
+                }
+            }
         }
         .alert("New divider", isPresented: $showingNewGroup) {
             TextField("Name", text: $newGroupName)

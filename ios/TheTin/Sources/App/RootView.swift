@@ -131,15 +131,10 @@ private struct MainTabView: View {
                                    selection = .search
                                },
                                goals: model.setGoals,
-                               openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) })
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button { showingSettings = true } label: {
-                                Image(systemName: "gearshape")
-                            }
-                            .accessibilityLabel("Settings")
-                        }
-                    }
+                               openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) },
+                               // The gear belongs to CollectionView's own toolbar. Applying it
+                               // here as a second `.toolbar` is what lost it on iPadOS 18.
+                               onOpenSettings: { showingSettings = true })
                     .sheet(isPresented: $showingSettings) { SettingsView(app: model, pack: pack) }
                     .fundingBanner(model: model, store: store, pack: pack)
             }
