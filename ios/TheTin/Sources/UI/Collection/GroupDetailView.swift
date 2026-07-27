@@ -104,7 +104,7 @@ struct GroupDetailView: View {
                          : title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.entries) {
-            await model.portfolio.refresh(entries: model.entries, prices: model.prices,
+            await model.portfolio.refresh(entries: model.allEntries, prices: model.prices,
                                           variantsByCard: model.variantsByCard,
                                           conditionsByCard: model.conditionsByCard,
                                           matrixByCard: model.matrixByCard,

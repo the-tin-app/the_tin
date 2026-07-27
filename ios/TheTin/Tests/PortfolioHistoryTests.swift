@@ -114,3 +114,69 @@ final class PortfolioHistoryTests: XCTestCase {
         XCTAssertEqual(s.totalCards, 3)
     }
 }
+
+extension PortfolioHistoryTests {
+    private func sold(_ id: String, card: String, paid: Double, soldFor: Double?,
+                      soldAt: Date, added: Date) -> CollectionEntry {
+        var e = entry(id, card: card, paid: paid, added: added)
+        e.soldAt = soldAt
+        e.soldFor = soldFor
+        return e
+    }
+
+    /// The exact case measured on device, 2026-07-26: paid 170, worth 163, sold for 155.
+    ///
+    /// The sale realises a $15 LOSS, so "Change vs. paid" must get worse. Before the fix a sold
+    /// card left `entries` entirely, taking its 170 of basis out alongside its 163 of value — and
+    /// the number went UP $7. The error was exactly the realised loss.
+    func testSellingAtALossMakesChangeVsPaidWorseNotBetter() {
+        let history = ["A": flat(163, days: [0, 7, 14]), "B": flat(1000, days: [0, 7, 14])]
+        let keep = entry("keep", card: "B", paid: 5, added: day(0))
+
+        let holding = [keep, entry("a", card: "A", paid: 170, added: day(0))]
+        let before = PortfolioHistory.series(entries: holding, histories: history, prices: [:],
+                                             variantsByCard: [:], conditionsByCard: [:], now: day(14))
+        let b = try! XCTUnwrap(before.points.last)
+        let changeBefore = b.value + b.realised - b.costBasis
+
+        let after = PortfolioHistory.series(
+            entries: [keep, sold("a", card: "A", paid: 170, soldFor: 155, soldAt: day(10), added: day(0))],
+            histories: history, prices: [:], variantsByCard: [:], conditionsByCard: [:], now: day(14))
+        let a = try! XCTUnwrap(after.points.last)
+        let changeAfter = a.value + a.realised - a.costBasis
+
+        XCTAssertEqual(a.costBasis, 175, "money spent doesn't un-spend itself when you sell")
+        XCTAssertEqual(a.realised, 155, "what you actually got has to land somewhere")
+        XCTAssertEqual(a.value, 1000, accuracy: 0.001, "held value excludes the sold copy")
+        // Sold $8 under the $163 it was worth, so the comparison worsens by exactly 8.
+        XCTAssertEqual(changeAfter, changeBefore - 8, accuracy: 0.001)
+        XCTAssertLessThan(changeAfter, changeBefore, "a loss must never improve the number")
+    }
+
+    /// The chart line still means "what I hold", so the last bucket keeps matching the tin header.
+    func testSoldCopyLeavesTheValueLineButNotTheBasis() {
+        let e = sold("a", card: "A", paid: 100, soldFor: 90, soldAt: day(7), added: day(0))
+        let s = PortfolioHistory.series(entries: [e], histories: ["A": flat(120, days: [0, 7, 14])],
+                                        prices: [:], variantsByCard: [:], conditionsByCard: [:],
+                                        now: day(14))
+        let first = try! XCTUnwrap(s.points.first)
+        let last = try! XCTUnwrap(s.points.last)
+        XCTAssertEqual(first.value, 120, accuracy: 0.001, "still held at day 0")
+        XCTAssertEqual(first.realised, 0)
+        XCTAssertEqual(last.value, 0, accuracy: 0.001, "gone by day 14")
+        XCTAssertEqual(last.realised, 90)
+        XCTAssertEqual(last.costBasis, 100)
+        XCTAssertEqual(s.totalCards, 0, "coverage counts what you still own")
+    }
+
+    /// A trade or a gift has no cash figure. The copy still leaves, and nothing is invented.
+    func testTradedAwayCopyRealisesNothing() {
+        let e = sold("a", card: "A", paid: 100, soldFor: nil, soldAt: day(7), added: day(0))
+        let s = PortfolioHistory.series(entries: [e], histories: ["A": flat(120, days: [0, 7, 14])],
+                                        prices: [:], variantsByCard: [:], conditionsByCard: [:],
+                                        now: day(14))
+        let last = try! XCTUnwrap(s.points.last)
+        XCTAssertEqual(last.realised, 0)
+        XCTAssertEqual(last.costBasis, 100)
+    }
+}
