@@ -93,6 +93,19 @@ targets:
             CFBundleTypeRole: Viewer
             LSHandlerRank: Alternate
             LSItemContentTypes: [public.comma-separated-values-text]
+        # REQUIRED once CFBundleDocumentTypes exists — App Store Connect rejected build 24's
+        # delivery report with ITMS-90737 without it. The rule is about DECLARING document types,
+        # not about editing them: an app that only reads a file still has to say which model it
+        # uses. (Build 24 still shipped; ITMS-90737 is a warning, not a failed upload.)
+        #
+        # `true`, the recommended value, and the one that matches the code: we're handed the
+        # original file's security-scoped URL, which `SettingsView.runImport` already wraps in
+        # start/stopAccessingSecurityScopedResource. `false` would have iOS copy every opened CSV
+        # into Documents/Inbox, and nothing in the app ever cleans that up.
+        #
+        # This does NOT expose the app's Documents folder in Files — that's UIFileSharingEnabled,
+        # which stays off.
+        LSSupportsOpeningDocumentsInPlace: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         AppIdentifierPrefix: $(AppIdentifierPrefix)
