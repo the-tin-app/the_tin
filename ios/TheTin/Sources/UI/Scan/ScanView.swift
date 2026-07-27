@@ -50,17 +50,30 @@ struct ScanView: View {
                 Spacer()
                 VStack(spacing: 8) {
                     CoverageRing(value: model.coverage)
-                    // Only when it has something to say. "Frame the card inside the box" is what
-                    // the frame rectangle already is, so showing it too was a permanent line of
-                    // chrome over the thing you're trying to point the camera at.
-                    if model.guidance != ScanModel.idleGuidance {
-                        // Amber while a chooser is frozen ("Scanning paused"), material otherwise.
-                        Text(model.guidance).font(.headline).padding(8)
-                            .background(model.ambiguous.isEmpty ? AnyShapeStyle(.ultraThinMaterial)
-                                                                : AnyShapeStyle(Color.orange.opacity(0.9)),
-                                        in: Capsule())
-                            .transition(.opacity)
+                    // Always says something, and while frames are being examined it says WHAT.
+                    //
+                    // This used to hide the idle line, on the reasoning that "Frame the card
+                    // inside the box" only repeats what the frame rectangle shows. True on a
+                    // phone, where recognition is near-instant. On an iPad an A10 grinds through
+                    // ORB matching far slower, so the viewfinder went completely silent for
+                    // seconds at a time and read as a dead scanner — it was working the whole
+                    // while (2026-07-27). Silence is indistinguishable from failure, and the user
+                    // pays for the ambiguity by giving up.
+                    HStack(spacing: 8) {
+                        if model.isExamining && model.ambiguous.isEmpty {
+                            // Turns only while frames actually arrive, so it is evidence of work
+                            // rather than decoration that spins whether or not anything happens.
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(model.activityText).font(.headline)
                     }
+                    .padding(8)
+                    // Amber while a chooser is frozen ("Scanning paused"), material otherwise.
+                    .background(model.ambiguous.isEmpty ? AnyShapeStyle(.ultraThinMaterial)
+                                                        : AnyShapeStyle(Color.orange.opacity(0.9)),
+                                in: Capsule())
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2),
+                               value: model.activityText)
                     if model.ambiguous.isEmpty {
                         // In look-up mode the tray is noise until something is actually staged —
                         // but staged cards from an earlier session still need their way back.

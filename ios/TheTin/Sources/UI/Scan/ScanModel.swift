@@ -4,7 +4,15 @@ import Foundation
 import os
 
 /// Outcome of processing a single frame through the off-main `ScanPipeline`.
-struct FrameOutcome { let coverage: Double; let noCard: Bool; let event: ScanEvent? }
+/// `poolCount` is how many catalog cards the OCR narrowed to for this frame — surfaced only so
+/// the viewfinder can say what it's doing ("Checking 40 cards…") instead of sitting silent while
+/// a slow device grinds. Zero means the text gate produced nothing usable yet.
+struct FrameOutcome {
+    let coverage: Double
+    let noCard: Bool
+    let event: ScanEvent?
+    var poolCount: Int = 0
+}
 
 /// Owns the stateful/heavy per-frame CV cascade (detect → quality-gate → fingerprint →
 /// OCR gate → match → session) off the main actor so live 30fps camera capture doesn't
@@ -86,7 +94,7 @@ actor ScanPipeline {
         #if DEBUG
         ScanDiag.dump(frame: frame, fields: fields, pool: pool, results: results, event: event)
         #endif
-        return FrameOutcome(coverage: 1.0, noCard: false, event: event)
+        return FrameOutcome(coverage: 1.0, noCard: false, event: event, poolCount: pool.count)
     }
 
     func acknowledgeChoice(cardId: String) { session.acknowledge(cardId: cardId) }
@@ -133,6 +141,46 @@ final class ScanModel {
     var guidance: String = ScanModel.idleGuidance
     var coverage: Double = 0
     var bestGuess: String?
+
+    /// True while frames are actually being examined — drives the viewfinder's activity spinner.
+    ///
+    /// `coverage` cannot do this job: the pipeline reports a flat 1.0 for any heavy frame and
+    /// never resets, so the ring snaps full on the first one and then sits there. Nothing on
+    /// screen changed while the scanner worked, and on an iPad — where an A10 does ORB matching a
+    /// fraction as fast as a phone — the viewfinder was silent long enough to read as broken.
+    /// It wasn't; it was thinking (2026-07-27). A slower system that explains itself beats a fast
+    /// one that says nothing until it succeeds.
+    private(set) var isExamining = false
+    /// How many catalog cards the last examined frame narrowed to. 0 = nothing readable yet.
+    private(set) var poolCount = 0
+    /// Drops `isExamining` once frames stop arriving. In the model, not a view `.task`: the same
+    /// reason `undoExpiry` lives here — SwiftUI cancels view tasks whenever it re-identifies the
+    /// subtree, and this has to survive that.
+    private var examineIdle: Task<Void, Never>?
+
+    /// How long after the last examined frame the spinner keeps turning. Comfortably longer than
+    /// the gap between heavy frames on a slow device, or the spinner strobes on the very hardware
+    /// it exists to reassure.
+    static let examiningLinger: Duration = .seconds(2)
+
+    private func noteExamined(poolCount: Int) {
+        self.poolCount = poolCount
+        isExamining = true
+        examineIdle?.cancel()
+        examineIdle = Task { [weak self] in
+            try? await Task.sleep(for: Self.examiningLinger)
+            guard !Task.isCancelled else { return }
+            self?.isExamining = false
+        }
+    }
+
+    /// What the viewfinder should say it is doing, in the user's terms.
+    var activityText: String {
+        if !ambiguous.isEmpty { return guidance }         // the chooser owns the message
+        if !isExamining { return Self.idleGuidance }
+        if bestGuess != nil { return "Hold steady" }
+        return poolCount > 0 ? "Checking \(poolCount) cards…" : "Reading the card…"
+    }
     var ambiguous: [ChooserOption] = []
 
     /// What a confident lock does. `false` (default) stages a reviewable draft for the tin;
@@ -178,6 +226,7 @@ final class ScanModel {
             let out = await pipeline.process(pb)          // runs OFF the main actor
             if out.noCard { guidance = Self.idleGuidance; bestGuess = nil; continue }
             coverage = out.coverage
+            noteExamined(poolCount: out.poolCount)
             if let event = out.event { await handle(event) }
         }
     }

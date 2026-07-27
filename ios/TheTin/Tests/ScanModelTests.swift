@@ -294,6 +294,34 @@ final class ScanModelTests: XCTestCase {
     /// The source is captured ONTO the draft at scan time, not read from the model at commit.
     /// Drafts persist to disk and survive relaunch; the picker deliberately does not — read it
     /// at commit and a pack scanned last night commits untagged.
+
+    /// A scanner that is working must SAY so. Silence is indistinguishable from a dead scanner,
+    /// which is exactly how an iPad reads while an A10 grinds through ORB matching (2026-07-27):
+    /// the viewfinder showed nothing for seconds and the user concluded it was broken.
+    func testExaminingAFrameReportsWhatTheScannerIsDoing() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+
+        let catalog = try FixtureCatalog.make()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: ScanStagingStore.inMemory(), store: catalog,
+                              fingerThrottle: 1)
+
+        XCTAssertFalse(model.isExamining, "a scanner that hasn't seen a frame isn't examining")
+        XCTAssertEqual(model.activityText, ScanModel.idleGuidance,
+                       "and it falls back to the framing hint rather than saying nothing at all")
+
+        await model.run(source: ReplaySource(buffer: pb, count: 6))
+
+        XCTAssertTrue(model.isExamining, "frames arrived, so the spinner must have something to turn on")
+        XCTAssertNotEqual(model.activityText, ScanModel.idleGuidance,
+                          "while examining, the viewfinder names the work instead of the framing hint")
+    }
+
     func testStagedDraftCapturesTheChosenSource() async throws {
         let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
         let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
