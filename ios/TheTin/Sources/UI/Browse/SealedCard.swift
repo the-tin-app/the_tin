@@ -39,8 +39,7 @@ struct SealedCard: View {
                 .aspectRatio(1, contentMode: .fit) // sealed boxes are roughly square, not card-shaped
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-            // Reserved so a one-line name doesn't misalign the prices against its grid neighbours.
-            Text(product.name).font(.caption).lineLimit(2, reservesSpace: true)
+            Text(product.name).font(.caption).lineLimit(2)
             if let market = product.marketUsd {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(market, format: .currency(code: "USD")).font(.caption.weight(.semibold))

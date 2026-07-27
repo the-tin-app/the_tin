@@ -91,12 +91,22 @@ enum Movers {
 
         for entry in entries {
             ownedCards.insert(entry.cardId)
+            let variants = variantsByCard[entry.cardId] ?? []
+            let conditions = conditionsByCard[entry.cardId] ?? []
+            let matrix = matrixByCard[entry.cardId] ?? []
+            let gradedByPrinting = gradedByPrintingByCard[entry.cardId] ?? []
+            // Only copies the catalog can price EXACTLY. `entryValue` alone walks a fallback
+            // ladder and will happily return the raw market price for a card you hold in DMG that
+            // has no DMG price — and then `unitDelta` reports the RAW market's move, so the screen
+            // says a played copy did what a mint one did. The tin total may estimate (it says so);
+            // a screen whose whole claim is "this card moved your tin by $X" may not.
+            guard GroupStats.isPricedExactly(
+                entry, price: prices[entry.cardId], variants: variants, conditions: conditions,
+                matrix: matrix, gradedByPrinting: gradedByPrinting) else { continue }
             guard let value = GroupStats.entryValue(
                 entry, price: prices[entry.cardId],
-                variants: variantsByCard[entry.cardId] ?? [],
-                conditions: conditionsByCard[entry.cardId] ?? [],
-                matrix: matrixByCard[entry.cardId] ?? [],
-                gradedByPrinting: gradedByPrintingByCard[entry.cardId] ?? []) else { continue }
+                variants: variants, conditions: conditions,
+                matrix: matrix, gradedByPrinting: gradedByPrinting) else { continue }
             // `unitDelta` is the change counterpart of the same ladder `entryValue` walks, so the
             // percentage always belongs to the price the value was taken from — a played copy
             // reports its condition's move, not the raw market's.

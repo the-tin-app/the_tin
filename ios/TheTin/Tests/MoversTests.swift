@@ -83,6 +83,35 @@ final class MoversTests: XCTestCase {
         XCTAssertEqual(s.rows[0].impact, 1000 - 1000 / 1.25, accuracy: 0.0001)
     }
 
+    /// A copy the catalog can't price EXACTLY is not a mover.
+    ///
+    /// Reported from device 2026-07-26: a card held only as DMG, with no DMG price, appeared in
+    /// Movers valued at the raw market price — and therefore quoting the RAW market's move for a
+    /// damaged card. `entryValue` walks a fallback ladder by design (the tin total is an
+    /// acknowledged estimate); Movers claims "this card moved your tin by $X", which an estimate
+    /// on the wrong rung makes false.
+    func testCopyWithNoPriceForItsConditionIsNotAMover() {
+        let entries = [entry("dmg", card: "c1", condition: "DMG")]
+        let prices = ["c1": price("c1", raw: 100)]
+        let deltas = ["c1": [raw(0.20)]]
+        // NM is priced, DMG is not — the played copy has no price of its own.
+        let conditions = ["c1": [ConditionPrice(condition: .nearMint, usd: 100)]]
+        let s = Movers.summary(entries: entries, prices: prices, deltasByCard: deltas,
+                               conditionsByCard: conditions, period: .d1)
+        XCTAssertTrue(s.rows.isEmpty, "a DMG copy with no DMG price must not report the raw move")
+        XCTAssertEqual(s.cardsWithData, 0)
+        XCTAssertEqual(s.totalCards, 1, "it's still a card you own — just not one we can price")
+
+        // Same card, same everything, but now DMG IS priced: it belongs in the list, at its own
+        // price and its own change.
+        let priced = ["c1": [ConditionPrice(condition: .nearMint, usd: 100),
+                             ConditionPrice(condition: .damaged, usd: 10)]]
+        let ok = Movers.summary(entries: entries, prices: prices, deltasByCard: deltas,
+                                conditionsByCard: priced, period: .d1)
+        XCTAssertEqual(ok.rows.count, 1)
+        XCTAssertEqual(ok.rows[0].value, 10, accuracy: 0.0001)
+    }
+
     func testPeriodSelectsTheMatchingColumn() {
         let entries = [entry("e", card: "c1", qty: 1)]
         let prices = ["c1": price("c1", raw: 100)]

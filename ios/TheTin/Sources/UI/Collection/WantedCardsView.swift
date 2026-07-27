@@ -22,7 +22,9 @@ struct WantedCardsView: View {
     /// Rebuilt when the wishlist changes rather than per body pass — see `TradeListView`.
     @State private var shareLink: (url: URL, included: Int)?
 
-    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
+    // `.top` so a tile that carries the "In a set you collect" caption doesn't force a blank
+    // reserved line onto every tile that doesn't — see the note in `SetsListView`.
+    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12, alignment: .top)]
 
     /// Bundles every store-backed read the screen needs. `fileprivate` so `WishlistCatalog`
     /// (below) can hold one; the view still refers to it unqualified.
@@ -320,12 +322,14 @@ private struct WishlistTile: View {
                 .overlay(alignment: .topLeading) { priorityDot }
                 .overlay(alignment: .topTrailing) { noteGlyph }
             Text(card.name).font(.caption).lineLimit(1)
-            // Always occupies its line, blank when it doesn't apply: a LazyVGrid row sizes to its
-            // tallest cell, so showing this on some tiles and not others left the art and prices
-            // in one row sitting at different heights. Same fix #79 applied to the sets grid.
-            Text(inCollectedSet ? "In a set you collect" : "")
-                .font(.caption2).foregroundStyle(.tertiary)
-                .lineLimit(1, reservesSpace: true)
+            // Shown only when it applies. The grid top-aligns its cells, so a tile without this
+            // caption is simply shorter — it no longer has to carry a blank line to keep its
+            // neighbours in step.
+            if inCollectedSet {
+                Text("In a set you collect")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
             priceLabel
         }
     }

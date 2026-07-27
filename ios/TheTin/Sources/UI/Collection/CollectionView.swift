@@ -1088,8 +1088,13 @@ private extension View {
     /// every tray to ~1000pt while the card spread still occupies ~220pt of it — a very wide,
     /// mostly empty box with the count and value stranded at the far right. 700 never binds on
     /// iPhone: the widest content width we ship is ~408pt on the 17 Pro Max.
+    /// `alignment: .leading` on the inner frame is load-bearing. `.frame(maxWidth:)` centres its
+    /// content by default, so capping the header — a `VStack(alignment: .leading)` narrower than
+    /// the row — silently centred the tin total and shifted it right of where it had always sat.
+    /// Rows whose content already fills the width (the riffle trays, the pinned links) don't
+    /// notice either way.
     func tinRow() -> some View {
-        self.frame(maxWidth: 700)
+        self.frame(maxWidth: 700, alignment: .leading)
             .frame(maxWidth: .infinity)
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)

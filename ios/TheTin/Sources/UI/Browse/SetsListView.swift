@@ -12,7 +12,11 @@ struct SetsListView: View {
 
     @State private var model = SetsListModel()
 
-    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
+    // `.top`: a LazyVGrid row is as tall as its tallest cell, so a two-line set name used to make
+    // its neighbours ragged. Reserving a blank second line on EVERY cell fixed the raggedness by
+    // making every short name pay for it — a permanent gap between the name and its count.
+    // Top-aligning puts the slack at the bottom of the cell, where nothing is looking at it.
+    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12, alignment: .top)]
 
     private var rawTotals: [String: Double] { (try? store.setRawTotals()) ?? [:] }
 
@@ -30,9 +34,7 @@ struct SetsListView: View {
         NavigationLink(value: SetID(raw: set.id)) {
             VStack(spacing: 4) {
                 CardImageView(card: repCard(set), quality: "low")
-                // Always two lines tall: a one-line name would otherwise make a shorter cell,
-                // and the grid row sizes to its tallest neighbour — ragged art and counts.
-                Text(set.name).font(.caption).lineLimit(2, reservesSpace: true)
+                Text(set.name).font(.caption).lineLimit(2)
                     .multilineTextAlignment(.center)
                 // Capped like GroupStats.setCompletion: secret rares push a set's card list past
                 // its printed total, and "104/102 collected" reads as a bug.

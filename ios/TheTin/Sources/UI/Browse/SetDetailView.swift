@@ -48,7 +48,9 @@ struct SetDetailView: View {
     /// Lets this screen start/stop collecting the set. nil in contexts with no goals model.
     var goals: SetGoalsModel? = nil
 
-    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
+    // `.top` — shared by the card grid and the sealed-products grid below it, whose names wrap to
+    // one or two lines. See the note in `SetsListView`.
+    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12, alignment: .top)]
     private static let sortOptions: [CardSort] = [.number, .alphabetical, .cheapest, .expensive]
 
     @State private var confirmingWishlistAdd = false
