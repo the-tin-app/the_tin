@@ -738,6 +738,20 @@ struct CollectionView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    // Settings lives HERE, not only on the gear below.
+                    //
+                    // On iPadOS 18 a third trailing item is silently dropped — not collapsed into
+                    // the overflow, dropped — so the gear never rendered and Settings (and with it
+                    // export, import and backup restore) was unreachable on iPad entirely.
+                    // Consolidating into one toolbar with explicit placements did NOT fix it;
+                    // this is the second attempt, and it takes the route that cannot fail: menu
+                    // contents are never subject to toolbar overflow. The gear stays for iPhone,
+                    // where it renders fine and is the more discoverable affordance.
+                    if let onOpenSettings {
+                        Button(action: onOpenSettings) {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+                    }
                     Button { showingReport = true }
                         label: { Label("Collection report (PDF)", systemImage: "doc.text") }
                         .disabled(model.entries.isEmpty)
