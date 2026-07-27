@@ -215,6 +215,16 @@ struct EntryFormView: View {
                 // nil rather than false when off, so an entry that was never marked stays
                 // byte-identical to what it was before this field existed.
                 forTrade: forTrade ? true : nil,
+                // Carried, not rebuilt. This form constructs a FRESH entry from its own state, so
+                // any field it doesn't own defaults away — and `CollectionModel.saveEntry` routes
+                // a known id to `updateEntry`, a full overwrite. Drop these two and a sold copy
+                // silently un-sells itself: the sale record is gone and the card reappears in the
+                // tin's totals. Unreachable today (the Gone section offers only "Bring back" and
+                // "Delete"), but `saveEntry`'s own comment says "a sold row edited from the Gone
+                // section", so the next person to add that affordance would trip a live data-loss
+                // bug with a comment reassuring them it was handled.
+                soldAt: existing?.soldAt,
+                soldFor: existing?.soldFor,
                 acquiredVia: acquiredVia?.rawValue)
             if await onSave(entry) { dismiss() }
         }
