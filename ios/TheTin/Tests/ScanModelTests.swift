@@ -290,4 +290,39 @@ final class ScanModelTests: XCTestCase {
         await model.handle(.lock(cardId: "card_b"))
         XCTAssertEqual(model.lookedUpCardId, "card_b")
     }
+
+    /// The source is captured ONTO the draft at scan time, not read from the model at commit.
+    /// Drafts persist to disk and survive relaunch; the picker deliberately does not — read it
+    /// at commit and a pack scanned last night commits untagged.
+    func testStagedDraftCapturesTheChosenSource() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: staging, store: catalog, fingerThrottle: 1)
+        model.stagingVia = .pulled
+        await model.run(source: ReplaySource(buffer: pb, count: 6))
+
+        let draft = try XCTUnwrap(staging.drafts.first)
+        XCTAssertEqual(draft.acquiredVia, .pulled)
+    }
+
+    /// A fresh scanner makes no claim about where cards came from.
+    func testScannerStartsWithNoSourceClaim() async throws {
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: ScanStagingStore.inMemory(), store: catalog)
+        XCTAssertNil(model.stagingVia)
+    }
 }

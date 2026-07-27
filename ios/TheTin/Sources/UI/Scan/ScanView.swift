@@ -128,7 +128,7 @@ struct ScanView: View {
                     modePicker
                     // Only in Add mode: look-up stages nothing, so a condition for the thing it
                     // isn't recording would be one more control saying nothing.
-                    if !model.isLookUpMode { conditionPicker }
+                    if !model.isLookUpMode { conditionPicker; sourcePicker }
                 }
                 .padding(8)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -137,10 +137,14 @@ struct ScanView: View {
         }
     }
 
-    /// "Add · MP" while staging, "Look up" when nothing is being recorded — naming a condition
-    /// there would describe a decision the mode has switched off.
+    /// "Add · MP" while staging, "Add · MP · Pulled" once a source is chosen, "Look up" when
+    /// nothing is being recorded. The source only appears when set — an absent claim shouldn't
+    /// take up room saying it's absent.
     private var settingsSummary: String {
-        model.isLookUpMode ? "Look up" : "Add · \(model.stagingCondition.rawValue)"
+        guard !model.isLookUpMode else { return "Look up" }
+        var s = "Add · \(model.stagingCondition.rawValue)"
+        if let via = model.stagingVia { s += " · \(via.shortLabel)" }
+        return s
     }
 
     /// Add vs. look up. Two different questions get asked of a card in hand — "file this" while
@@ -174,6 +178,22 @@ struct ScanView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .accessibilityLabel("Condition for scanned cards")
         .accessibilityHint("New scans are staged at this condition")
+    }
+
+    /// How this stack was acquired, set once for a whole pack rip. Resets on cold launch, unlike
+    /// the two pickers above it: staging at the wrong condition costs a price tier, but staging
+    /// at the wrong SOURCE puts a false fact on the card, and nobody re-reads a scanner setting
+    /// they set last week.
+    private var sourcePicker: some View {
+        Picker("Source", selection: $model.stagingVia) {
+            Text("—").tag(AcquiredVia?.none)
+            ForEach(AcquiredVia.allCases) { Text($0.shortLabel).tag(AcquiredVia?.some($0)) }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 260)
+        .padding(4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityHint("How the cards you're scanning were acquired")
     }
 
     /// Bridges the model's looked-up card id to `.sheet(item:)`. Dismissing clears it AND resets
