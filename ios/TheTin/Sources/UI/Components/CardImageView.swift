@@ -18,6 +18,25 @@ struct CardImageView: View {
     @State private var isLoading = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Decoded images, kept in memory so a tile scrolling back into view is free.
+    ///
+    /// `ImageCache` is a DISK cache: it hands back `Data`. Every appearance re-read the file and
+    /// re-ran `UIImage(data:)`, because `.task(id:)` fires on every appearance and `load` began by
+    /// clearing `image`. Scrolling a grid therefore decoded dozens of images per second, forever —
+    /// the art being already downloaded made no difference, which is exactly how this was found
+    /// (2026-07-27: "even with the images already downloaded, it is still painful to scroll" on an
+    /// iPad 7th gen). The download cap had nothing to do with it.
+    ///
+    /// `NSCache` rather than a dictionary: it is thread-safe and evicts itself under memory
+    /// pressure, so a long browse can't grow unbounded and can't get us jetsammed.
+    /// ponytail: count-limited, not byte-limited. Grid art is small and uniform; switch to
+    /// `totalCostLimit` with real byte costs if full-size detail art ever lands in here too.
+    private static let decoded: NSCache<NSURL, UIImage> = {
+        let cache = NSCache<NSURL, UIImage>()
+        cache.countLimit = 300
+        return cache
+    }()
+
     var body: some View {
         Group {
             if let card {
@@ -50,19 +69,29 @@ struct CardImageView: View {
     }
 
     private func load(_ card: CardRecord) async {
-        image = nil
         // No art for this card at all: never a loading state, so the placeholder shows immediately
         // rather than spinning at something that will never arrive.
-        guard let url = card.imageURL(quality: quality) else { return }
+        guard let url = card.imageURL(quality: quality) else { image = nil; return }
+
+        // Already decoded: show it synchronously. Deliberately BEFORE clearing `image` and without
+        // an animation — a recycled tile used to blank to its placeholder and cross-fade back in
+        // every time it scrolled past, which is the "jumpy" half of the same complaint.
+        if let hit = Self.decoded.object(forKey: url as NSURL) {
+            image = Image(uiImage: hit)
+            return
+        }
+
+        image = nil
         isLoading = true
         defer { isLoading = false }
         guard let data = await ImageCache.shared.image(for: url) else { return }
-        let decoded = await Task.detached(priority: .utility) { UIImage(data: data) }.value
-        guard let decoded, !Task.isCancelled else { return }
+        let decodedImage = await Task.detached(priority: .utility) { UIImage(data: data) }.value
+        guard let decodedImage, !Task.isCancelled else { return }
+        Self.decoded.setObject(decodedImage, forKey: url as NSURL)
         if reduceMotion {
-            image = Image(uiImage: decoded)
+            image = Image(uiImage: decodedImage)
         } else {
-            withAnimation(.easeOut(duration: 0.25)) { image = Image(uiImage: decoded) }
+            withAnimation(.easeOut(duration: 0.25)) { image = Image(uiImage: decodedImage) }
         }
     }
 
