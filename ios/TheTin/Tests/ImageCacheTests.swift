@@ -115,3 +115,92 @@ final class ImageCacheTests: XCTestCase {
         XCTAssertEqual(files, 0)
     }
 }
+
+extension ImageCacheTests {
+    /// Counts how many downloads are in flight at once, and parks each until released — so the
+    /// test observes the true peak rather than racing it.
+    actor ConcurrencySpy {
+        private var peak = 0
+        private var active = 0
+        private var gate: [CheckedContinuation<Void, Never>] = []
+
+        func fetch(_ url: URL) async throws -> Data {
+            active += 1
+            peak = max(peak, active)
+            await withCheckedContinuation { gate.append($0) }
+            active -= 1
+            return ImageCacheTests.jpeg
+        }
+        func releaseAll() {
+            let waiting = gate
+            gate = []
+            for c in waiting { c.resume() }
+        }
+        func parked() -> Int { gate.count }
+        func peakSeen() -> Int { peak }
+    }
+
+    /// A grid of tiles must not open a socket per tile.
+    ///
+    /// Reported on device 2026-07-26 (iPad, first load and fast Pokédex scrolling): every visible
+    /// cell started its own download, so forty-plus requests raced each other and the whole app
+    /// slowed while they fought for the connection.
+    func testDownloadsAreCappedRatherThanAllStartingAtOnce() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let spy = ConcurrencySpy()
+        let cache = ImageCache(directory: dir, download: { try await spy.fetch($0) })
+
+        let urls = (0..<30).map { URL(string: "https://example.test/card\($0).jpg")! }
+        let all = Task {
+            await withTaskGroup(of: Data?.self) { group in
+                for u in urls { group.addTask { await cache.image(for: u) } }
+                var out: [Data?] = []
+                for await r in group { out.append(r) }
+                return out
+            }
+        }
+
+        // Wait for the gate to fill, then read the peak.
+        for _ in 0..<300 {
+            if await spy.parked() >= 4 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let peak = await spy.peakSeen()
+        XCTAssertLessThanOrEqual(peak, 4, "at most 4 downloads in flight; saw \(peak)")
+        XCTAssertGreaterThan(peak, 1, "the cap must not serialise everything to one at a time")
+
+        // Drain: each release admits the next waiter, so keep releasing until all 30 resolve.
+        while true {
+            await spy.releaseAll()
+            if all.isCancelled { break }
+            let done = await spy.parked() == 0
+            try await Task.sleep(for: .milliseconds(10))
+            if done, await spy.parked() == 0 { break }
+        }
+        await spy.releaseAll()
+        let results = await all.value
+        let resolved = results.compactMap { $0 }.count
+        let finalPeak = await spy.peakSeen()
+        XCTAssertEqual(resolved, urls.count, "every card still resolves")
+        XCTAssertLessThanOrEqual(finalPeak, 4, "the cap holds for the whole drain")
+    }
+
+    /// A cache hit must not touch the downloader — the common case on every launch after the
+    /// first, and it used to serialise on the actor behind every other lookup.
+    func testCacheHitsServeWithoutTouchingTheDownloader() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let spy = DownloadSpy()
+        let cache = ImageCache(directory: dir, download: { try await spy.fetch($0) })
+        let url = URL(string: "https://example.test/one.jpg")!
+        _ = await cache.image(for: url)
+        let afterFirst = await spy.count()
+        XCTAssertEqual(afterFirst, 1)
+
+        await withTaskGroup(of: Data?.self) { group in
+            for _ in 0..<20 { group.addTask { await cache.image(for: url) } }
+            for await _ in group {}
+        }
+        let afterHits = await spy.count()
+        XCTAssertEqual(afterHits, 1, "cached bytes must never re-hit the network")
+    }
+}
