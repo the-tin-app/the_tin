@@ -127,7 +127,10 @@ final class ScanModel {
     private let store: CatalogStore
     private let pipeline: ScanPipeline
 
-    var guidance: String = "Frame the card inside the box"
+    /// Shown while nothing is detected. The frame rectangle on screen already says this, so
+    /// the view suppresses it — named here so the two can't drift apart.
+    static let idleGuidance = "Frame the card inside the box"
+    var guidance: String = ScanModel.idleGuidance
     var coverage: Double = 0
     var bestGuess: String?
     var ambiguous: [ChooserOption] = []
@@ -164,7 +167,7 @@ final class ScanModel {
     func run(source: FrameSource) async {
         for await pb in source.stream() {
             let out = await pipeline.process(pb)          // runs OFF the main actor
-            if out.noCard { guidance = "Frame the card inside the box"; bestGuess = nil; continue }
+            if out.noCard { guidance = Self.idleGuidance; bestGuess = nil; continue }
             coverage = out.coverage
             if let event = out.event { await handle(event) }
         }
@@ -203,7 +206,7 @@ final class ScanModel {
         let card = try? store.card(id: cardId)
         guard !isLookUpMode else {
             lookedUpCardId = cardId
-            guidance = "Frame the card inside the box"
+            guidance = Self.idleGuidance
             return
         }
         // Price the draft at the condition it's actually being staged at, through the same
@@ -260,7 +263,7 @@ final class ScanModel {
     func reset() async {
         ambiguous = []
         bestGuess = nil
-        guidance = "Frame the card inside the box"
+        guidance = Self.idleGuidance
         await pipeline.reset()
     }
     func reject(_ draft: ScanDraft) async {
