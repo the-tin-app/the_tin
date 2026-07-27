@@ -188,11 +188,16 @@ struct ScanView: View {
     /// at the wrong SOURCE puts a false fact on the card, and nobody re-reads a scanner setting
     /// they set last week.
     private var sourcePicker: some View {
+        // A menu, not a segmented control. Five segments of real words don't fit: at
+        // `maxWidth: 260` each gets ~52pt and "Bought" rendered as "Boug…" on device
+        // (2026-07-27). The condition picker beside it gets away with five because its labels are
+        // two and three characters. A menu can't truncate at any Dynamic Type size, and this is
+        // set once per pack rip, so the extra tap costs nothing.
         Picker("Source", selection: $model.stagingVia) {
-            Text("—").tag(AcquiredVia?.none).accessibilityLabel("Not recorded")
+            Text("Not recorded").tag(AcquiredVia?.none)
             ForEach(AcquiredVia.allCases) { Text($0.shortLabel).tag(AcquiredVia?.some($0)) }
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.menu)
         .frame(maxWidth: 260)
         .padding(4)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))

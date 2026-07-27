@@ -671,6 +671,9 @@ struct CollectionView: View {
     @State private var printRequest: PrintSheetRequest?
     @State private var showingReport = false
     @State private var deletingGroup: CardGroup?
+    /// Second-stage confirmation for the one action that destroys cards rather than just a
+    /// divider. Set only from the first alert's destructive button.
+    @State private var destroyingGroup: CardGroup?
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -798,28 +801,47 @@ struct CollectionView: View {
                 renameGroupName = ""
             }
         }
-        .confirmationDialog(
-            "Delete “\(deletingGroup?.name ?? "")”?",
-            isPresented: Binding(get: { deletingGroup != nil },
-                                 set: { if !$0 { deletingGroup = nil } }),
-            titleVisibility: .visible,
-            presenting: deletingGroup
-        ) { group in
+        // An ALERT, not a confirmationDialog. On iPad the dialog renders as a popover with no
+        // anchor, so it appeared at the top of the screen — nowhere near the row you swiped —
+        // and the choice you hadn't noticed was the one you didn't take (reported 2026-07-27).
+        // Alerts are centred and identical on both platforms.
+        .alert("Delete “\(deletingGroup?.name ?? "")”?",
+               isPresented: Binding(get: { deletingGroup != nil },
+                                    set: { if !$0 { deletingGroup = nil } }),
+               presenting: deletingGroup) { group in
             let n = model.entries(in: group.id).cardCount
             if n > 0 {
-                Button("Delete divider, keep \(n == 1 ? "its card" : "its \(n) cards")") {
+                Button("Keep \(n == 1 ? "the card" : "the \(n) cards")") {
                     Task { await model.deleteGroup(id: group.id, keepingEntries: true) }
                 }
-            }
-            Button(n == 0 ? "Delete divider" : "Delete divider and \(n) \(n == 1 ? "card" : "cards")",
-                   role: .destructive) {
-                Task { await model.deleteGroup(id: group.id) }
+                // Hands off to a second alert rather than deleting here. Losing cards is not the
+                // same kind of act as losing a divider, and it shouldn't cost the same one tap.
+                Button("Delete \(n == 1 ? "card" : "cards") too", role: .destructive) {
+                    destroyingGroup = group
+                }
+            } else {
+                Button("Delete divider", role: .destructive) {
+                    Task { await model.deleteGroup(id: group.id) }
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: { group in
             let n = model.entries(in: group.id).cardCount
             Text(n == 0 ? "This divider is empty."
-                        : "Kept \(n == 1 ? "card moves" : "cards move") to No divider. Either way you get a moment to undo it.")
+                        : "\(n == 1 ? "1 card is" : "\(n) cards are") filed here. Keeping \(n == 1 ? "it moves it" : "them moves them") to No divider.")
+        }
+        // Step two, and the only place cards are actually destroyed. Named counts on purpose: the
+        // number is the thing you're about to lose, so it belongs in the title, not the body.
+        .alert("Delete \(model.entries(in: destroyingGroup?.id ?? "").cardCount) \(model.entries(in: destroyingGroup?.id ?? "").cardCount == 1 ? "card" : "cards") permanently?",
+               isPresented: Binding(get: { destroyingGroup != nil },
+                                    set: { if !$0 { destroyingGroup = nil } }),
+               presenting: destroyingGroup) { group in
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteGroup(id: group.id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This removes the cards from your tin, not just the divider. You'll get a moment to undo it.")
         }
         .navigationDestination(for: TinPagerRoute.self) { route in
             GroupPagerView(model: model, store: store, groupId: route.groupId)
@@ -972,8 +994,13 @@ struct CollectionView: View {
             // The context menu is invisible until long-pressed; swipe actions are the
             // discoverable path to the same Rename/Delete (delete still confirms).
             .swipeActions(edge: .trailing) {
-                Button(role: .destructive) { deletingGroup = group }
+                // Tinted, NOT `role: .destructive`. The role makes SwiftUI animate the row out
+                // the instant you tap — as if it were already gone — and the row then springs
+                // back when the confirmation appears, so the list showed a deletion that hadn't
+                // happened yet (reported 2026-07-27). Nothing here deletes without confirming.
+                Button { deletingGroup = group }
                     label: { Label("Delete", systemImage: "trash") }
+                    .tint(.red)
                 Button { renameGroupName = group.name; renamingGroupId = group.id }
                     label: { Label("Rename", systemImage: "pencil") }
             }
