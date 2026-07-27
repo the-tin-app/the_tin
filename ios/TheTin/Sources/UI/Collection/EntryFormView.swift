@@ -27,6 +27,7 @@ struct EntryFormView: View {
     @State private var hasAcquiredDate = false
     @State private var acquiredAt = Date()
     @State private var acquiredFrom = ""
+    @State private var acquiredVia: AcquiredVia? = nil
     @State private var forTrade = false
     /// Snapshot of the fields as populated, so Cancel/swipe-down can tell typed-then-abandoned
     /// from untouched (only dirty forms earn a discard confirmation).
@@ -36,7 +37,8 @@ struct EntryFormView: View {
     private var snapshot: [String] {
         [groupId, newGroupName, String(qty), condition.rawValue, variant.rawValue,
          grade.map(String.init(describing:)) ?? "", pricePaidText, gradingFeeText,
-         hasAcquiredDate ? acquiredAt.description : "", acquiredFrom, String(forTrade)]
+         hasAcquiredDate ? acquiredAt.description : "", acquiredFrom, String(forTrade),
+         acquiredVia?.rawValue ?? ""]
     }
     private var isDirty: Bool { snapshot != baseline }
 
@@ -74,6 +76,13 @@ struct EntryFormView: View {
                 }
             }
             Section("Acquisition") {
+                // How the copy arrived. "Not recorded" is a real choice and the default: the
+                // form used to assume you bought it, and nil must stay distinguishable from
+                // an actual answer.
+                Picker("Source", selection: $acquiredVia) {
+                    Text("Not recorded").tag(AcquiredVia?.none)
+                    ForEach(AcquiredVia.allCases) { Text($0.label).tag(AcquiredVia?.some($0)) }
+                }
                 TextField("Price paid — total (USD)", text: $pricePaidText)
                     .keyboardType(.decimalPad)
                     .focused($amountFieldFocused)
@@ -166,6 +175,7 @@ struct EntryFormView: View {
             acquiredAt = existing.acquiredAt ?? Date()
             acquiredFrom = existing.acquiredFrom ?? ""
             forTrade = existing.isForTrade
+            acquiredVia = existing.acquiredViaValue
         } else {
             // New entries default to the tin itself, matching the scanner — filing behind a
             // divider is a choice, never a requirement.
@@ -204,7 +214,8 @@ struct EntryFormView: View {
                 variant: variant.rawValue,
                 // nil rather than false when off, so an entry that was never marked stays
                 // byte-identical to what it was before this field existed.
-                forTrade: forTrade ? true : nil)
+                forTrade: forTrade ? true : nil,
+                acquiredVia: acquiredVia?.rawValue)
             if await onSave(entry) { dismiss() }
         }
     }

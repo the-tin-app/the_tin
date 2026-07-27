@@ -149,6 +149,15 @@ final class ScanModel {
     var stagingCondition: CardCondition = AppConfig.scanCondition {
         didSet { AppConfig.scanCondition = stagingCondition }
     }
+    /// How the cards being scanned were acquired — set once for a pack rip, applied to every
+    /// draft staged after it.
+    ///
+    /// NOT persisted, unlike the mode and condition beside it. Condition is sticky because NM is
+    /// a safe default and being wrong costs a price tier; "Pulled" is a claim about where a card
+    /// came from, and left sticky it would quietly label the box you buy next week as pack pulls.
+    /// One tap per rip is cheap; a wrong provenance is silent and permanent. It also keeps this
+    /// out of `AppConfig`, so no test has to pin it in setUp/tearDown to avoid poisoning the next.
+    var stagingVia: AcquiredVia? = nil
     /// Set when a lock resolves in look-up mode. The view presents that card and clears this,
     /// which also resets the scanner so the next card (or the same one again) can be read.
     var lookedUpCardId: String?
@@ -223,7 +232,8 @@ final class ScanModel {
             matrix: (try? store.matrixPrices(cardId: cardId)) ?? [])
         let draft = ScanDraft(id: UUID().uuidString, cardId: cardId,
                               variant: variant, condition: stagingCondition,
-                              qty: 1, addedAt: Date(), priceUsdSnapshot: price)
+                              qty: 1, addedAt: Date(), priceUsdSnapshot: price,
+                              acquiredVia: stagingVia)
         staging.append(draft)
         // The card's name, not its catalog id — this line read "Added swsh7-215 — next card".
         guidance = "Added \(card?.name ?? cardId) — next card"

@@ -5,11 +5,11 @@ enum CollectionCSV {
     /// `for_trade` is appended last on purpose: `CollectionCSVImport` looks columns up BY NAME,
     /// so a new trailing column can't shift anything a third-party format reads positionally.
     // `sold_at`/`sold_for` are appended, never inserted: importers (ours and other people's)
-    // read this by position as often as by name.
+    // read this by position as often as by name. `acquired_via` follows the same rule.
     static let header = ["card_id", "name", "set_id", "set_name", "number", "rarity", "qty",
                          "variant", "condition", "grade", "price_paid", "acquired_at",
                          "acquired_from", "added_at", "divider", "current_value", "value_as_of",
-                         "for_trade", "sold_at", "sold_for"]
+                         "for_trade", "sold_at", "sold_for", "acquired_via"]
 
     /// ISO 8601 with time, UTC — every exported date column uses this.
     static let iso: ISO8601DateFormatter = {
@@ -71,7 +71,7 @@ enum CollectionCSV {
                     groupName[e.groupId] ?? "", money(value),
                     value == nil ? "" : (price?.asOf ?? ""),
                     e.isForTrade ? "true" : "",
-                    date(e.soldAt), money(e.soldFor)]
+                    date(e.soldAt), money(e.soldFor), e.acquiredVia ?? ""]
         }
         return data([header] + rows)
     }

@@ -535,7 +535,8 @@ final class CollectionModel {
         let entry = CollectionEntry(id: UUID().uuidString, cardId: draft.cardId, groupId: groupId,
                                     qty: draft.qty, condition: draft.condition.rawValue, grade: nil,
                                     pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date(),
-                                    variant: draft.variant.rawValue)
+                                    variant: draft.variant.rawValue,
+                                    acquiredVia: draft.acquiredVia?.rawValue)
         // Same merge rule as every other add path, but this one keeps its own error handling:
         // the review screen re-presents the failure and keeps the draft, so `write`'s global
         // alert would double up on it.

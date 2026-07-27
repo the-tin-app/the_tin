@@ -230,6 +230,42 @@ final class CSVImportCoreTests: XCTestCase {
         XCTAssertEqual(out[0], "card_id,qty,skip_reason")
         XCTAssertTrue(out[1].hasPrefix("bogus-9,1,"))
     }
+
+    /// The source survives export → import, like every other recorded fact about a copy.
+    func testAcquisitionSourceRoundTrips() throws {
+        let original = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "", qty: 1,
+                                       condition: "NM", grade: nil, pricePaid: nil,
+                                       acquiredAt: nil, acquiredFrom: nil,
+                                       addedAt: Date(timeIntervalSince1970: 1_750_000_000),
+                                       variant: "regular",
+                                       acquiredVia: AcquiredVia.pulled.rawValue)
+        let store = try FixtureCatalog.make()
+        let cards = Dictionary(uniqueKeysWithValues: try store.cards(ids: ["swsh7-215"]).map { ($0.id, $0) })
+        let sets = Dictionary(uniqueKeysWithValues: try store.sets().map { ($0.id, $0) })
+        let csv = CollectionCSV.export(entries: [original], groups: [],
+                                       cards: cards, sets: sets, prices: [:])
+        let result = try CollectionCSVImport.importCSV(String(decoding: csv, as: UTF8.self),
+                                                       matcher: matcher)
+        let e = try XCTUnwrap(result.entries.first)
+        XCTAssertEqual(e.acquiredViaValue, .pulled)
+    }
+
+    /// An unrecognised value reads as "not recorded" and the row is KEPT. A provenance label is
+    /// not worth failing an import over — the card is the point.
+    func testUnknownAcquisitionSourceKeepsTheRow() throws {
+        let csv = "card_id,qty,condition,acquired_via\r\nswsh7-215,1,NM,inherited-from-an-uncle\r\n"
+        let result = try CollectionCSVImport.importCSV(csv, matcher: matcher)
+        XCTAssertEqual(result.entries.count, 1, "the card must survive an unreadable source")
+        XCTAssertNil(try XCTUnwrap(result.entries.first).acquiredVia)
+        XCTAssertTrue(result.skipped.isEmpty)
+    }
+
+    /// A file exported before the column existed imports unchanged.
+    func testImportWithoutTheAcquisitionSourceColumn() throws {
+        let csv = "card_id,qty,condition\r\nswsh7-215,1,NM\r\n"
+        let result = try CollectionCSVImport.importCSV(csv, matcher: matcher)
+        XCTAssertNil(try XCTUnwrap(result.entries.first).acquiredVia)
+    }
 }
 
 final class CollectrImportTests: XCTestCase {

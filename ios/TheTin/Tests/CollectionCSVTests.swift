@@ -42,10 +42,10 @@ final class CollectionCSVTests: XCTestCase {
         // current_value: psa10 505 × qty 2 = 1010.00 (same GroupStats.entryValue the app shows).
         // acquiredFrom contains a comma → quoted.
         // for_trade is blank, not "false": an entry that was never marked exports as it always did.
-        // …and sold_at/sold_for blank for a card you still own.
+        // …and sold_at/sold_for/acquired_via blank for a card you still own with no recorded source.
         XCTAssertEqual(out[1],
             "swsh7-215,Rayquaza VMAX,swsh7,Evolving Skies,215,Rare Rainbow,2,holo,NM,psa10," +
-            "300.00,1970-01-02T00:00:00Z,\"trade, local show\",1970-01-01T00:00:00Z,Binder,1010.00,2026-07-13,,,")
+            "300.00,1970-01-02T00:00:00Z,\"trade, local show\",1970-01-01T00:00:00Z,Binder,1010.00,2026-07-13,,,,")
     }
 
     /// An export is the whole file, so a copy that has left has to appear in it — with what it
@@ -60,7 +60,7 @@ final class CollectionCSVTests: XCTestCase {
         let data = CollectionCSV.export(entries: [entry], groups: [group],
                                         cards: [card.id: card], sets: [set.id: set],
                                         prices: [card.id: price])
-        XCTAssertTrue(lines(data)[1].hasSuffix(",1970-01-02T00:00:00Z,420.00"), "got \(lines(data)[1])")
+        XCTAssertTrue(lines(data)[1].hasSuffix(",1970-01-02T00:00:00Z,420.00,"), "got \(lines(data)[1])")
     }
 
     /// The trade flag has to survive "your data is yours": export then re-import must not quietly
@@ -74,8 +74,8 @@ final class CollectionCSVTests: XCTestCase {
         let data = CollectionCSV.export(entries: [entry], groups: [group],
                                         cards: [card.id: card], sets: [set.id: set],
                                         prices: [card.id: price])
-        // for_trade is followed by the (empty) sold_at/sold_for columns.
-        XCTAssertTrue(lines(data)[1].hasSuffix(",true,,"), "got \(lines(data)[1])")
+        // for_trade is followed by the (empty) sold_at/sold_for/acquired_via columns.
+        XCTAssertTrue(lines(data)[1].hasSuffix(",true,,,"), "got \(lines(data)[1])")
     }
 
     func testExportUnknownCardAndUngroupedGoesBlankNotCrash() {
@@ -83,7 +83,7 @@ final class CollectionCSVTests: XCTestCase {
                                     grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
                                     addedAt: Date(timeIntervalSince1970: 0))
         let data = CollectionCSV.export(entries: [entry], groups: [], cards: [:], sets: [:], prices: [:])
-        XCTAssertEqual(lines(data)[1], "gone-1,,,,,,1,,,,,,,1970-01-01T00:00:00Z,,,,,,")
+        XCTAssertEqual(lines(data)[1], "gone-1,,,,,,1,,,,,,,1970-01-01T00:00:00Z,,,,,,,")
     }
 
     func testWishlistExport() {
@@ -98,5 +98,43 @@ final class CollectionCSVTests: XCTestCase {
         XCTAssertEqual(CollectionCSV.filename("the-tin-collection",
                                               on: Date(timeIntervalSince1970: 0)),
                        "the-tin-collection-1970-01-01")
+    }
+
+    /// The column is appended LAST — third-party importers read this header positionally, so an
+    /// inserted column silently shifts every field after it.
+    func testAcquiredViaIsTheFinalColumn() {
+        XCTAssertEqual(CollectionCSV.header.last, "acquired_via")
+    }
+
+    func testExportWritesTheAcquisitionSource() throws {
+        let entry = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "", qty: 1,
+                                    condition: "NM", grade: nil, pricePaid: nil, acquiredAt: nil,
+                                    acquiredFrom: nil, addedAt: Date(), variant: "regular",
+                                    acquiredVia: AcquiredVia.pulled.rawValue)
+        let out = lines(CollectionCSV.export(entries: [entry], groups: [],
+                                             cards: ["swsh7-215": card],
+                                             sets: ["swsh7": set],
+                                             prices: ["swsh7-215": price]))
+        let row = try XCTUnwrap(out.last)
+        XCTAssertTrue(row.hasSuffix(",pulled"), "source should be the final field: \(row)")
+    }
+
+    /// An unrecorded source writes an empty field, not the word "nil" or a default.
+    func testExportLeavesUnrecordedSourceBlank() throws {
+        let entry = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "", qty: 1,
+                                    condition: "NM", grade: nil, pricePaid: nil, acquiredAt: nil,
+                                    acquiredFrom: nil, addedAt: Date(), variant: "regular",
+                                    acquiredVia: nil)
+        let out = lines(CollectionCSV.export(entries: [entry], groups: [],
+                                             cards: ["swsh7-215": card],
+                                             sets: ["swsh7": set],
+                                             prices: ["swsh7-215": price]))
+        let row = try XCTUnwrap(out.last)
+        // A bare trailing "," alone would still pass if the acquired_via column were deleted
+        // entirely, since sold_at/sold_for are already blank. Assert the field count instead, so
+        // the test fails if the column disappears rather than just staying empty.
+        XCTAssertEqual(row.components(separatedBy: ",").count, CollectionCSV.header.count,
+                       "row should have one field per header column, including a blank acquired_via: \(row)")
+        XCTAssertTrue(row.hasSuffix(","), "acquired_via should be blank: \(row)")
     }
 }
