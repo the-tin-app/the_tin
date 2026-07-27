@@ -107,6 +107,14 @@ struct SettingsView: View {
                           allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
                 Task { await runImport(result) }
             }
+            // A CSV opened in The Tin from Files / AirDrop lands here rather than in the picker:
+            // RootView presents Settings on the route token, and this runs the same import the
+            // button does, so the result sheet and skipped-rows export behave identically.
+            .task(id: app.importRouteToken) {
+                guard let url = app.pendingImportURL else { return }
+                app.pendingImportURL = nil
+                await runImport(.success(url))
+            }
             .sheet(item: $importSummary) { ImportResultSheet(summary: $0) }
             .alert("Import failed", isPresented: Binding(get: { importError != nil },
                                                          set: { if !$0 { importError = nil } })) {
@@ -407,6 +415,48 @@ struct SettingsView: View {
         }.value
     }
 
+    /// Decide which divider each imported row lands in.
+    ///
+    /// Two different jobs wear the same button. Importing SOMEONE ELSE's CSV is an append: it
+    /// knows nothing about your dividers, so everything lands in one dated pile you re-file from.
+    /// Importing OUR OWN export is a restore — moving your tin to another device — and it has to
+    /// come back looking like the tin you exported, which is the whole point of the `divider`
+    /// column we've always written and never read (fixed 2026-07-27).
+    ///
+    /// Groups are matched by name, case-insensitively, and reused before being created, so a
+    /// re-import doesn't spawn "Binder" beside "binder". An empty divider on one of our rows means
+    /// it was deliberately ungrouped, and it stays that way — `groupId ""` is the tin at large.
+    private func fileImportedEntries(_ result: CollectionCSVImport.Result,
+                                     into collection: CollectionModel) async -> [CollectionEntry] {
+        guard result.carriesDividers else {
+            // Append-only: everything lands in a fresh divider ("Imported Jul 14"); the user
+            // re-files from there. A re-import just makes a second divider.
+            let name = "Imported \(Date().formatted(.dateTime.month(.abbreviated).day()))"
+            let groupId = await collection.createGroup(name: name)
+            return result.entries.map { var e = $0; e.groupId = groupId; return e }
+        }
+        var idByName: [String: String] = [:]
+        for group in collection.groups { idByName[group.name.lowercased()] = group.id }
+        var out: [CollectionEntry] = []
+        for var entry in result.entries {
+            let name = result.dividerByEntryId[entry.id] ?? ""
+            let key = name.lowercased()
+            if name.isEmpty {
+                entry.groupId = ""
+            } else if let existing = idByName[key] {
+                entry.groupId = existing
+            } else {
+                let created = await collection.createGroup(name: name)
+                // A failed create returns "", which is the tin at large — better than dropping
+                // the card, and it stays visible rather than vanishing into a group that isn't there.
+                idByName[key] = created
+                entry.groupId = created
+            }
+            out.append(entry)
+        }
+        return out
+    }
+
     private func runImport(_ picked: Result<URL, Error>) async {
         guard !importInFlight else { return }   // buttons are disabled while in flight; belt+suspenders
         guard let collection = app.collection, let store = app.store else { return }
@@ -424,15 +474,7 @@ struct SettingsView: View {
                 return try CollectionCSVImport.importCSV(text, matcher: CardMatcher(store: store))
             }.value
             if !result.entries.isEmpty {
-                // Append-only: everything lands in a fresh divider ("Imported Jul 14");
-                // the user re-files from there. A re-import just makes a second divider.
-                let divider = "Imported \(Date().formatted(.dateTime.month(.abbreviated).day()))"
-                let groupId = await collection.createGroup(name: divider)
-                let entries = result.entries.map { entry -> CollectionEntry in
-                    var entry = entry
-                    entry.groupId = groupId
-                    return entry
-                }
+                let entries = await fileImportedEntries(result, into: collection)
                 await collection.addEntries(entries)
             }
             var skippedURL: URL?

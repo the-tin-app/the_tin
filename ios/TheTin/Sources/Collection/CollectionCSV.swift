@@ -34,11 +34,19 @@ enum CollectionCSV {
     }
 
     /// "the-tin-collection" → "the-tin-collection-2026-07-14" (UTC date — deterministic).
+    /// Includes the `.csv` extension explicitly.
+    ///
+    /// `fileExporter(contentType: .commaSeparatedText, defaultFilename:)` is documented as
+    /// appending the type's extension and does not — verified on device 2026-07-27, where the
+    /// exported file arrived as `the-tin-collection-2026-07-27` with no extension. iOS then types
+    /// it as `public.data` ("Kind: Data"), which means nothing will open it AND our own
+    /// `fileImporter` greys it out, since `public.data` doesn't conform to
+    /// `.commaSeparatedText`. The export was unusable without renaming it by hand.
     static func filename(_ base: String, on date: Date = Date()) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.timeZone = TimeZone(identifier: "UTC")
-        return "\(base)-\(f.string(from: date))"
+        return "\(base)-\(f.string(from: date)).csv"
     }
 
     private static func money(_ v: Double?) -> String { v.map { String(format: "%.2f", $0) } ?? "" }

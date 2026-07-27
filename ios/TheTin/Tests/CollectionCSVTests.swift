@@ -94,10 +94,13 @@ final class CollectionCSVTests: XCTestCase {
         XCTAssertEqual(out[1], "swsh7-215,Rayquaza VMAX,swsh7,Evolving Skies,215,92.50,2026-07-13,,,")
     }
 
-    func testFilenameStampsDate() {
+    /// The `.csv` extension is part of the filename, not something `fileExporter` adds. It
+    /// doesn't — a real export arrived as a bare name, which iOS types as `public.data`, so
+    /// nothing would open it and our own importer greyed it out (2026-07-27).
+    func testFilenameStampsDateAndCarriesTheExtension() {
         XCTAssertEqual(CollectionCSV.filename("the-tin-collection",
                                               on: Date(timeIntervalSince1970: 0)),
-                       "the-tin-collection-1970-01-01")
+                       "the-tin-collection-1970-01-01.csv")
     }
 
     /// The column is appended LAST — third-party importers read this header positionally, so an

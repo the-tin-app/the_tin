@@ -82,6 +82,17 @@ targets:
         # per-run CURRENT_PROJECT_VERSION=<n> override actually reaches the bundle.
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        # Lets a .csv be sent to The Tin from Files, AirDrop or a share sheet. Without this the
+        # app declares no document types at all, so a exported collection showed "no apps
+        # available" on the receiving device (2026-07-27). Viewer/Alternate: we read a CSV and
+        # import it, we don't own or edit the file, so we must not outrank a spreadsheet app.
+        # Handled in AppModel.handleDeepLink — declaring a type without handling the URL would
+        # make "Open in The Tin" launch the app and do nothing, which is worse than not appearing.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Comma-Separated Values
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.comma-separated-values-text]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         AppIdentifierPrefix: $(AppIdentifierPrefix)

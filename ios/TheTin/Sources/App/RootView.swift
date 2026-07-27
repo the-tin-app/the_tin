@@ -68,6 +68,7 @@ private struct MainTabView: View {
     @State private var consumedRouteToken = 0
     @State private var consumedCardToken = 0
     @State private var consumedIntentToken = 0
+    @State private var consumedImportToken = 0
 
     var body: some View {
         TabView(selection: $selection) {
@@ -130,15 +131,10 @@ private struct MainTabView: View {
                                    selection = .search
                                },
                                goals: model.setGoals,
-                               openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) })
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button { showingSettings = true } label: {
-                                Image(systemName: "gearshape")
-                            }
-                            .accessibilityLabel("Settings")
-                        }
-                    }
+                               openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) },
+                               // The gear belongs to CollectionView's own toolbar. Applying it
+                               // here as a second `.toolbar` is what lost it on iPadOS 18.
+                               onOpenSettings: { showingSettings = true })
                     .sheet(isPresented: $showingSettings) { SettingsView(app: model, pack: pack) }
                     .fundingBanner(model: model, store: store, pack: pack)
             }
@@ -162,6 +158,7 @@ private struct MainTabView: View {
             consumeIntentRoute()   // …same for a cold launch from Siri or the Action button
             await pack.refresh()   // learn the pack's state once, for Settings and the prompt
         }
+        .onChange(of: model.importRouteToken) { consumeImportRoute() }
         .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
         .onChange(of: model.intentRouteToken) { consumeIntentRoute() }
@@ -175,6 +172,15 @@ private struct MainTabView: View {
         } message: {
             Text(collection.writeError?.message ?? "")
         }
+    }
+
+    /// A CSV opened in The Tin from Files / AirDrop / a share sheet. Settings owns the whole
+    /// import flow — picker, progress, result sheet, skipped-rows export — so opening it is the
+    /// honest destination rather than duplicating any of that at the root.
+    private func consumeImportRoute() {
+        guard model.importRouteToken > consumedImportToken, model.pendingImportURL != nil else { return }
+        consumedImportToken = model.importRouteToken
+        showingSettings = true
     }
 
     private func consumeWishlistRoute() {
