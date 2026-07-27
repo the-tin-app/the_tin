@@ -90,13 +90,28 @@ actor ImageCache {
     /// URLSession's own default per-host limit is 4–6 connections, so a cap of 4 was stricter than
     /// the platform would ever have been on its own.
     ///
-    /// ponytail: a flat cap, not a bandwidth-aware scheduler, and not adaptive to scroll state.
-    /// Twelve is a felt number, not a measured one — if a fast scroll ever saturates the
-    /// connection again, make it adaptive rather than just lowering this.
+    /// Scaled to the device, because this is really a CPU limit wearing a network limit's clothes.
     ///
-    /// Not private: the cap test asserts against this rather than a literal, so changing the
-    /// number here can't silently leave a test claiming to verify a cap that no longer exists.
-    static let maxConcurrentDownloads = 12
+    /// Every finished download is immediately decoded (`UIImage(data:)`) and cross-faded in, so the
+    /// cap doesn't only govern sockets — it governs how many decodes and animations land at once.
+    /// Card art comes off an HTTP/2 CDN where parallel requests multiplex over one connection, so
+    /// the network was never the expensive half.
+    ///
+    /// One constant cannot serve both ends of the range. Measured by feel on two devices
+    /// (2026-07-27): an iPad 7th gen (A10, 2 usable cores) stutters badly at 12 but was fine at 4;
+    /// an iPhone 17 Pro Max (6 cores) found 4 "10x slower than it used to". Both land on
+    /// cores × 2, so let the device answer instead of picking a number for whichever one
+    /// complained most recently.
+    ///
+    /// ponytail: a heuristic fitted to two data points, not a measurement, and still not adaptive
+    /// to scroll state. If a device is fast enough to want more than 12 it won't get it, and if a
+    /// grid ever stutters again the next move is capping concurrent DECODES separately rather than
+    /// squeezing this further — downloads are not what makes an A10 drop frames.
+    ///
+    /// Not private: the cap tests assert against this rather than a literal, so changing it can't
+    /// silently leave a test verifying a cap that no longer exists.
+    static let maxConcurrentDownloads =
+        max(4, min(12, ProcessInfo.processInfo.activeProcessorCount * 2))
     private var activeDownloads = 0
     private var downloadWaiters: [CheckedContinuation<Void, Never>] = []
 
