@@ -114,6 +114,37 @@ final class ImageCacheTests: XCTestCase {
         XCTAssertEqual(bytes, 0)
         XCTAssertEqual(files, 0)
     }
+
+    /// The gate must not leak permits, or art stops arriving forever.
+    ///
+    /// Thirty concurrent downloads, roughly a third of them throwing, then one more request. If any
+    /// task abandoned its slot on the failure path, `activeDownloads` never returns to 0 and the
+    /// final request parks for good. Written while hunting the 2026-07-27 "art won't download"
+    /// report — it exonerated the permit arithmetic, which is exactly why it's worth keeping.
+    func testGateReleasesEverySlotEvenWhenDownloadsFail() async throws {
+        let cache = ImageCache(directory: try tempDir(), download: { url in
+            if url.absoluteString.hasSuffix("2.jpg") || url.absoluteString.hasSuffix("5.jpg") {
+                throw URLError(.notConnectedToInternet)
+            }
+            return ImageCacheTests.jpeg
+        })
+
+        let urls = (0..<30).map { URL(string: "https://example.test/card\($0).jpg")! }
+        await withTaskGroup(of: Void.self) { g in
+            for u in urls { g.addTask { _ = await cache.image(for: u) } }
+            for await _ in g {}
+        }
+
+        let fresh = URL(string: "https://example.test/fresh.jpg")!
+        let finished = await withTaskGroup(of: Bool.self) { g -> Bool in
+            g.addTask { _ = await cache.image(for: fresh); return true }
+            g.addTask { try? await Task.sleep(for: .seconds(5)); return false }
+            let first = await g.next()!
+            g.cancelAll()
+            return first
+        }
+        XCTAssertTrue(finished, "gate leaked permits — a fresh download could not acquire a slot")
+    }
 }
 
 extension ImageCacheTests {
@@ -170,12 +201,22 @@ extension ImageCacheTests {
         XCTAssertGreaterThan(peak, 1, "the cap must not serialise everything to one at a time")
 
         // Drain: each release admits the next waiter, so keep releasing until all 30 resolve.
+        // BOUNDED on purpose. This loop used to be `while true`, and when the gate wedged it hung
+        // xcodebuild outright — which is worse than a red test, because the process dies before
+        // writing a result bundle and there is nothing left to read. Fail loudly instead.
+        var drainRounds = 0
         while true {
             await spy.releaseAll()
             if all.isCancelled { break }
             let done = await spy.parked() == 0
             try await Task.sleep(for: .milliseconds(10))
             if done, await spy.parked() == 0 { break }
+            drainRounds += 1
+            if drainRounds > 500 {
+                XCTFail("drain never completed — the gate is wedged with \(await spy.parked()) parked")
+                all.cancel()
+                break
+            }
         }
         await spy.releaseAll()
         let results = await all.value
@@ -202,5 +243,70 @@ extension ImageCacheTests {
         }
         let afterHits = await spy.count()
         XCTAssertEqual(afterHits, 1, "cached bytes must never re-hit the network")
+    }
+
+    /// Records the order downloads actually START in, and parks each until released.
+    actor OrderSpy {
+        private var started: [URL] = []
+        private var gate: [CheckedContinuation<Void, Never>] = []
+
+        func fetch(_ url: URL) async throws -> Data {
+            started.append(url)
+            await withCheckedContinuation { gate.append($0) }
+            return ImageCacheTests.jpeg
+        }
+        func startedURLs() -> [URL] { started }
+        func startedCount() -> Int { started.count }
+        func releaseOne() { if !gate.isEmpty { gate.removeFirst().resume() } }
+    }
+
+    /// When a slot frees up, the MOST RECENTLY requested image goes next — not the oldest.
+    ///
+    /// Reported on device 2026-07-27: "new card art gets stuck downloading… it looks like the app
+    /// just doesn't have a lot of the assets." No permit leak (see
+    /// `testGateReleasesEverySlotEvenWhenDownloadsFail`) — the queue was simply FIFO. Scroll past
+    /// three hundred cards and every one of them is queued ahead of what's on screen now, four
+    /// servers deep, so the visible tiles are always last and never arrive.
+    ///
+    /// LIFO inverts that: whatever was asked for most recently is almost always what the user is
+    /// looking at. Off-screen requests still complete, in the gaps.
+    func testFreedSlotGoesToTheNewestRequestNotTheOldest() async throws {
+        let spy = OrderSpy()
+        let cache = ImageCache(directory: FileManager.default.temporaryDirectory
+                                   .appendingPathComponent(UUID().uuidString),
+                               download: { try await spy.fetch($0) })
+
+        // Eight scrolled-past cards: four occupy the slots, four queue up behind them.
+        let old = (0..<8).map { URL(string: "https://example.test/old\($0).jpg")! }
+        let running = Task {
+            await withTaskGroup(of: Data?.self) { g in
+                for u in old { g.addTask { await cache.image(for: u) } }
+                var out: [Data?] = []
+                for await r in g { out.append(r) }
+                return out
+            }
+        }
+        for _ in 0..<300 where await spy.startedCount() < 4 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        // Give the remaining four time to reach the waiter queue before the newest arrives.
+        try await Task.sleep(for: .milliseconds(100))
+
+        // The card now on screen — asked for last, so it is at the BACK of a FIFO queue.
+        let onScreen = URL(string: "https://example.test/on-screen.jpg")!
+        let newest = Task { await cache.image(for: onScreen) }
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Free exactly one slot.
+        await spy.releaseOne()
+        for _ in 0..<300 where await spy.startedCount() < 5 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        let fifth = await spy.startedURLs()[4]
+        XCTAssertEqual(fifth, onScreen,
+                       "a freed slot must go to the newest request; went to \(fifth.lastPathComponent)")
+
+        newest.cancel(); running.cancel()
     }
 }

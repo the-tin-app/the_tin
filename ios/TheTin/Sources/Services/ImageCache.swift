@@ -100,11 +100,25 @@ actor ImageCache {
         await withCheckedContinuation { downloadWaiters.append($0) }
     }
 
+    /// Hands the slot to the NEWEST waiter, not the oldest.
+    ///
+    /// This was `removeFirst()` — a fair queue, and the wrong one. Nothing removes a waiter when
+    /// its tile scrolls off screen (the continuation isn't cancellation-aware and the download
+    /// runs in an unstructured Task the caller's cancellation never reaches), so the queue only
+    /// grows. Scroll past three hundred cards and the art you are looking at is three hundredth in
+    /// line behind cards you have already gone past, four servers deep — it never arrives, and the
+    /// app looks like it is missing its assets. Reported on device 2026-07-27; the gate itself was
+    /// exonerated of leaking permits, this was purely the order.
+    ///
+    /// The newest request is almost always what's on screen. Older ones still complete, in the
+    /// gaps — they're off screen, so nobody is waiting on them.
+    /// ponytail: ordering only. The queue is still unbounded; making the wait cancellation-aware
+    /// so scrolled-away tiles drop out is the real cure, and needs a device to justify its cost.
     private func releaseDownloadSlot() {
         if downloadWaiters.isEmpty {
             activeDownloads -= 1
         } else {
-            downloadWaiters.removeFirst().resume()
+            downloadWaiters.removeLast().resume()
         }
     }
 
