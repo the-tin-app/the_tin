@@ -29,11 +29,15 @@ struct CardImageView: View {
     ///
     /// `NSCache` rather than a dictionary: it is thread-safe and evicts itself under memory
     /// pressure, so a long browse can't grow unbounded and can't get us jetsammed.
-    /// ponytail: count-limited, not byte-limited. Grid art is small and uniform; switch to
-    /// `totalCostLimit` with real byte costs if full-size detail art ever lands in here too.
+    ///
+    /// Limited by BYTES, not count. This started at `countLimit = 300`, which counts images while
+    /// the thing that actually matters is bitmaps: decoded grid art runs ~335 KB apiece, so 300 of
+    /// them is ~100 MB held on a device with 3 GB total. A jetsam kill is also the one crash class
+    /// Crashlytics can never report (SIGKILL is uncatchable), so it would have been invisible.
+    /// The ceiling is a fraction of physical memory; NSCache still evicts under pressure below it.
     private static let decoded: NSCache<NSURL, UIImage> = {
         let cache = NSCache<NSURL, UIImage>()
-        cache.countLimit = 300
+        cache.totalCostLimit = min(256 << 20, Int(ProcessInfo.processInfo.physicalMemory / 32))
         return cache
     }()
 
@@ -86,8 +90,15 @@ struct CardImageView: View {
         defer { isLoading = false }
         guard let data = await ImageCache.shared.image(for: url) else { return }
         let decodedImage = await Task.detached(priority: .utility) { UIImage(data: data) }.value
-        guard let decodedImage, !Task.isCancelled else { return }
-        Self.decoded.setObject(decodedImage, forKey: url as NSURL)
+        guard let decodedImage else { return }
+        // Cache BEFORE the cancellation check, deliberately. Fast scrolling cancels a tile's task
+        // the moment it leaves the screen, and this guard used to sit ahead of the write — so a
+        // decode that had already finished was thrown away, then paid for again on the way back
+        // up. That is exactly the "I scroll back up, images seem to need to re-load" report
+        // (2026-07-27). Cancellation should skip the UI update, never discard completed work.
+        Self.decoded.setObject(decodedImage, forKey: url as NSURL,
+                               cost: decodedImage.cgImage.map { $0.bytesPerRow * $0.height } ?? 0)
+        guard !Task.isCancelled else { return }
         if reduceMotion {
             image = Image(uiImage: decodedImage)
         } else {
