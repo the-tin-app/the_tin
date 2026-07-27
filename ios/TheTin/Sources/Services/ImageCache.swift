@@ -21,20 +21,54 @@ actor ImageCache {
         self.download = download
     }
 
-    func image(for url: URL) async -> Data? {
-        ensureDirectory()
-        let file = fileURL(for: url)
-        if let data = try? Data(contentsOf: file) {
-            // Self-heal: a pre-fix build cached auth-error bodies (JSON) for private
-            // Firebase-Storage images as if they were art. Reject non-image bytes and re-fetch.
-            if Self.looksLikeImage(data) { return data }
-            try? fm.removeItem(at: file)
+    /// Cache hits are served WITHOUT entering the actor.
+    ///
+    /// `Data(contentsOf:)` is synchronous disk I/O, and running it on the actor meant every
+    /// lookup queued behind every other one — so a grid of forty tiles serialised its reads even
+    /// when nothing was downloading. `dir` is an immutable `Sendable` `let`, so the path can be
+    /// derived from outside isolation; only a genuine miss needs the actor, for in-flight
+    /// bookkeeping and the download gate.
+    nonisolated func image(for url: URL) async -> Data? {
+        let file = Self.fileURL(for: url, in: dir)
+        // Off-actor, and off the caller's thread: a cold read of a few hundred KB shouldn't run
+        // wherever SwiftUI happened to call us from.
+        if let data = await Task.detached(priority: .utility, operation: {
+            Self.readCachedImage(at: file)
+        }).value {
+            return data
         }
+        return await fetchMissing(url, file: file)
+    }
 
+    /// Reads a cached file, self-healing poisoned entries. Nonisolated + static: no actor state.
+    ///
+    /// Self-heal: a pre-fix build cached auth-error bodies (JSON) for private Firebase-Storage
+    /// images as if they were art. Reject non-image bytes and re-fetch.
+    private nonisolated static func readCachedImage(at file: URL) -> Data? {
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        if Self.looksLikeImage(data) { return data }
+        try? FileManager.default.removeItem(at: file)
+        return nil
+    }
+
+    private func fetchMissing(_ url: URL, file: URL) async -> Data? {
+        ensureDirectory()
+        // Coalesce: two tiles showing the same card share one download.
         if let existing = inFlight[url] { return await existing.value }
+        // Re-check the disk now that we hold the actor. The fast-path read runs OFF the actor, so
+        // "miss" and "register in-flight" are no longer one atomic step: a second caller can read
+        // an empty cache, then arrive here after the first download has already finished and
+        // cleared `inFlight`, and start a redundant fetch. `testConcurrentSameURLDownloadsOnce`
+        // catches exactly that. Only the miss path pays for this read.
+        if let data = Self.readCachedImage(at: file) { return data }
 
         let download = self.download
-        let task = Task<Data?, Never> {
+        let task = Task<Data?, Never> { [weak self] in
+            // Wait for a slot BEFORE hitting the network. Without this every visible tile fired a
+            // request at once — forty on a first load, hundreds on a fast Dex scroll — which
+            // saturates the connection and starves whichever images are actually on screen.
+            await self?.acquireDownloadSlot()
+            defer { Task { await self?.releaseDownloadSlot() } }
             guard let data = try? await download(url), Self.looksLikeImage(data) else { return nil }
             try? data.write(to: file, options: .atomic)
             return data
@@ -43,6 +77,35 @@ actor ImageCache {
         let result = await task.value
         inFlight[url] = nil
         return result
+    }
+
+    // MARK: - Download gate
+
+    /// How many card images may be downloading at once.
+    ///
+    /// ponytail: a flat cap, not a bandwidth-aware scheduler. Four keeps a grid filling visibly
+    /// fast while leaving the connection responsive for the catalog and the scanner pack; raise it
+    /// only if art demonstrably lags behind scrolling on a fast network.
+    private static let maxConcurrentDownloads = 4
+    private var activeDownloads = 0
+    private var downloadWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquireDownloadSlot() async {
+        if activeDownloads < Self.maxConcurrentDownloads {
+            activeDownloads += 1
+            return
+        }
+        // Resumed by `releaseDownloadSlot`, which hands its slot over rather than freeing it —
+        // so the count stays exact and no waiter can be skipped.
+        await withCheckedContinuation { downloadWaiters.append($0) }
+    }
+
+    private func releaseDownloadSlot() {
+        if downloadWaiters.isEmpty {
+            activeDownloads -= 1
+        } else {
+            downloadWaiters.removeFirst().resume()
+        }
     }
 
     func totalBytes() -> Int {
@@ -70,11 +133,14 @@ actor ImageCache {
         return base.appendingPathComponent("ImageCache", isDirectory: true)
     }
 
-    private func fileURL(for url: URL) -> URL {
+    /// Static + nonisolated so a cache hit can resolve its path without touching the actor.
+    private nonisolated static func fileURL(for url: URL, in dir: URL) -> URL {
         let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
         let name = digest.map { String(format: "%02x", $0) }.joined()
         return dir.appendingPathComponent(name)
     }
+
+    private func fileURL(for url: URL) -> URL { Self.fileURL(for: url, in: dir) }
 
     private func ensureDirectory() {
         guard !didEnsureDirectory else { return }
