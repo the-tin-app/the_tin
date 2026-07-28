@@ -17,6 +17,18 @@ struct ScanTabContainer: View {
     let network: NetworkMonitor
     @State private var source = AVCaptureFrameSource()
     @State private var staging = ScanStagingStore.persisted()
+    /// Built ONCE and held here, never constructed in `body`.
+    ///
+    /// It used to be `ScanView(model: makeScanModel(…))` inline, so every body re-evaluation minted
+    /// a fresh `ScanModel` — and a fresh `ScanPipeline`/`ScanSession` with it. `ScanView.task` has
+    /// no `id:`, so it is never restarted: it kept driving model #1 while the view rendered model
+    /// #N. The pipeline then fed a model nothing displayed and the view displayed a model nothing
+    /// fed. A chooser or look-up card latched on the orphan wedged `handle(_:)` permanently, with
+    /// no chooser on screen to tap and a Reset button wired to the wrong object — the scanner logs
+    /// locks and stages nothing until you leave the tab and come back, which rebinds the task.
+    /// This container sits directly in `RootView.body` beside the toast and funding modifiers, so
+    /// a re-render mid-scan needs nothing more than a toast. Diagnosed on an iPad, 2026-07-27.
+    @State private var model: ScanModel?
 
     var body: some View {
         content
@@ -42,9 +54,14 @@ struct ScanTabContainer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
-            if let matcher = pack.matcher, let index = pack.index {
-                ScanView(model: makeScanModel(matcher, index: index), staging: staging,
+            if let model {
+                ScanView(model: model, staging: staging,
                          collection: collection, store: store, source: source, wants: wants)
+            } else if let matcher = pack.matcher, let index = pack.index {
+                // Assigned from a task rather than built in the branch above: `body` must not
+                // construct it (see `model`), and `CardDetector`'s CIContext is not free enough
+                // to mint and throw away on every re-render.
+                TinLoadingView().task { model = makeScanModel(matcher, index: index) }
             } else {
                 TinLoadingView()
             }

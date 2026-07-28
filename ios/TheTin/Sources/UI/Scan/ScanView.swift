@@ -27,10 +27,25 @@ struct ScanView: View {
             CameraPreview(session: source.session).ignoresSafeArea()
             // Visual guide only — the pipeline analyzes the matching central window defined by
             // ScanGuide.cropRect (single source of truth for "what the scanner looks at").
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(.white.opacity(0.85), lineWidth: 3)
-                .aspectRatio(0.717, contentMode: .fit)
-                .padding(28)
+            //
+            // Sized as a FRACTION of the frame, mirroring cropRect's own maths. It used to be
+            // `.padding(28)` — a fixed inset, so the box grew with the screen: ~334pt wide on a
+            // phone, but roughly 734×1024pt on a 10" iPad. A card-shaped target the size of the
+            // display is not something you can fill, which is both why it read as meaningless
+            // ("you can't quite make out what it might be trying to get you to do") and,
+            // plausibly, why detection stalled: `ScanGuide.quadPasses` needs the card's long side
+            // to be ≥40% of the window's, and an unfillable box keeps the card small in frame.
+            // Reported on an iPad 7th gen, 2026-07-27.
+            GeometryReader { geo in
+                let side = min(geo.size.width * ScanGuide.guideFrameFraction,
+                               geo.size.height * ScanGuide.guideFrameFraction * ScanGuide.cardAspect)
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(.white.opacity(0.85), lineWidth: 3)
+                    .aspectRatio(ScanGuide.cardAspect, contentMode: .fit)
+                    .frame(width: side, height: side / ScanGuide.cardAspect)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)   // centred in the preview
+            }
+            .allowsHitTesting(false)
             VStack {
                 HStack(alignment: .top) {
                     settingsControl
@@ -49,18 +64,36 @@ struct ScanView: View {
                 }
                 Spacer()
                 VStack(spacing: 8) {
-                    CoverageRing(value: model.coverage)
-                    // Only when it has something to say. "Frame the card inside the box" is what
-                    // the frame rectangle already is, so showing it too was a permanent line of
-                    // chrome over the thing you're trying to point the camera at.
-                    if model.guidance != ScanModel.idleGuidance {
-                        // Amber while a chooser is frozen ("Scanning paused"), material otherwise.
-                        Text(model.guidance).font(.headline).padding(8)
-                            .background(model.ambiguous.isEmpty ? AnyShapeStyle(.ultraThinMaterial)
-                                                                : AnyShapeStyle(Color.orange.opacity(0.9)),
-                                        in: Capsule())
-                            .transition(.opacity)
+                    // Lock-streak progress, not `coverage` — coverage was a flat 1.0 on every heavy
+                    // frame that never reset, so this ring snapped full on the first frame and then
+                    // meant nothing. It now fills once per confirming frame and empties when the
+                    // card leaves, which on a slow device is the difference between "it's working"
+                    // and "it's stuck".
+                    ConfidenceRing(value: model.lockProgress)
+                    // Always says something, and while frames are being examined it says WHAT.
+                    //
+                    // This used to hide the idle line, on the reasoning that "Frame the card
+                    // inside the box" only repeats what the frame rectangle shows. True on a
+                    // phone, where recognition is near-instant. On an iPad an A10 grinds through
+                    // ORB matching far slower, so the viewfinder went completely silent for
+                    // seconds at a time and read as a dead scanner — it was working the whole
+                    // while (2026-07-27). Silence is indistinguishable from failure, and the user
+                    // pays for the ambiguity by giving up.
+                    HStack(spacing: 8) {
+                        if model.isExamining && model.ambiguous.isEmpty {
+                            // Turns only while frames actually arrive, so it is evidence of work
+                            // rather than decoration that spins whether or not anything happens.
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(model.activityText).font(.headline)
                     }
+                    .padding(8)
+                    // Amber while a chooser is frozen ("Scanning paused"), material otherwise.
+                    .background(model.ambiguous.isEmpty ? AnyShapeStyle(.ultraThinMaterial)
+                                                        : AnyShapeStyle(Color.orange.opacity(0.9)),
+                                in: Capsule())
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2),
+                               value: model.activityText)
                     if model.ambiguous.isEmpty {
                         // In look-up mode the tray is noise until something is actually staged —
                         // but staged cards from an earlier session still need their way back.
@@ -228,13 +261,22 @@ struct ScanView: View {
     }
 }
 
-private struct CoverageRing: View {
+/// Fills as the lock gate's confirmation streak builds, so the seconds a slow device spends
+/// confirming read as progress rather than a stall. Animated: the steps are ~1.7s apart on an A10
+/// and an un-animated jump between two of them is easy to miss entirely.
+private struct ConfidenceRing: View {
     let value: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        Circle().trim(from: 0, to: value).stroke(.green, lineWidth: 6)
-            .frame(width: 44, height: 44).rotationEffect(.degrees(-90))
-            .accessibilityLabel("Scan coverage")
-            .accessibilityValue("\(Int(value * 100)) percent")
+        ZStack {
+            Circle().stroke(.white.opacity(0.25), lineWidth: 6)
+            Circle().trim(from: 0, to: value).stroke(.green, lineWidth: 6)
+                .rotationEffect(.degrees(-90))
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: value)
+        }
+        .frame(width: 44, height: 44)
+        .accessibilityLabel("Match confidence")
+        .accessibilityValue("\(Int(value * 100)) percent")
     }
 }
 

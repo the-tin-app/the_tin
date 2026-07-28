@@ -55,6 +55,19 @@ final class ScanSession {
 
     init(config: LockConfig = LockConfig()) { self.config = config }
 
+    /// How many consecutive heavy frames the current leader has held, and how many it needs.
+    ///
+    /// The lock gate's own progress, surfaced because the viewfinder had no way to show it: three
+    /// confirming frames all rendered as one unchanging "Hold steady", so a scanner that was
+    /// working through a real streak looked like a scanner stuck in a loop. On an A10 that streak
+    /// is seconds long, which is precisely when the user needs to see it advancing.
+    var confirmations: Int {
+        if locked { return config.stabilityK }
+        guard leader != nil else { return 0 }
+        return min(leaderStreak, config.stabilityK)
+    }
+    var confirmationsNeeded: Int { config.stabilityK }
+
     func reject(cardId: String) { resetAccumulation(); suppressed.insert(cardId) }
 
     /// Latch as if a lock occurred — used when the user manually resolves an `.ambiguous`
