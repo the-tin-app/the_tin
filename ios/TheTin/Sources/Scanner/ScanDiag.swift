@@ -24,8 +24,12 @@ enum ScanDiag {
         return d
     }()
 
+    /// `stages` is this frame's per-stage breakdown; `interMs`/`interFrames` cover the frames since
+    /// the previous dump that returned early and so left no line of their own. Together they
+    /// account for the whole gap between diagnostic lines.
     static func dump(frame: CanonicalFrame, fields: OcrFields, pool: [String],
-                     results: [MatchCandidate], event: ScanEvent?) {
+                     results: [MatchCandidate], event: ScanEvent?,
+                     stages: String = "", interMs: Double = 0, interFrames: Int = 0) {
         guard let dir else { return }
         seq += 1
         let name = String(format: "%04d", seq)
@@ -39,11 +43,18 @@ enum ScanDiag {
 
         let line: [String: Any] = [
             "n": seq,
+            // Heavy-frame cadence, the one number the dump was missing: "61 frames" says nothing
+            // about whether that was 3/s or 30/s, and the ponytail notes on `fingerThrottle` and
+            // `minFocus` both ask to be re-tuned from on-device cadence. Also the only way to see
+            // the pipeline falling behind live capture.
+            "t": Date().timeIntervalSince1970,
             "focus": Int(frame.focus), "glare": frame.glareCoverage,
             "quadConf": frame.quadConfidence,
             "ocr": fields.rawText, "numerators": fields.numerators,
             "denom": fields.denominator ?? "", "hp": fields.hp ?? -1,
             "pool": pool.count,
+            "stages": stages,
+            "interMs": Int(interMs), "interFrames": interFrames,
             "top": results.prefix(5).map { "\($0.cardId):\($0.inliers)" },
             "event": String(describing: event),
         ]

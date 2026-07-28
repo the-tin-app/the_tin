@@ -69,8 +69,23 @@ final class AVCaptureFrameSource: NSObject, FrameSource, AVCaptureVideoDataOutpu
         return nil
     }
 
+    /// Newest frame only. `AsyncStream`'s default policy is `.unbounded`, and `captureOutput`
+    /// yields and returns instantly — so `alwaysDiscardsLateVideoFrames` never engages (AVFoundation
+    /// sees a delegate that is never late) and the back-pressure lands here instead, as an unbounded
+    /// queue of pool-owned `CVPixelBuffer`s.
+    ///
+    /// `ScanModel.run` consumes serially, one `pipeline.process` at a time. An A19 keeps up with
+    /// 30fps so the queue sits at zero and this is invisible. An A10 iPad measured ~3 heavy frames
+    /// per second (ScanDiag, 2026-07-27) ≈ 12 consumed against 30 produced — ~18 buffers a second
+    /// accumulating. Two things break: retaining pool buffers past the delegate callback starves
+    /// the capture pool until delivery degrades, and — worse — a FIFO queue hands the pipeline the
+    /// OLDEST held frame, so it permanently analyses what the camera saw seconds ago. Hold a card
+    /// steady and it is grinding on the blurred frames from while you were still moving it.
+    ///
+    /// `.bufferingNewest(1)` is what `alwaysDiscardsLateVideoFrames` was trying to express: drop
+    /// stale frames, always work on a recent one, hold at most one buffer beyond the one in flight.
     func stream() -> AsyncStream<CVPixelBuffer> {
-        AsyncStream { cont in
+        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { cont in
             self.continuation = cont
             self.queue.async { self.session.startRunning() }
             cont.onTermination = { @Sendable _ in self.queue.async { self.session.stopRunning() } }

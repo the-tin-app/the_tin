@@ -59,6 +59,37 @@ final class CandidateIndexPoolTests: XCTestCase {
         XCTAssertTrue(index.pool(fields: fields).isEmpty)
     }
 
+    // The printed denominator ranks, and must be able to OVERTURN the id-ascending tiebreak.
+    //
+    // Without it every text-or-number hit ties on agreement and the order is alphabetical luck —
+    // which is what made an iPad ORB-match dozens of wrong cards before reaching the right one at
+    // 5.0s per heavy frame (2026-07-27). `matchRanked` early-exits per batch of 16, so rank IS
+    // cost. swsh7 is the honest case: its printed_total (203) differs from its catalog total (237),
+    // and "swsh7-215" sorts AFTER both Pikachus, so alphabetical order alone puts it last.
+    func testDenominatorOutranksAlphabeticalTie() throws {
+        let index = try makeIndex()
+        // Text hits both Pikachus; the number hits swsh7-215 only. All three tie at agreement 1…
+        let tied = OcrFields(rawText: "Pikachu", numerators: ["215"], denominator: nil, hp: nil)
+        XCTAssertEqual(index.pool(fields: tied).first, "sv1-25", "alphabetical order without a denominator")
+
+        // …until the denominator matches swsh7's printed_total, which lifts it a tier.
+        let withDenom = OcrFields(rawText: "Pikachu", numerators: ["215"],
+                                  denominator: String(FixtureCatalog.printedTotalValue), hp: nil)
+        XCTAssertEqual(index.pool(fields: withDenom).first, "swsh7-215")
+    }
+
+    // Soft-narrow holds for the denominator too: it is a RANKING signal, never a filter. A printed
+    // total that matches no set in the pool must reorder nothing and exclude nobody — the EX-era
+    // secret-rare case where the printed denominator legitimately differs from the catalog total.
+    func testDenominatorNeverExcludes() throws {
+        let index = try makeIndex()
+        let fields = OcrFields(rawText: "Pikachu", numerators: ["215"], denominator: "9999", hp: nil)
+        let pool = index.pool(fields: fields)
+        for id in ["sv1-25", "svp-025", "swsh7-215"] {
+            XCTAssertTrue(pool.contains(id), "\(id) must survive a non-matching denominator")
+        }
+    }
+
     // Cap: the pool never exceeds 160 ids (fixture is far smaller, so this just checks the
     // contract shape rather than exercising the cap directly).
     func testPoolNeverExceeds160() throws {

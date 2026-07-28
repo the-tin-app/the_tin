@@ -87,11 +87,32 @@ final class CandidateIndex: CandidateNarrowing {
         let poolIds = textIds.union(numberMatchIds)
         guard !poolIds.isEmpty else { return [] }
 
+        // The printed denominator, used for RANKING only — never to filter. `consistency()` has
+        // always compared it (same expression, line ~134) but only AFTER the visual match, to
+        // validate a winner we'd already paid for. As a narrowing signal it is the most
+        // discriminating thing OCR gives us: "066" matches roughly one card per set across the
+        // whole catalog, while "066" + printed total 182 is near-unique.
+        //
+        // Why this matters more than it looks: `matchRanked` early-exits after any batch of 16
+        // where the leader clears stopFloor/stopRatio, so cost is set by WHERE the right card sits
+        // in this list, not by the 160 cap. Without the denominator the true card ties on
+        // agreement with every other text+number hit and the tie breaks by id ASCENDING — pure
+        // alphabetical luck. Measured on an iPad 2026-07-27: sv10-066 won 96 inliers to 17, an
+        // instant early-exit, but sorted behind A2b-*, bw7-* and me02.5-* so dozens of wrong cards
+        // were RANSAC'd first — 5.0s per heavy frame, 0.25/s.
+        //
+        // Ranking, not filtering, is deliberate: the printed total often differs from the catalog
+        // total (EX-era secret rares inflate it — see `candidates(number:total:name:)` step 2), so
+        // a mismatch must cost the card its bonus, never its place in the pool.
+        let denominator = fields.denominator.flatMap(Int.init)
         let scored: [(id: String, agreement: Int)] = poolIds.map { id in
             let textMatch = textIds.contains(id)
             let numberMatch = numberMatchIds.contains(id)
             let hpMatch = fields.hp != nil && byId[id]?.hp == fields.hp
+            let denomMatch = denominator != nil
+                && byId[id].map { printedTotalBySet[$0.setId] == denominator } == true
             let agreement = (textMatch ? 1 : 0) + (numberMatch ? 1 : 0) + (hpMatch ? 1 : 0)
+                + (denomMatch ? 1 : 0)
             return (id, agreement)
         }
 

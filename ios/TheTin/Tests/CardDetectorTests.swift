@@ -51,6 +51,36 @@ final class CardDetectorTests: XCTestCase {
                              "orientUpright's chosen rotation should read better than the upside-down raw input")
     }
 
+    /// The hint has to be OBEYED, not merely consulted — that is the whole saving. Scoring an
+    /// upright card costs two full-resolution renders plus two Vision text passes; with a hint,
+    /// neither runs. Asking for the wrong rotation is the sharpest way to prove it skipped the
+    /// scoring: an honest scorer would reject 180° on an upright card, so getting 180° back means
+    /// no scoring happened.
+    func testAnOrientationHintSkipsTheScoring() throws {
+        let context = CIContext()
+        let upright = try loadCardImage()
+
+        let unhinted = try XCTUnwrap(
+            OrientationNormalizer.orientUpright(upright, context: context, preferred: nil))
+        XCTAssertEqual(unhinted.degrees, 0, "an upright card scores best unrotated")
+
+        let hinted = try XCTUnwrap(
+            OrientationNormalizer.orientUpright(upright, context: context, preferred: 180))
+        XCTAssertEqual(hinted.degrees, 180, "the hint must be taken without re-scoring")
+
+        // A hint that isn't one of this image's two candidates is ignored, not honoured blindly.
+        let bogus = try XCTUnwrap(
+            OrientationNormalizer.orientUpright(upright, context: context, preferred: 90))
+        XCTAssertEqual(bogus.degrees, 0, "an inapplicable hint falls back to real scoring")
+    }
+
+    /// `forgetOrientation()` is what pairs the hint's lifetime to the card in frame — without it a
+    /// swapped card would be rectified using its predecessor's rotation.
+    func testForgetOrientationIsAvailableToDropTheHint() throws {
+        let detector = CardDetector()
+        detector.forgetOrientation()   // must be callable in any state, including before any detect
+    }
+
     func testOrientUprightScalesToCanonicalDimensions() throws {
         let context = CIContext()
         let upright = try loadCardImage()

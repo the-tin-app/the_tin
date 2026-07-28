@@ -60,6 +60,88 @@ final class ScanModelTests: XCTestCase {
         }
     }
 
+    /// Counts `pool(fields:)` calls so the OCR/pool reuse can be asserted rather than assumed.
+    /// `poolIds` is injectable so a test can hand the pipeline a pool that does NOT explain the
+    /// plate — the binder-swap case.
+    private final class CountingNarrowing: CandidateNarrowing, @unchecked Sendable {
+        let poolIds: [String]
+        private(set) var calls = 0
+        init(poolIds: [String]) { self.poolIds = poolIds }
+        func pool(fields: OcrFields) -> [String] { calls += 1; return poolIds }
+        func consistency(cardId: String, fields: OcrFields, pool: Set<String>) -> CandidateConsistency {
+            .init(nameAgrees: true, denomOk: true, hasTwinInPool: false)
+        }
+    }
+
+    // A light presence frame carries no news about the lock streak, so it must report the streak
+    // unchanged rather than report none. Reporting zero made the viewfinder oscillate
+    // "1 of 3" → "0 of 3" → "2 of 3" at ~80ms intervals, which on device read as the counter
+    // sprinting 1→3 in a quarter second (Tomas, iPad, 2026-07-27).
+    func testLightFramesReportTheStreakRatherThanZeroingIt() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let narrowing = CountingNarrowing(poolIds: ["card_a"])
+        // throttle 4 → frames 1-3 are light presence frames, frame 4 is the heavy one.
+        let pipeline = try makePipeline(narrowing: narrowing, fingerThrottle: 4)
+        var heavy: FrameOutcome?
+        for _ in 0..<4 { heavy = await pipeline.process(pb) }
+        let confirmed = try XCTUnwrap(heavy).confirmations
+        XCTAssertGreaterThan(confirmed, 0, "precondition: the heavy frame must start a streak")
+
+        let light = await pipeline.process(pb)          // frame 5 — light again
+        XCTAssertEqual(light.confirmations, confirmed,
+                       "a light frame must not zero the streak the viewfinder is showing")
+        XCTAssertEqual(light.poolCount, try XCTUnwrap(heavy).poolCount,
+                       "nor drop the pool size back to 'Reading the card…'")
+    }
+
+    private func makePipeline(narrowing: CandidateNarrowing,
+                              fingerThrottle: Int = 1) throws -> ScanPipeline {
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let index = try CandidateIndex(store: try FixtureCatalog.make())
+        // fingerThrottle 1 → every frame is heavy, so the count is frames-in = OCR-considered.
+        // minFocus 0 → the fixture plate must not be quality-gated out before the text stages.
+        return ScanPipeline(detector: CardDetector(), textGate: TextGate(index: index),
+                            matcher: matcher, narrowing: narrowing,
+                            fingerThrottle: fingerThrottle, minFocus: 0)
+    }
+
+    // The reuse itself: a steady card is OCR'd ONCE across the frames of one acquisition. Three
+    // identical plates cost one text read, not three — the change that took an iPad heavy frame
+    // from ~4,300ms to ~1,400ms for every frame after the first (2026-07-27).
+    func testSteadyCardOcrsOncePerAcquisition() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let narrowing = CountingNarrowing(poolIds: ["card_a"])
+        let pipeline = try makePipeline(narrowing: narrowing)
+        for _ in 0..<3 { _ = await pipeline.process(pb) }
+        XCTAssertEqual(narrowing.calls, 1, "the same plate must not be re-OCR'd each frame")
+    }
+
+    // Reset drops the cached read: the user's escape hatch has to mean the scanner looks again
+    // with no memory, and a retained pool is memory.
+    func testResetForcesAFreshRead() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let narrowing = CountingNarrowing(poolIds: ["card_a"])
+        let pipeline = try makePipeline(narrowing: narrowing)
+        _ = await pipeline.process(pb)
+        await pipeline.reset()
+        _ = await pipeline.process(pb)
+        XCTAssertEqual(narrowing.calls, 2, "reset must invalidate the cached OCR/pool")
+    }
+
+    // The binder-swap guard, and the reason reuse is safe without a no-card gap: a pool that does
+    // not contain the card in front of the camera cannot produce a strong match, so the cache is
+    // dropped every frame instead of silently narrowing for a card that has already been replaced.
+    // Here the plate is card_a while the pool only offers card_b — inliers stay under the lock
+    // floor, so every frame must re-read rather than reuse.
+    func testPoolThatDoesNotExplainThePlateIsNotReused() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let narrowing = CountingNarrowing(poolIds: ["card_b"])
+        let pipeline = try makePipeline(narrowing: narrowing)
+        for _ in 0..<3 { _ = await pipeline.process(pb) }
+        XCTAssertEqual(narrowing.calls, 3, "a stale/wrong pool must never be reused")
+    }
+
     func testLockAppendsDraftToStagingNotCollection() async throws {
         let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
         let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
@@ -320,6 +402,58 @@ final class ScanModelTests: XCTestCase {
         XCTAssertTrue(model.isExamining, "frames arrived, so the spinner must have something to turn on")
         XCTAssertNotEqual(model.activityText, ScanModel.idleGuidance,
                           "while examining, the viewfinder names the work instead of the framing hint")
+    }
+
+    /// The complaint this exists for (Tomas, iPad, 2026-07-27): "seemingly cycling through the
+    /// same thing… the same messaging from the app even though it is doing much better." Every
+    /// frame of the confirmation streak rendered as one unchanging "Hold steady", so a lock gate
+    /// working through three frames was indistinguishable from a scanner going in circles. On an
+    /// A10 that streak is ~5s of identical text.
+    func testEachConfirmingFrameReadsDifferently() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: ScanStagingStore.inMemory(), store: catalog,
+                              fingerThrottle: 1)
+
+        await model.run(source: ReplaySource(buffer: pb, count: 1))
+        let first = model.activityText
+        let firstProgress = model.lockProgress
+        await model.run(source: ReplaySource(buffer: pb, count: 1))
+
+        XCTAssertNotEqual(first, model.activityText,
+                          "two confirming frames must not render the same message")
+        XCTAssertGreaterThan(model.lockProgress, firstProgress,
+                             "and the ring must advance, not sit still")
+        XCTAssertTrue(model.activityText.contains("2 of \(model.confirmationsNeeded)"),
+                      "the streak is counted out loud: \(model.activityText)")
+    }
+
+    /// `stage()` has always set `guidance` to "Added <name> — next card", but `activityText` only
+    /// consulted `guidance` while a chooser was up and `bestGuess` survived the lock — so the one
+    /// message the user is actually waiting for fell through to "Hold steady" and was never shown.
+    func testCaptureIsAnnouncedInTheViewfinder() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: staging, store: catalog, fingerThrottle: 1)
+
+        await model.run(source: ReplaySource(buffer: pb, count: 6))
+
+        XCTAssertFalse(staging.drafts.isEmpty, "precondition: this run has to actually lock")
+        XCTAssertTrue(model.activityText.hasPrefix("Added "),
+                      "a capture must be announced, got: \(model.activityText)")
     }
 
     func testStagedDraftCapturesTheChosenSource() async throws {
