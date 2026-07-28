@@ -64,7 +64,12 @@ struct ScanView: View {
                 }
                 Spacer()
                 VStack(spacing: 8) {
-                    CoverageRing(value: model.coverage)
+                    // Lock-streak progress, not `coverage` — coverage was a flat 1.0 on every heavy
+                    // frame that never reset, so this ring snapped full on the first frame and then
+                    // meant nothing. It now fills once per confirming frame and empties when the
+                    // card leaves, which on a slow device is the difference between "it's working"
+                    // and "it's stuck".
+                    ConfidenceRing(value: model.lockProgress)
                     // Always says something, and while frames are being examined it says WHAT.
                     //
                     // This used to hide the idle line, on the reasoning that "Frame the card
@@ -256,13 +261,22 @@ struct ScanView: View {
     }
 }
 
-private struct CoverageRing: View {
+/// Fills as the lock gate's confirmation streak builds, so the seconds a slow device spends
+/// confirming read as progress rather than a stall. Animated: the steps are ~1.7s apart on an A10
+/// and an un-animated jump between two of them is easy to miss entirely.
+private struct ConfidenceRing: View {
     let value: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        Circle().trim(from: 0, to: value).stroke(.green, lineWidth: 6)
-            .frame(width: 44, height: 44).rotationEffect(.degrees(-90))
-            .accessibilityLabel("Scan coverage")
-            .accessibilityValue("\(Int(value * 100)) percent")
+        ZStack {
+            Circle().stroke(.white.opacity(0.25), lineWidth: 6)
+            Circle().trim(from: 0, to: value).stroke(.green, lineWidth: 6)
+                .rotationEffect(.degrees(-90))
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: value)
+        }
+        .frame(width: 44, height: 44)
+        .accessibilityLabel("Match confidence")
+        .accessibilityValue("\(Int(value * 100)) percent")
     }
 }
 
