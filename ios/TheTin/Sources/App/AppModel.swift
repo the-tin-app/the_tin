@@ -86,6 +86,10 @@ final class AppModel {
     /// iCloud backup of the local collection/wishlist. nil in catalog-only unit tests
     /// (`skipFirebase`) — every consumer must tolerate nil.
     private(set) var backup: BackupService?
+    /// Multi-device sync, layered over the same local repositories as a second writer. nil in
+    /// catalog-only unit tests. Reports `.unavailable` and does nothing at all until the CloudKit
+    /// entitlement is applied — see CLAUDE.md § "Rolling out iCloud sync".
+    private(set) var sync: SyncService?
     let network = NetworkMonitor()
     /// Create-once local repository instances (see the guard in `start()`): `BackupService`
     /// subscribes to whichever instances exist on first entry, so `retry()` re-entering `start()`
@@ -259,15 +263,22 @@ final class AppModel {
                 uid = authUid
             }
             // iCloud backup rides the local repositories (subscribe → debounce → snapshot).
-            // Created once — retry() re-enters start(). The restore offer runs in the
-            // background; acceptance re-checks emptiness, so racing a first scan is safe.
+            // Created once — retry() re-enters start().
             if backup == nil {
                 let backupService = BackupService(collection: repository,
                                                   wants: wantsRepository, setGoals: setGoals,
                                                   uid: uid)
                 backupService.start()
                 self.backup = backupService
-                Task { await backupService.offerRestoreIfEligible() }
+            }
+            // Sync rides the same repositories as a SECOND writer. Started after backup on
+            // purpose: `SetGoalsModel` exposes one `onChange` closure and `SyncService` chains
+            // onto whatever is already there, so backup has to have claimed it first.
+            if sync == nil {
+                let syncService = SyncService(collection: repository, wants: wantsRepository,
+                                              setGoals: setGoals, backup: backup, uid: uid)
+                self.sync = syncService
+                Task { await syncService.start() }
             }
         }
 

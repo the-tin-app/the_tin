@@ -126,6 +126,16 @@ enum AppConfig {
         set { UserDefaults.standard.set(newValue, forKey: "priceAlertsEnabled") }
     }
 
+    /// Multi-device sync master switch (Settings toggle). Defaults ON — two devices diverging is
+    /// the bug this exists to fix, and a sync feature nobody switches on fixes nothing. Off stops
+    /// the engine; the local files keep working exactly as they did before sync existed.
+    /// `object(forKey:)` rather than `bool(forKey:)` so an explicit OFF isn't read as "unset".
+    static var syncEnabled: Bool {
+        get { (UserDefaults.standard.object(forKey: syncEnabledKey) as? Bool) ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: syncEnabledKey) }
+    }
+    static let syncEnabledKey = "syncEnabled"
+
     /// Scanner mode: false = stage each lock as a draft for the tin (default), true = just show
     /// the card and stage nothing. Persisted because which one you want is a property of how
     /// you're using the app today — cataloguing a box at home vs. asking "what is this?" in a
