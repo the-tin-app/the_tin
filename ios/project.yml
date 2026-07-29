@@ -119,7 +119,13 @@ targets:
         # Opportunistic background catalog refresh (wishlist price alerts spec 2026-07-14).
         # "fetch" backs the BGAppRefreshTask manifest check; "processing" backs the
         # BGProcessingTask tiered download. Best-effort — iOS schedules these when it likes.
-        UIBackgroundModes: [fetch, processing]
+        # "remote-notification" backs CKSyncEngine's silent zone pushes — required by the framework
+        # ("you need to add the CloudKit and remote notification capabilities"). It is what makes a
+        # change land while BOTH apps are open, the one case the scenePhase foreground pull
+        # structurally cannot reach. That pull STAYS: silent pushes are best-effort and iOS defers
+        # them under low-power and background-budget pressure, so push is the latency win and the
+        # foreground pull is the deterministic floor.
+        UIBackgroundModes: [fetch, processing, remote-notification]
         BGTaskSchedulerPermittedIdentifiers:
           - ai.reyes.thetin.catalog-refresh
           - ai.reyes.thetin.catalog-download
@@ -132,12 +138,18 @@ targets:
         CLANG_CXX_LANGUAGE_STANDARD: "c++17"
         CLANG_CXX_LIBRARY: "libc++"
       configs:
+        Debug:
+          # Expanded into `aps-environment` in TheTin.entitlements. A device build talks to the
+          # APNs sandbox; a distribution build must say `production` or it is handed a token the
+          # production gateway will never push to.
+          APS_ENVIRONMENT: development
         # Release archives sign manually: xcodebuild cloud signing (-allowProvisioningUpdates)
         # auth-fails on this machine, so profiles are created via the ASC API and installed
         # locally (see docs/HANDOFF.md). Debug stays automatic for run-on-device.
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
+          APS_ENVIRONMENT: production
           PROVISIONING_PROFILE_SPECIFIER: "The Tin App Store"
           # Explicit, not inherited: Crashlytics can only symbolicate what the dSYM upload
           # phase above finds, and that phase finds nothing without dSYMs.

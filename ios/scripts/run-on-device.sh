@@ -34,9 +34,23 @@ fi
 echo "▶ xcodegen generate…"
 xcodegen generate >/dev/null
 
+# Automatic signing can only REGENERATE a profile if it can authenticate. Xcode's own account
+# login is not always visible to xcodebuild ("error: No Accounts: Add a new account in Accounts
+# settings"), and a cached profile that predates a newly-enabled App ID capability then fails the
+# build outright — hit 2026-07-29 adding Push Notifications. Pass the ASC API key the same way
+# deploy-testflight.sh does and the profile regenerates unattended. Optional: with a current
+# profile on disk, none of this is needed.
+AUTH=()
+if [[ -n "${ASC_ISSUER:-}" && -n "${ASC_KEY_ID:-}" ]]; then
+  AUTH=(-authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+        -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER")
+  echo "▶ signing with ASC API key $ASC_KEY_ID"
+fi
+
 echo "▶ building (Debug, automatic signing)…"
 xcodebuild -project TheTin.xcodeproj -scheme "$SCHEME" -configuration Debug \
-  -destination "$DEST" -allowProvisioningUpdates -derivedDataPath "$DERIVED" build
+  -destination "$DEST" -allowProvisioningUpdates ${AUTH[@]+"${AUTH[@]}"} \
+  -derivedDataPath "$DERIVED" build
 
 APP="$DERIVED/Build/Products/Debug-iphoneos/$SCHEME.app"
 # Brace ${APP}/${BUNDLE_ID}: a bare $VAR immediately followed by the multibyte "…"

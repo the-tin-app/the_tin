@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// User-selected appearance: follow the system, or force light/dark. Persisted raw in
 /// UserDefaults; `colorScheme` nil means "follow system".
@@ -42,6 +43,15 @@ struct TheTin: App {
         // Siri / Shortcuts / the Action button. Installed here rather than in a view so a cold
         // launch straight from an intent has somewhere to deliver before any body runs.
         MainActor.assumeIsolated { IntentRouter.shared.install { model.openIntentRoute($0) } }
+        // The APNs token CKSyncEngine's silent zone pushes are delivered to. Prompts nobody —
+        // silent pushes need no user authorisation, only a token — and there is no callback to
+        // handle: the engine owns its own subscription and listens for the push itself, so this
+        // one line is the whole client side of push.
+        //
+        // Unconditional rather than gated on the sync toggle: a token is cheap and idempotent,
+        // whereas gating means re-registering when the toggle flips and a window where sync is on
+        // with no token. Without the CloudKit entitlement it is inert — nothing subscribes.
+        if !isTesting { MainActor.assumeIsolated { UIApplication.shared.registerForRemoteNotifications() } }
     }
 
     var body: some Scene {
