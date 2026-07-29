@@ -132,6 +132,21 @@ private struct MainTabView: View {
                                },
                                goals: model.setGoals,
                                openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) },
+                               // Pull down on the tin to update. Sync first: with two devices that
+                               // is what "update" means, and it is the one path that cannot be
+                               // automatic everywhere — silent CloudKit pushes are best-effort, and
+                               // an iPad on iOS 18.7.9 receives none at all (Apple's own Notes app
+                               // doesn't either on that device). The gesture is the honest answer to
+                               // that, and it gives the user something to do besides relaunch.
+                               //
+                               // The catalog check is the same one the foreground hook runs and is
+                               // throttled to once an hour internally, so leaning on the gesture
+                               // repeatedly stays cheap. Both awaited in sequence so the spinner
+                               // stays up until the work is actually finished.
+                               onRefresh: {
+                                   await model.sync?.refresh()
+                                   await model.refreshIfStale()
+                               },
                                // The gear belongs to CollectionView's own toolbar. Applying it
                                // here as a second `.toolbar` is what lost it on iPadOS 18.
                                onOpenSettings: { showingSettings = true })

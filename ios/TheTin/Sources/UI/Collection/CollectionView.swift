@@ -733,6 +733,10 @@ struct CollectionView: View {
     /// mirror of the context menu's "Flip through cards" — actions can't tap the invisible
     /// NavigationLinks. (Row activation itself opens the list-first landing.)
     var openPager: ((String?) -> Void)? = nil
+    /// Pull-to-refresh. The host owns it because the two things worth pulling for — the other
+    /// device's edits and a newer catalog — both live on `AppModel`, which this view has no handle
+    /// on. Nil in tests and previews, where a pull is simply a no-op.
+    var onRefresh: (() async -> Void)? = nil
     /// Opens the settings sheet, which the host owns.
     ///
     /// The gear used to be a SECOND `.toolbar` applied by `RootView` over this view. On iPadOS 18
@@ -802,6 +806,11 @@ struct CollectionView: View {
             }
         }
         .listStyle(.plain)
+        // Attached to the List, NOT to this view from the host: `.refreshable` travels through the
+        // environment, so applying it outside would hand the same gesture to every List pushed onto
+        // this stack — group detail, the pager, the wishlist — each of which would spin a spinner
+        // for a refresh it never asked for.
+        .refreshable { await onRefresh?() }
         .searchable(text: $searchText, prompt: "Search by name, set, or number")
         .environment(\.editMode, $editMode)
         .printSheetFlow($printRequest)
