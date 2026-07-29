@@ -31,3 +31,93 @@ final class MarketplaceLinksTests: XCTestCase {
         XCTAssertEqual(items.first { $0.name == "q" }?.value, "Pikachu 025")
     }
 }
+
+extension MarketplaceLinksTests {
+    private func items(_ url: URL) throws -> [URLQueryItem] {
+        try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+    }
+    private func nkw(_ url: URL) throws -> String {
+        try XCTUnwrap(items(url).first { $0.name == "_nkw" }?.value)
+    }
+
+    func testHuntQueryCarriesNameNumberAndSet() throws {
+        let url = MarketplaceLinks.ebayHunt(name: "Charizard", setName: "Base Set", number: "4",
+                                            total: "102", maxUsd: 300)
+        let q = try nkw(url)
+        XCTAssertTrue(q.contains("Charizard"))
+        XCTAssertTrue(q.contains("4/102"))
+        XCTAssertTrue(q.contains("Base Set"))
+    }
+
+    func testHuntQueryAppendsEveryNegativeKeyword() throws {
+        let q = try nkw(MarketplaceLinks.ebayHunt(name: "Charizard", setName: "Base Set",
+                                                  number: "4", total: "102", maxUsd: nil))
+        for kw in MarketplaceLinks.huntNegativeKeywords {
+            XCTAssertTrue(q.contains("-\(kw)"), "missing negative keyword: \(kw)")
+        }
+    }
+
+    func testHuntSetsBuyItNowAndCheapestFirst() throws {
+        let i = try items(MarketplaceLinks.ebayHunt(name: "Pikachu", setName: nil, number: "25",
+                                                    total: nil, maxUsd: nil))
+        XCTAssertEqual(i.first { $0.name == "LH_BIN" }?.value, "1")
+        XCTAssertEqual(i.first { $0.name == "_sop" }?.value, "15")
+    }
+
+    /// The budget is the price ceiling. No budget means no ceiling — NOT a ceiling of 0,
+    /// which would return an empty result page that reads as "none exist".
+    func testHuntPriceCeilingPresentOnlyWithABudget() throws {
+        let withBudget = try items(MarketplaceLinks.ebayHunt(name: "Pikachu", setName: nil,
+                                                             number: "25", total: nil, maxUsd: 300))
+        XCTAssertEqual(withBudget.first { $0.name == "_udhi" }?.value, "300")
+
+        let without = try items(MarketplaceLinks.ebayHunt(name: "Pikachu", setName: nil,
+                                                          number: "25", total: nil, maxUsd: nil))
+        XCTAssertNil(without.first { $0.name == "_udhi" })
+    }
+
+    /// A ceiling of "300.0" is not what eBay wants, and "299.99" must survive intact.
+    func testHuntPriceCeilingFormatting() throws {
+        func ceiling(_ v: Double) throws -> String? {
+            try items(MarketplaceLinks.ebayHunt(name: "x", setName: nil, number: "1",
+                                                total: nil, maxUsd: v))
+                .first { $0.name == "_udhi" }?.value
+        }
+        XCTAssertEqual(try ceiling(300), "300")
+        XCTAssertEqual(try ceiling(299.99), "299.99")
+        XCTAssertEqual(try ceiling(1234.5), "1234.50")
+    }
+
+    /// Card names carry apostrophes, ampersands and accents. URLComponents must escape them,
+    /// and the raw query must survive a round trip unmangled.
+    func testHuntQueryEscapesAwkwardNames() throws {
+        let url = MarketplaceLinks.ebayHunt(name: "Farfetch'd & Sirfetch'd", setName: "Pokémon GO",
+                                            number: "7", total: nil, maxUsd: nil)
+        XCTAssertEqual(url.host, "www.ebay.com")
+        let q = try nkw(url)
+        XCTAssertTrue(q.contains("Farfetch'd & Sirfetch'd"))
+        XCTAssertTrue(q.contains("Pokémon GO"))
+    }
+
+    /// Without a total there is no "4/102" to write — emit the bare number, never "4/".
+    func testHuntNumberWithoutTotal() throws {
+        let q = try nkw(MarketplaceLinks.ebayHunt(name: "Pikachu", setName: nil, number: "25",
+                                                  total: nil, maxUsd: nil))
+        XCTAssertTrue(q.contains("25"))
+        XCTAssertFalse(q.contains("25/"))
+    }
+
+    /// A nil set name must not leave a double space or a stray token in the query.
+    func testHuntWithoutSetNameHasNoDoubleSpace() throws {
+        let q = try nkw(MarketplaceLinks.ebayHunt(name: "Pikachu", setName: nil, number: "25",
+                                                  total: nil, maxUsd: nil))
+        XCTAssertFalse(q.contains("  "))
+    }
+
+    /// The existing plain links must be untouched by the new one.
+    func testPlainEbayCurrentStillHasNoHuntFilters() throws {
+        let i = try items(MarketplaceLinks.ebayCurrent(name: "Pikachu", setName: nil, number: "25"))
+        XCTAssertNil(i.first { $0.name == "LH_BIN" })
+        XCTAssertNil(i.first { $0.name == "_udhi" })
+    }
+}
