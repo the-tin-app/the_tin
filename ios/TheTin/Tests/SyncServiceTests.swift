@@ -28,6 +28,35 @@ private final class FakeSyncEngine: SyncEngine, @unchecked Sendable {
     func reset() { sentUpserts = []; sentDeletes = [] }
 }
 
+/// An in-memory repository whose `replaceAll` fails — a full disk, which this Mac hit for real
+/// while this branch was being built, and which is exactly when `replaceAll` throws.
+@MainActor
+private final class FailingReplaceAllRepository: CollectionRepository {
+    struct WriteFailed: Error {}
+    private let inner = InMemoryCollectionRepository()
+    var entries: [CollectionEntry] { inner.entries }
+
+    func replaceAll(groups: [CardGroup], entries: [CollectionEntry]) async throws {
+        throw WriteFailed()
+    }
+
+    nonisolated func groupsStream() -> AsyncStream<[CardGroup]> { inner.groupsStream() }
+    nonisolated func entriesStream() -> AsyncStream<[CollectionEntry]> { inner.entriesStream() }
+    func createGroup(name: String) async throws -> String { try await inner.createGroup(name: name) }
+    func renameGroup(id: String, name: String) async throws { try await inner.renameGroup(id: id, name: name) }
+    func deleteGroup(id: String, keepingEntries: Bool) async throws {
+        try await inner.deleteGroup(id: id, keepingEntries: keepingEntries)
+    }
+    func reorderGroups(orderedIds: [String]) async throws { try await inner.reorderGroups(orderedIds: orderedIds) }
+    func addEntry(_ entry: CollectionEntry) async throws { try await inner.addEntry(entry) }
+    func addEntries(_ entries: [CollectionEntry]) async throws { try await inner.addEntries(entries) }
+    func updateEntry(_ entry: CollectionEntry) async throws { try await inner.updateEntry(entry) }
+    func applyEntryEdits(updated: [CollectionEntry], deletedIds: [String]) async throws {
+        try await inner.applyEntryEdits(updated: updated, deletedIds: deletedIds)
+    }
+    func deleteEntry(id: String) async throws { try await inner.deleteEntry(id: id) }
+}
+
 @MainActor
 final class SyncServiceTests: XCTestCase {
     private var defaults: UserDefaults!
@@ -55,7 +84,7 @@ final class SyncServiceTests: XCTestCase {
     // Defaults are nil rather than `.init()`: a default argument is evaluated in a nonisolated
     // context, and `InMemoryCollectionRepository` is @MainActor.
     private func makeService(engine: FakeSyncEngine?,
-                             collection: InMemoryCollectionRepository? = nil,
+                             collection: CollectionRepository? = nil,
                              wants: InMemoryWantsRepository? = nil) -> SyncService {
         SyncService(engine: engine,
                     collection: collection ?? InMemoryCollectionRepository(),
@@ -249,6 +278,41 @@ final class SyncServiceTests: XCTestCase {
         XCTAssertEqual(collection.entries.map(\.id), ["e1"])
         XCTAssertTrue(engine.sentUpserts.isEmpty)
         XCTAssertTrue(engine.sentDeletes.isEmpty)
+    }
+
+    /// A failed local write must NOT be reported as synced, and must not leave the hash map
+    /// claiming local matches remote.
+    ///
+    /// The echo guard folds incoming records into the map before the write (correctly — that is
+    /// what stops the push-back loop). If the write then fails and the fold stands, the service
+    /// believes the record is settled: it is never re-applied and never re-pushed, so the incoming
+    /// card is silently eaten. `LocalCollectionRepository.mutate` rolls back and throws before
+    /// `notify()` specifically so nothing observes state that isn't on disk; this proves the sync
+    /// layer honours that rather than discarding it.
+    func testFailedLocalWriteReportsFailureAndDoesNotSettleTheRecord() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = FailingReplaceAllRepository()
+        try await collection.addEntry(entry("e1"))
+        let engine = FakeSyncEngine()
+        let service = makeService(engine: engine, collection: collection)
+        await service.start()
+        try await settle()
+        engine.reset()
+
+        engine.onRemoteChange?([try SyncRecord.entry(entry("fromOtherDevice"))], [])
+        try await settle()
+
+        XCTAssertEqual(service.status, .failed, "a write that threw must not report as synced")
+        XCTAssertEqual(collection.entries.map(\.id), ["e1"])   // the write really didn't land
+
+        // The hash map must not have kept the record. If it had, this next local emission would
+        // diff a map holding "fromOtherDevice" against a collection that doesn't, and push a
+        // DELETE — telling the other device to destroy the card it had just sent.
+        try await collection.addEntry(entry("e2"))
+        try await settle()
+        XCTAssertTrue(engine.sentDeletes.isEmpty,
+                      "a failed apply was treated as settled and pushed a phantom delete")
+        XCTAssertEqual(engine.sentUpserts.map(\.recordName), ["e2"])
     }
 
     /// Wishlist edits ride the same path as the collection.

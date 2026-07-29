@@ -253,7 +253,14 @@ final class SyncService {
     /// The hash maps are updated BEFORE the write. Writing notifies, which diffs, which would push
     /// the record straight back — folding it in at apply time makes that notify find no delta, and
     /// the loop dies on the first pass.
+    ///
+    /// A write that FAILS must undo that fold. `LocalCollectionRepository.mutate` rolls back and
+    /// throws before `notify()` precisely so nothing observes state that isn't on disk; swallowing
+    /// the error here would leave the map claiming local matches remote when it doesn't, and the
+    /// record would never be re-applied — a card silently eaten. So the pre-fold map is kept and
+    /// restored per failed write, and `.synced` is only claimed when every attempted write landed.
     private func applyRemote(upserts: [SyncRecord], deletes: [SyncRecord]) async {
+        let beforeApply = hashes
         for type in SyncRecordType.allCases {
             var map = hashes[type] ?? [:]
             SyncDiff.apply(upserts: upserts.filter { $0.type == type },
@@ -309,11 +316,28 @@ final class SyncService {
         }
 
         // Deliberately whole-set writes: these are the only APIs the repositories expose that
-        // preserve ids, and preserving ids is what makes per-record merge work at all.
-        if touchedCollection { try? await collection.replaceAll(groups: groups, entries: entries) }
-        if touchedWants { try? await wants.save(uid: uid, entries: wantMap) }
-        if touchedGoals { setGoals?.replaceAll(goals) }
-        status = .synced(Date())
+        // preserve ids, and preserving ids is what makes per-record merge work at all. A whole-set
+        // write fails wholesale, so restoring the type's whole map is exactly the right granularity.
+        var failed = false
+        func rollBack(_ types: [SyncRecordType]) {
+            for type in types { hashes[type] = beforeApply[type] }
+            failed = true
+        }
+        if touchedCollection {
+            do { try await collection.replaceAll(groups: groups, entries: entries) }
+            catch { rollBack([.group, .entry]) }
+        }
+        if touchedWants {
+            do { try await wants.save(uid: uid, entries: wantMap) }
+            catch { rollBack([.want]) }
+        }
+        if touchedGoals {
+            // `SetGoalsModel.replaceAll` reverts internally instead of throwing, so its outcome
+            // has to be read back rather than caught.
+            setGoals?.replaceAll(goals)
+            if setGoals?.setIds != goals { rollBack([.setGoal]) }
+        }
+        status = failed ? .failed : .synced(Date())
     }
 
     // MARK: Reading current state
