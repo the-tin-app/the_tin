@@ -13,6 +13,7 @@ private final class FakeSyncEngine: SyncEngine, @unchecked Sendable {
     var sentDeletes: [SyncRecord] = []
     var started = false
     var startError: Error?
+    var fetchAllError: Error?
     var fetchChangesCalls = 0
 
     func start() async throws {
@@ -25,7 +26,10 @@ private final class FakeSyncEngine: SyncEngine, @unchecked Sendable {
         sentUpserts += upserts
         sentDeletes += deletes
     }
-    func fetchAll() async throws -> [SyncRecord] { zone }
+    func fetchAll() async throws -> [SyncRecord] {
+        if let fetchAllError { throw fetchAllError }
+        return zone
+    }
 
     func reset() { sentUpserts = []; sentDeletes = [] }
 }
@@ -122,6 +126,42 @@ final class SyncServiceTests: XCTestCase {
         let service = makeService(engine: engine)
         await service.start()
         XCTAssertEqual(service.status, .unavailable)
+    }
+
+    /// An unreadable zone is NOT an empty zone. Conflating them let one transient CloudKit error
+    /// on first run mark the device seeded and skip the "which device wins?" sheet forever —
+    /// silently, and permanently. It must report `.failed`, decide nothing, and seed nothing.
+    func testUnreadableZoneNeitherSeedsNorClaimsSuccess() async throws {
+        let engine = FakeSyncEngine()
+        engine.fetchAllError = CocoaError(.fileReadUnknown)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("local1"))
+        let service = makeService(engine: engine, collection: collection)
+
+        await service.start()
+        try await settle()
+
+        XCTAssertEqual(service.status, .failed, "a fetch that threw must not report .synced")
+        XCTAssertFalse(defaults.bool(forKey: SyncService.seededKey), "must not mark seeded blind")
+        XCTAssertTrue(engine.sentUpserts.isEmpty, "must not seed the zone from an unread zone")
+        XCTAssertNil(service.seedPrompt)
+    }
+
+    /// ...and it must be recoverable. Nothing is subscribed after a failed zone read, so without
+    /// this the first bad launch leaves sync dead until the user relaunches the app.
+    func testForegroundRetriesAfterAFailedZoneRead() async throws {
+        let engine = FakeSyncEngine()
+        engine.fetchAllError = CocoaError(.fileReadUnknown)
+        let service = makeService(engine: engine)
+        await service.start()
+        try await settle()
+        XCTAssertEqual(service.status, .failed)
+
+        engine.fetchAllError = nil          // the network comes back
+        await service.refresh()
+        try await settle()
+        XCTAssertNotEqual(service.status, .failed, "a foreground must retry the failed start")
+        XCTAssertTrue(defaults.bool(forKey: SyncService.seededKey))
     }
 
     // MARK: Foreground refresh

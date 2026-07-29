@@ -89,7 +89,16 @@ final class SyncService {
         do { try await engine.start() } catch { status = .unavailable; return }
         status = .syncing
 
-        let remote = (try? await engine.fetchAll()) ?? []
+        // An empty list must NOT stand in for an unreadable zone. `try?` conflated them, and the
+        // seeding table below reads `remoteCount == 0` as "the zone is empty, seed it from here"
+        // — so one transient CloudKit error on first run would mark the device seeded and skip
+        // the "which device wins?" sheet permanently. On an already-seeded device the same
+        // conflation reported a catch-up that applied nothing as `.synced`. Both are silent.
+        //
+        // Nothing is subscribed on this path, so `refresh()` retries `start()` on the next
+        // foreground rather than leaving sync inert until the user relaunches.
+        let remote: [SyncRecord]
+        do { remote = try await engine.fetchAll() } catch { status = .failed; return }
         let local = await currentRecords()
         switch SyncSeeding.decide(localCount: local.filter { $0.type == .entry }.count,
                                   remoteCount: remote.filter { $0.type == .entry }.count,
@@ -138,7 +147,11 @@ final class SyncService {
     /// sheet is still up, and pulling the zone into a device whose choice hasn't been made would
     /// merge the two collections the sheet is asking the user to pick between.
     func refresh() async {
-        guard AppConfig.syncEnabled, let engine, !streamTasks.isEmpty, seedPrompt == nil else { return }
+        guard AppConfig.syncEnabled, let engine, seedPrompt == nil else { return }
+        // Nothing subscribed means `start()` never got past the zone read (or hasn't run). A
+        // foreground is the natural moment to try again — otherwise one failed read at launch
+        // leaves sync dead for the whole session and only a relaunch revives it.
+        guard !streamTasks.isEmpty else { return await start() }
         await engine.fetchChanges()
     }
 
