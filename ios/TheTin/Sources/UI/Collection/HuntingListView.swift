@@ -8,6 +8,10 @@ struct HuntingListView: View {
     let wants: WantsModel
 
     @State private var editing: CardRecord?
+    /// `printed_total` per set, for the collector denominator in the eBay query.
+    /// `store.printedTotal` is a per-call DB hit, so it is cached per set — same reason
+    /// `CandidateIndex` caches it at init rather than asking per card.
+    @State private var printedTotalBySet: [String: Int] = [:]
 
     var body: some View {
         // Computed directly per body pass rather than cached (contrast `WishlistCatalog` in
@@ -26,6 +30,15 @@ struct HuntingListView: View {
             if hunting.isEmpty { empty } else { list(hunting, rawUsd: rawUsd, setsById: setsById) }
         }
         .navigationTitle("Hunting")
+        // Fills the denominator cache for whichever sets are on the hunt. The id is the set
+        // list, so hunting a card from a new set refetches and nothing else does.
+        .task(id: cards.map(\.setId).sorted()) {
+            for setId in Set(cards.map(\.setId)) where printedTotalBySet[setId] == nil {
+                if let total = try? store.printedTotal(setId: setId) {
+                    printedTotalBySet[setId] = total
+                }
+            }
+        }
         .sheet(item: $editing) { card in
             WishlistEditSheet(card: card, price: rawUsd[card.id], wants: wants)
         }
@@ -73,10 +86,12 @@ struct HuntingListView: View {
                     .font(.subheadline)
                 }
                 if let hunt = entry?.hunt {
-                    Text("\(Self.daysLeft(hunt))  ·  \(hunt.minCondition.floorLabel)")
+                    Text("\(Hunt.daysLeftLabel(hunt.daysLeft()))  ·  \(hunt.minCondition.floorLabel)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if let url = huntURL(card, entry: entry, setsById: setsById) {
+                if let url = Self.huntURL(card: card, entry: entry,
+                                          setName: setsById[card.setId]?.name,
+                                          printedTotal: printedTotalBySet[card.setId]) {
                     Link(destination: url) {
                         Label("Find one on eBay", systemImage: "magnifyingglass")
                             .font(.subheadline)
@@ -91,22 +106,17 @@ struct HuntingListView: View {
         .padding(.vertical, 4)
     }
 
-    /// Whole days remaining, rounded up — "0 days left" on a hunt that still has hours to
-    /// run reads as expired. `now` is injectable (not `private`, so tests can reach it via
-    /// `@testable import`) for the same reason `WishlistGrid.huntSorted` takes one: the wall
-    /// clock is untestable.
-    static func daysLeft(_ hunt: Hunt, now: Date = Date()) -> String {
-        let days = max(0, Int((hunt.until.timeIntervalSince(now) / 86_400).rounded(.up)))
-        return days == 1 ? "1 day left" : "\(days) days left"
-    }
-
-    private func huntURL(_ card: CardRecord, entry: WantEntry?,
-                         setsById: [String: SetRecord]) -> URL? {
+    /// The eBay hunt URL for one row. Static and value-only — no store, no view state — so the
+    /// wiring is testable without a view host. The denominator is the highest-value token in
+    /// the query and reached production as `nil` once already; it needs a test that can fail.
+    static func huntURL(card: CardRecord, entry: WantEntry?, setName: String?,
+                        printedTotal: Int?) -> URL? {
         guard entry?.hunt != nil else { return nil }
-        return MarketplaceLinks.ebayHunt(name: card.name,
-                                         setName: setsById[card.setId]?.name,
-                                         number: card.number,
-                                         total: nil,
-                                         maxUsd: entry?.targetUsd)
+        return MarketplaceLinks.ebayHunt(
+            name: card.name,
+            setName: setName,
+            number: card.number,
+            total: MarketplaceLinks.denominator(number: card.number, printedTotal: printedTotal),
+            maxUsd: entry?.targetUsd)
     }
 }

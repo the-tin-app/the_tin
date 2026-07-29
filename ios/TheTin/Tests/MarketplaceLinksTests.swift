@@ -49,12 +49,66 @@ extension MarketplaceLinksTests {
         XCTAssertTrue(q.contains("Base Set"))
     }
 
-    func testHuntQueryAppendsEveryNegativeKeyword() throws {
+    /// The literal list, NOT `for kw in huntNegativeKeywords` — iterating the same constant the
+    /// URL is built from passes even if a keyword is deleted, which is how the far worse
+    /// name-collision bug below survived review. Assert the content, not the mechanism.
+    func testHuntQueryAppendsExactlyTheKnownNegativeKeywords() throws {
+        XCTAssertEqual(MarketplaceLinks.huntNegativeKeywords,
+                       ["proxy", "repro", "reproduction", "custom", "fake", "digital",
+                        "lot", "bundle", "playtest", "orica", "metal", "sticker"])
         let q = try nkw(MarketplaceLinks.ebayHunt(name: "Charizard", setName: "Base Set",
                                                   number: "4", total: "102", maxUsd: nil))
-        for kw in MarketplaceLinks.huntNegativeKeywords {
-            XCTAssertTrue(q.contains("-\(kw)"), "missing negative keyword: \(kw)")
-        }
+        XCTAssertEqual(q, "Charizard 4/102 Base Set -proxy -repro -reproduction -custom -fake "
+                        + "-digital -lot -bundle -playtest -orica -metal -sticker")
+    }
+
+    /// The self-cancelling query. "Metal Energy" is a real, widely collected card, and
+    /// `Metal Energy … -metal` excludes every listing that could possibly match — eBay reports
+    /// that as an empty market. The colliding negative must be dropped, the rest kept.
+    func testHuntQueryDropsANegativeThatCollidesWithTheCardName() throws {
+        let q = try nkw(MarketplaceLinks.ebayHunt(name: "Metal Energy", setName: "Neo Genesis",
+                                                  number: "19", total: "111", maxUsd: nil))
+        XCTAssertTrue(q.contains("Metal Energy"))
+        XCTAssertFalse(q.contains("-metal"), "self-cancelling query: \(q)")
+        XCTAssertTrue(q.contains("-proxy"))   // every non-colliding negative survives
+        XCTAssertTrue(q.contains("-fake"))
+    }
+
+    /// The set name is a required positive term too, so it cancels the query the same way.
+    func testHuntQueryDropsANegativeThatCollidesWithTheSetName() throws {
+        let q = try nkw(MarketplaceLinks.ebayHunt(name: "Pikachu", setName: "Custom Series",
+                                                  number: "25", total: nil, maxUsd: nil))
+        XCTAssertFalse(q.contains("-custom"))
+        XCTAssertTrue(q.contains("-proxy"))
+    }
+
+    /// A substring is not a collision: "Metapod" must not suppress "-metal", or one long name
+    /// would quietly strip the filters for every card sharing a prefix.
+    func testHuntQueryKeepsNegativesThatOnlyLookLikeTheName() throws {
+        let q = try nkw(MarketplaceLinks.ebayHunt(name: "Metapod", setName: nil, number: "54",
+                                                  total: nil, maxUsd: nil))
+        XCTAssertTrue(q.contains("-metal"))
+    }
+
+    /// The denominator is the token real seller titles carry ("Charizard 4/102"), and the bare
+    /// number alone is ANDed against item counts, prices and "4 cards".
+    func testDenominatorOnNumericNumbers() {
+        XCTAssertEqual(MarketplaceLinks.denominator(number: "4", printedTotal: 102), "102")
+        XCTAssertEqual(MarketplaceLinks.denominator(number: "025", printedTotal: 165), "165")
+    }
+
+    /// A promo number is already unique; "SWSH223/307" matches no real listing title.
+    func testNoDenominatorForPromoNumbers() {
+        XCTAssertNil(MarketplaceLinks.denominator(number: "SWSH223", printedTotal: 307))
+        XCTAssertNil(MarketplaceLinks.denominator(number: "TG12", printedTotal: 30))
+        XCTAssertNil(MarketplaceLinks.denominator(number: "", printedTotal: 102))
+    }
+
+    /// An unknown printed total means no denominator — never a guess, and never `SetRecord.total`
+    /// (the catalog count is inflated past the printed denominator by secret rares, and a wrong
+    /// denominator returns zero results silently).
+    func testNoDenominatorWithoutAPrintedTotal() {
+        XCTAssertNil(MarketplaceLinks.denominator(number: "4", printedTotal: nil))
     }
 
     func testHuntSetsBuyItNowAndCheapestFirst() throws {

@@ -32,6 +32,20 @@ struct Hunt: Codable, Hashable {
     /// nothing to clean up. This is the ONLY place the test is written.
     func isActive(now: Date = Date()) -> Bool { until >= now }
     var isActive: Bool { isActive() }
+
+    /// Whole days remaining, rounded up — "0 days left" on a hunt that still has hours to run
+    /// reads as expired. Clamped at 0 so a lapsed hunt never counts backwards. Lives here with
+    /// `isActive` because every time question about a hunt is answered in one place.
+    func daysLeft(now: Date = Date()) -> Int {
+        max(0, Int((until.timeIntervalSince(now) / 86_400).rounded(.up)))
+    }
+
+    /// The one phrasing of "how long is left", shared by the Hunting row and the alert body.
+    /// Takes the count rather than a `Hunt` because `PriceAlertsService.Crossing` carries the
+    /// number across a serialization boundary, not the hunt.
+    static func daysLeftLabel(_ days: Int) -> String {
+        days == 1 ? "1 day left" : "\(days) days left"
+    }
 }
 
 /// One wishlist entry's per-card data. Every field defaults, so a plain `WantEntry()` is the

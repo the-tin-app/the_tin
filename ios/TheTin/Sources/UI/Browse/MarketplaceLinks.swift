@@ -28,6 +28,18 @@ enum MarketplaceLinks {
         "lot", "bundle", "playtest", "orica", "metal", "sticker",
     ]
 
+    /// The `total` to hand `ebayHunt`, from a set's **printed** total (`CatalogStore.printedTotal`,
+    /// NOT `SetRecord.total` — the catalog count is inflated past the printed denominator by
+    /// secret rares, and a wrong denominator returns zero results silently).
+    ///
+    /// Only mainline numbered sets print a denominator. A promo's number (`SWSH223`) is already
+    /// unique on its own, and "SWSH223/307" matches no real listing title — real ones say
+    /// "SWSH223 Promo". Numeric numbers only; nil printed total means no denominator, not a guess.
+    static func denominator(number: String, printedTotal: Int?) -> String? {
+        guard let printedTotal, !number.isEmpty, number.allSatisfy(\.isNumber) else { return nil }
+        return String(printedTotal)
+    }
+
     /// The precise search for a card you are actually buying: exact printing, collector
     /// number, buy-it-now only, cheapest first, capped at your budget, with the junk
     /// listings excluded. This is the part of Hunting that only The Tin can build — it is
@@ -48,7 +60,14 @@ enum MarketplaceLinks {
                          maxUsd: Double?) -> URL {
         let collector = total.map { "\(number)/\($0)" } ?? number
         let positives = [name, collector, setName].compactMap { $0 }
-        let negatives = huntNegativeKeywords.map { "-\($0)" }
+        // A negative that appears in a POSITIVE term cancels the query it belongs to:
+        // "Metal Energy … -metal" excludes every listing that could possibly match, and eBay
+        // reports that as "nothing for sale". Dropping the colliding negative loses one filter;
+        // keeping it loses every result, so the drop always wins. Checked against the set name
+        // as well as the card name — both are required terms, so both cancel the same way.
+        let words = Set(positives.joined(separator: " ").lowercased()
+            .split { !$0.isLetter }.map(String.init))
+        let negatives = huntNegativeKeywords.filter { !words.contains($0) }.map { "-\($0)" }
         var c = URLComponents(string: "https://www.ebay.com/sch/i.html")!
         var items = [
             URLQueryItem(name: "_nkw", value: (positives + negatives).joined(separator: " ")),
