@@ -201,8 +201,18 @@ final class SyncServiceTests: XCTestCase {
         XCTAssertEqual(engine.sentDeletes.map(\.recordName), ["remote1"])
     }
 
-    /// The `syncSeeded` flag is what stops a second launch re-asking or silently replacing.
-    func testAlreadySeededDeviceNeitherAsksNorReplaces() async throws {
+    /// The `syncSeeded` flag stops a second launch re-asking or silently replacing — but the
+    /// device must still MERGE what the zone holds.
+    ///
+    /// This previously asserted the opposite, that `remote1` was dropped. That is the behaviour
+    /// which shipped and then failed on two real devices: `automaticallySync` reacts only to local
+    /// pending changes and to push, so a device with neither never fetches on its own, and
+    /// `start()`'s own `fetchAll()` result was discarded on this branch. A card added on the iPad
+    /// never reached the iPhone, even across relaunches (found 2026-07-29).
+    ///
+    /// Merge, not replace — `local1` survives. And the echo guard holds: `remote1` arrived FROM
+    /// the zone, so only `local1` is pushed back up.
+    func testAlreadySeededDeviceMergesRemoteAndPushesOnlyLocal() async throws {
         defaults.set(true, forKey: SyncService.seededKey)
         let collection = InMemoryCollectionRepository()
         try await collection.addEntry(entry("local1"))
@@ -213,7 +223,15 @@ final class SyncServiceTests: XCTestCase {
         await service.start()
 
         XCTAssertNil(service.seedPrompt)
-        XCTAssertEqual(collection.entries.map(\.id), ["local1"])
+        XCTAssertEqual(collection.entries.map(\.id).sorted(), ["local1", "remote1"])
+        // Nothing is pushed on launch: the first stream emission after `start()` is seed-only, so
+        // it populates the hash map without re-pushing the whole collection. `local1` therefore
+        // stays local until something changes it.
+        //
+        // ⚠️ That leaves a narrow hole, deliberately recorded rather than silently patched: a
+        // record created while the sync TOGGLE WAS OFF is never subscribed, so it is never pushed,
+        // and turning sync back on seeds it into the hash map as already-known. It reaches the zone
+        // only if it is edited again. See the handoff doc, §4.
         XCTAssertTrue(engine.sentUpserts.isEmpty)
     }
 
