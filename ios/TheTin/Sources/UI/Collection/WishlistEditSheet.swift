@@ -24,7 +24,15 @@ struct WishlistEditSheet: View {
     @State private var minCondition: CardCondition = .hp
     @State private var window: HuntWindow = .d14
     /// Preserved when reopening a live hunt so "expires Aug 11" doesn't drift on every visit.
+    /// Non-nil also means "this hunt's clock is already running", which is why the window picker
+    /// is hidden while it is set: `until` cannot be inverted back into a 7/14/30 choice (the
+    /// creation date isn't stored), so a picker beside it would show a default that contradicts
+    /// the date — and truncate a 30-day hunt to 14 on the first touch.
     @State private var existingUntil: Date?
+    /// A stored hunt that has already expired. The toggle reads off, but the floor is preserved
+    /// so switching Hunting back on RENEWS the hunt rather than restarting from defaults — and
+    /// `save()` writes it back untouched if the user never touches the toggle.
+    @State private var lapsedUntil: Date?
     @FocusState private var targetFocused: Bool
 
     /// Conditions offered as a floor. DMG is absent on purpose: "I'll take a damaged one"
@@ -34,10 +42,20 @@ struct WishlistEditSheet: View {
     /// A non-positive budget is no budget: `Double("0")` is non-nil, and a zero-target hunt
     /// would be stored, promised in the footer, then silently dropped by `huntSorted`'s
     /// `target > 0` guard. One definition of "has a budget", used by the footer and by save().
-    private var budget: Double? {
-        guard let v = Double(targetText.trimmingCharacters(in: .whitespaces)), v > 0 else { return nil }
+    ///
+    /// `Double(_:)` only accepts "." while `.decimalPad` shows the LOCALE's separator, so a
+    /// French "300,00" parsed as nil — and since save() writes `targetUsd = budget` and drops
+    /// the hunt when the budget is nil, opening the sheet and pressing Done deleted both fields.
+    /// Static and separator-injectable so that can be tested without a view host.
+    static func parseBudget(_ text: String,
+                            separator: String = Locale.current.decimalSeparator ?? ".") -> Double? {
+        let normalised = text.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: separator, with: ".")
+        guard let v = Double(normalised), v > 0 else { return nil }
         return v
     }
+
+    private var budget: Double? { Self.parseBudget(targetText) }
 
     var body: some View {
         NavigationStack {
@@ -86,9 +104,10 @@ struct WishlistEditSheet: View {
                 set: { on in
                     hunting = on
                     if on {
-                        // Switching on by hand always starts a fresh window. `load()` assigns
-                        // `hunting` directly, so it never routes through here and a stored
-                        // deadline survives a reopen.
+                        // Switching on by hand always starts a fresh window — including the
+                        // renewal of a lapsed hunt, which keeps its floor but not its old date.
+                        // `load()` assigns `hunting` directly, so it never routes through here
+                        // and a live hunt's stored deadline survives a reopen.
                         existingUntil = nil
                         if budget == nil { targetFocused = true }
                     }
@@ -98,13 +117,21 @@ struct WishlistEditSheet: View {
                 Picker("Condition floor", selection: $minCondition) {
                     ForEach(Self.floors) { Text($0.floorLabel).tag($0) }
                 }
-                Picker("Buying within", selection: $window) {
-                    ForEach(HuntWindow.allCases) { Text($0.label).tag($0) }
+                // The window picker only appears while choosing one. A running hunt shows its
+                // real expiry instead, plus the one control that can legitimately change it.
+                if let existingUntil {
+                    LabeledContent("Expires",
+                                   value: existingUntil.formatted(date: .abbreviated, time: .omitted))
+                        .foregroundStyle(.secondary)
+                    Button("Start a new window") { self.existingUntil = nil }
+                } else {
+                    Picker("Buying within", selection: $window) {
+                        ForEach(HuntWindow.allCases) { Text($0.label).tag($0) }
+                    }
+                    LabeledContent("Expires",
+                                   value: window.until().formatted(date: .abbreviated, time: .omitted))
+                        .foregroundStyle(.secondary)
                 }
-                LabeledContent("Expires",
-                               value: (existingUntil ?? window.until()).formatted(date: .abbreviated,
-                                                                                  time: .omitted))
-                .foregroundStyle(.secondary)
             }
         } header: {
             Text("Hunting")
@@ -115,9 +142,10 @@ struct WishlistEditSheet: View {
                 Text("Set a price target above — a hunt needs a budget to watch against.")
             } else if hunting {
                 Text("Shows this card under Wanted → Hunting with a one-tap search.")
+            } else if let lapsedUntil {
+                Text("This hunt ran out on \(lapsedUntil.formatted(date: .abbreviated, time: .omitted)). Switch Hunting on to renew it — your condition floor is still set.")
             }
         }
-        .onChange(of: window) { _, _ in existingUntil = nil }
     }
 
     private func load() {
@@ -125,12 +153,12 @@ struct WishlistEditSheet: View {
         priority = e.priority
         targetText = e.targetUsd.map { String(format: "%.2f", $0) } ?? ""
         notes = e.notes
-        // An expired hunt reads as "not hunting" — the toggle is off and the sheet offers a
-        // fresh window rather than showing a date that has already passed.
-        if let h = e.hunt, h.isActive {
-            hunting = true
+        // The floor is restored either way: an expired hunt still says which condition you'd
+        // accept, and renewing should not make you choose it again. Only `isActive` decides
+        // whether the toggle reads on and the window keeps running.
+        if let h = e.hunt {
             minCondition = h.minCondition
-            existingUntil = h.until
+            if h.isActive { hunting = true; existingUntil = h.until } else { lapsedUntil = h.until }
         }
     }
 
@@ -141,10 +169,13 @@ struct WishlistEditSheet: View {
             e.priority = priority
             e.targetUsd = target
             e.notes = cleanNotes
-            // A hunt without a budget can never fire, so don't store one.
+            // A hunt without a budget can never fire, so don't store one. A LAPSED hunt is kept
+            // as-is: it's inert everywhere (`isActive` gates the Hunting list, the sort and the
+            // alerts), and dropping it would destroy the floor the user chose just because they
+            // opened the sheet.
             e.hunt = (hunting && target != nil)
                 ? Hunt(minCondition: minCondition, until: existingUntil ?? window.until())
-                : nil
+                : lapsedUntil.map { Hunt(minCondition: minCondition, until: $0) }
         }
     }
 }

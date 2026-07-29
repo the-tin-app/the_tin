@@ -75,16 +75,46 @@ extension WantEntryTests {
         XCTAssertEqual(HuntWindow.allCases.map(\.label), ["7 days", "14 days", "30 days"])
     }
 
-    /// Reopening a live hunt must not restart its clock: `save()` reuses the stored
-    /// absolute date. Pins the arithmetic that the sheet's `existingUntil ?? window.until()`
-    /// expression depends on.
-    func testStoredExpiryWinsOverAFreshWindow() {
-        let stored = Date(timeIntervalSince1970: 800_000_000)
-        let existingUntil: Date? = stored
-        XCTAssertEqual(existingUntil ?? HuntWindow.d14.until(), stored)
+    /// `.decimalPad` shows the LOCALE's separator while `Double(_:)` only accepts "." — and
+    /// `save()` drops both the target AND the hunt when the budget parses as nil, so a French
+    /// user typing "300,00" lost both by pressing Done.
+    func testBudgetParsesTheLocaleDecimalSeparator() {
+        XCTAssertEqual(WishlistEditSheet.parseBudget("300,00", separator: ","), 300)
+        XCTAssertEqual(WishlistEditSheet.parseBudget("299,99", separator: ","), 299.99)
+        // A stored target is re-rendered with "%.2f" (always a dot) — it must still parse in a
+        // comma locale, or reopening the sheet would clear a target it just displayed.
+        XCTAssertEqual(WishlistEditSheet.parseBudget("300.00", separator: ","), 300)
+        XCTAssertEqual(WishlistEditSheet.parseBudget(" 300.00 ", separator: "."), 300)
+    }
 
-        let cleared: Date? = nil
-        let fresh = HuntWindow.d14.until(from: stored)
-        XCTAssertEqual(cleared ?? fresh, fresh)
+    /// A non-positive or unparseable budget is no budget: a zero-target hunt would be stored,
+    /// promised in the footer, then silently dropped by `huntSorted`'s `target > 0` guard.
+    func testNonPositiveAndJunkBudgetsAreNil() {
+        XCTAssertNil(WishlistEditSheet.parseBudget("0", separator: "."))
+        XCTAssertNil(WishlistEditSheet.parseBudget("-5", separator: "."))
+        XCTAssertNil(WishlistEditSheet.parseBudget("", separator: "."))
+        XCTAssertNil(WishlistEditSheet.parseBudget("abc", separator: "."))
+    }
+}
+
+extension WantEntryTests {
+    /// A hunt with only a few hours left still has a day to go — "0 days left" would read as
+    /// already expired. `now` is injectable so this doesn't depend on the wall clock.
+    func testDaysLeftRoundsPartialDayUpAndNeverGoesNegative() {
+        let now = Date(timeIntervalSince1970: 800_000_000)
+        func hunt(_ seconds: Double) -> Hunt {
+            Hunt(minCondition: .hp, until: now.addingTimeInterval(seconds))
+        }
+        XCTAssertEqual(hunt(3 * 3_600).daysLeft(now: now), 1)
+        XCTAssertEqual(hunt(9 * 86_400).daysLeft(now: now), 9)
+        XCTAssertEqual(hunt(-5 * 86_400).daysLeft(now: now), 0)
+    }
+
+    /// One phrasing, shared by the Hunting row and the alert body — the two used to carry
+    /// byte-identical copies of this ternary.
+    func testDaysLeftLabelSingularAndPlural() {
+        XCTAssertEqual(Hunt.daysLeftLabel(1), "1 day left")
+        XCTAssertEqual(Hunt.daysLeftLabel(9), "9 days left")
+        XCTAssertEqual(Hunt.daysLeftLabel(0), "0 days left")
     }
 }
