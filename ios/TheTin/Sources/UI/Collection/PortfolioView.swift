@@ -87,6 +87,14 @@ struct PortfolioView: View {
                     Text("Based on \(series.cardsWithHistory) of \(series.totalCards) cards with price history.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                // The deliberate asymmetry, stated out loud. `sealed_product` carries a market
+                // price and no history table, so sealed can contribute to the total above but can
+                // never appear in this chart. Excluding it from the total instead would make the
+                // headline wrong in order to make two numbers agree.
+                if sealed.boxes > 0 {
+                    Text("The chart covers cards only — sealed products have no price history.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
         } else {
             ProgressView("Building portfolio history…").frame(maxWidth: .infinity)
@@ -113,12 +121,26 @@ struct PortfolioView: View {
         return out
     }
 
+    /// Sealed counts toward the WHOLE tin's value only — a divider holds cards, and sealed is a
+    /// section beside the dividers rather than inside one, so a per-divider portfolio has none.
+    private var sealed: (total: Double, priced: Int, boxes: Int) {
+        groupId == nil ? model.sealedValue : (0, 0, 0)
+    }
+
     /// Variant B headline: big value + range delta on one line (stat row demoted below the chart).
+    ///
+    /// The headline is cards + sealed; the delta beside it is cards ONLY, because sealed has no
+    /// price history to have moved over the selected range. Applying the card delta to a total
+    /// that includes sealed would report a percentage against a base that never participated in
+    /// it. Sealed is called out on its own line beneath, so the two numbers can't be mistaken for
+    /// each other.
     private func headline(_ series: PortfolioSeries) -> some View {
         let pts = sliced(series.points)
-        let now = pts.last?.value ?? 0
+        let cards = pts.last?.value ?? 0
         let start = pts.first?.value ?? 0
-        let delta = now - start
+        let delta = cards - start
+        let sealed = self.sealed
+        let now = cards + sealed.total
         return VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(now, format: .currency(code: "USD").precision(.fractionLength(now < 1000 ? 2 : 0)))
@@ -129,6 +151,10 @@ struct PortfolioView: View {
                     .font(.subheadline.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(delta >= 0 ? .green : .red)
+            }
+            if sealed.boxes > 0 {
+                Text("\(cards, format: .currency(code: "USD").precision(.fractionLength(0))) in cards · \(sealed.total, format: .currency(code: "USD").precision(.fractionLength(0))) in ^[\(sealed.boxes) sealed box](inflect: true)")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             if let asOf = model.priceAsOf { AsOfLabel(date: asOf) }
         }

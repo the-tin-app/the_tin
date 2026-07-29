@@ -980,9 +980,15 @@ struct CollectionView: View {
     /// Only rendered once there's a card to total — `emptyTin` owns the first-run screen.
     private var header: some View {
         let v = model.tinValue
+        // Sealed is added to the DISPLAYED total but deliberately not folded into `tinValue`
+        // itself: forty-odd consumers of that number (GroupStats, the widget, per-divider totals,
+        // set completion) all mean "cards", and quietly redefining it would change all of them.
+        // This is the one place the two are shown as one figure — and it has to be, because
+        // tapping it opens the Portfolio, which totals them together.
+        let total = v.total + model.sealedValue.total
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text(v.total, format: WidgetShared.tinCurrency(v.total))
+                Text(total, format: WidgetShared.tinCurrency(total))
                     .font(.system(.largeTitle, design: .rounded).weight(.bold))
                     .monospacedDigit()
                     .contentTransition(.numericText())
@@ -990,10 +996,14 @@ struct CollectionView: View {
                     .font(.body.weight(.semibold)).foregroundStyle(.tertiary)
             }
             .background { navLink(PortfolioRoute()) }
-            .accessibilityLabel("Tin value, \(v.total.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
+            .accessibilityLabel("Tin value, \(total.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
             .accessibilityHint("Shows portfolio value history")
             Text("\(v.totalCards) cards in your tin · \(v.pricedCards) of \(v.totalCards) priced")
                 .font(.footnote).foregroundStyle(.secondary)
+            if model.sealedValue.boxes > 0 {
+                Text("plus ^[\(model.sealedValue.boxes) sealed box](inflect: true)")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             if let asOf = model.priceAsOf {
                 AsOfLabel(date: asOf)
             }

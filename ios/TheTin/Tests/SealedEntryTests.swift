@@ -53,6 +53,61 @@ final class SealedEntryTests: XCTestCase {
         XCTAssertTrue(entry.isSold)
     }
 
+    // MARK: Portfolio arithmetic
+    //
+    // These pin the contract that the portfolio headline and the tin's Sealed section both read:
+    // market × qty, sold excluded, unpriced contributing nothing.
+
+    private func product(_ id: Int, market: Double?) -> SealedProduct {
+        SealedProduct(tcgplayerId: id, name: "Product \(id)", setId: "s1",
+                      productType: "Booster Box", marketUsd: market, lowUsd: nil,
+                      asOf: "2026-07-28")
+    }
+
+    func testMarketValueMultipliesByQuantity() {
+        let sealed = [SealedEntry(id: "s1", productId: 1, qty: 3, addedAt: Date())]
+        let value = sealed.marketValue(products: [1: product(1, market: 119.99)])
+
+        XCTAssertEqual(value.total, 359.97, accuracy: 0.001)
+        XCTAssertEqual(value.boxes, 3)
+        XCTAssertEqual(value.priced, 3)
+    }
+
+    /// A sold box keeps its cost basis on file but stops counting toward what you own — the same
+    /// rule `CollectionEntry.isSold` earns, and for the same reason: without it, selling at a loss
+    /// improves the numbers by removing itself from them.
+    func testMarketValueExcludesSoldBoxes() {
+        let sealed = [
+            SealedEntry(id: "kept", productId: 1, qty: 1, addedAt: Date()),
+            SealedEntry(id: "gone", productId: 1, qty: 5, pricePaid: 400, addedAt: Date(),
+                        soldAt: Date(), soldFor: 600),
+        ]
+        let value = sealed.marketValue(products: [1: product(1, market: 100)])
+
+        XCTAssertEqual(value.total, 100)
+        XCTAssertEqual(value.boxes, 1)
+        XCTAssertEqual(sealed.boxCount, 1)
+        // The sold row is still on file with its cost basis intact — excluded from the total,
+        // not deleted.
+        XCTAssertEqual(sealed.first { $0.id == "gone" }?.pricePaid, 400)
+    }
+
+    /// An unpriced product contributes NOTHING rather than zero, and says so through `priced`.
+    /// Treating "no data" as $0 would quietly understate a collection instead of admitting a gap.
+    func testMarketValueTreatsUnpricedAsUnknownNotZero() {
+        let sealed = [
+            SealedEntry(id: "a", productId: 1, qty: 2, addedAt: Date()),
+            SealedEntry(id: "b", productId: 2, qty: 1, addedAt: Date()),   // not in the catalog
+            SealedEntry(id: "c", productId: 3, qty: 1, addedAt: Date()),   // present, no price
+        ]
+        let value = sealed.marketValue(products: [1: product(1, market: 50),
+                                                  3: product(3, market: nil)])
+
+        XCTAssertEqual(value.total, 100)
+        XCTAssertEqual(value.priced, 2)
+        XCTAssertEqual(value.boxes, 4)
+    }
+
     /// THE regression that matters. A `collection.json` written before `sealed` existed carries
     /// no such key; if the snapshot field were a defaulted non-optional, synthesized `Decodable`
     /// would still DEMAND it and every existing collection would fail to decode — silently, into
