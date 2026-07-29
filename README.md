@@ -2,14 +2,14 @@
 
 **A free, open source collector app — for collectors, by collectors.**
 
-The Tin is an iOS app for tracking a Pokémon TCG collection: scan cards with the
+The Tin is an iOS app for tracking a trading card collection: scan cards with the
 camera (entirely on-device), organize them into groups, follow their market value
 over time, and know what your collection is worth — without ads, subscriptions,
 or your collection leaving your phone.
 
 ## Why "The Tin"?
 
-Every Pokémon kid had one: the tin. The binder held the bulk, but the tin held
+Every kid who collected had one: the tin. The binder held the bulk, but the tin held
 the *loved* cards — the holos, the reverse holos, the EXes, the ones that got
 played with and traded and looked at a hundred times. Above the binder in the
 hierarchy of the heart.
@@ -69,8 +69,8 @@ translation of the app, released on Google Play.
 - **Sealed products** — track tins, ETBs, and booster boxes, not just singles.
 
 ### Browse & discover
-- **Full card catalog** — browse and search every set, with a Pokédex view to
-  explore by Pokémon.
+- **Full card catalog** — browse and search every set, with a Dex view to
+  explore by creature.
 - **Discover streams** — For You, chase cards, and full-art streams, recommended
   by on-device affinity (your taste data stays local).
 
