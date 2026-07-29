@@ -51,3 +51,13 @@ final class WantEntryTests: XCTestCase {
         XCTAssertFalse(Hunt(minCondition: .hp, until: now.addingTimeInterval(-1)).isActive(now: now))
     }
 }
+
+extension WantEntryTests {
+    /// The share link encodes `priority.label.lowercased()` and `site/functions/l.js`
+    /// interpolates it straight into `class="pri <value>"`. Pin the exact string the
+    /// stylesheet has to match — if this changes, the CSS class silently stops applying.
+    func testShareLinkPriorityTokens() {
+        XCTAssertEqual(WantPriority.grail.label.lowercased(), "grail")
+        XCTAssertEqual(WantPriority.high.label.lowercased(), "high")
+    }
+}

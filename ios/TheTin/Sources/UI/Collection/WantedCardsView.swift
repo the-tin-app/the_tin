@@ -336,11 +336,21 @@ private struct WishlistTile: View {
 
     @ViewBuilder private var priorityDot: some View {
         if let p = entry?.priority, p != .normal {
-            Image(systemName: "circle.fill")
+            // Grail gets the filled star, not a fourth colour of the same dot: it's a
+            // different kind of statement about a card, and a dot can only carry so much.
+            Image(systemName: p == .grail ? "star.fill" : "circle.fill")
                 .font(.system(size: 10))
-                .foregroundStyle(p == .high ? .red : .gray)
+                .foregroundStyle(dotTint(p))
                 .padding(4)
-                .accessibilityLabel(p == .high ? "High priority" : "Low priority")
+                .accessibilityLabel("\(p.label) priority")
+        }
+    }
+
+    private func dotTint(_ p: WantPriority) -> Color {
+        switch p {
+        case .grail: return .yellow
+        case .high: return .red
+        case .normal, .low: return .gray
         }
     }
 
