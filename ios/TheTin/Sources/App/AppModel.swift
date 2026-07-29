@@ -32,7 +32,13 @@ final class AppModel {
     /// watches it (tab switch + WantedRoute push). A counter, not a Bool, so a second tap
     /// re-routes even if the first was already consumed.
     private(set) var wishlistRouteToken = 0
-    func openWishlist() { wishlistRouteToken += 1 }
+    /// Which Wanted scope the pending tap asked for, from the alert's `userInfo["scope"]`.
+    /// nil leaves the user's last-used scope alone.
+    private(set) var pendingWishlistScope: String?
+    func openWishlist(scope: String? = nil) {
+        pendingWishlistScope = scope
+        wishlistRouteToken += 1
+    }
 
     /// Inbound card deep link (`https://thetinapp.com/c/<id>`). RootView watches the token and
     /// pushes `CardID(pendingCardId)` onto the Tin stack — same pattern as the wishlist route.

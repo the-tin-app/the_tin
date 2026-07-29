@@ -69,9 +69,7 @@ final class PriceAlertsService {
                   let oldUsd = old[id], let newUsd = new[id],
                   oldUsd > target, newUsd <= target else { return nil }
             var days: Int? = nil
-            if let h = hunts[id], h.isActive(now: now) {
-                days = max(0, Int((h.until.timeIntervalSince(now) / 86_400).rounded(.up)))
-            }
+            if let h = hunts[id], h.isActive(now: now) { days = h.daysLeft(now: now) }
             return Crossing(cardId: id, target: target, newUsd: newUsd, huntDaysLeft: days)
         }
         // Hunted cards first, then cheapest-relative-to-target: the deal you're committed to
@@ -92,9 +90,9 @@ final class PriceAlertsService {
         if crossings.count <= 3 {
             return crossings.map { c in
                 if let days = c.huntDaysLeft {
-                    let left = days == 1 ? "1 day left" : "\(days) days left"
                     return Alert(title: "\(name(c)) is at \(usd(c.newUsd))",
-                                 body: "You're hunting this — \(left).")
+                                 body: "You're hunting this — \(Hunt.daysLeftLabel(days)).",
+                                 scope: huntingScope)
                 }
                 return Alert(title: "\(name(c)) hit your target — \(usd(c.newUsd))",
                              body: "You were watching for \(usd(c.target)).")
@@ -108,7 +106,18 @@ final class PriceAlertsService {
     struct Alert: Equatable {
         let title: String
         let body: String
+        /// Which Wanted scope the tap should land on, stamped into `userInfo["scope"]`.
+        ///
+        /// The spec wants a hunting alert to open the eBay query, but launching an external URL
+        /// straight from a notification tap is a poor iOS pattern — so it lands on the Hunting
+        /// list, one tap from the same search. nil keeps the existing behaviour (whatever scope
+        /// the user last used), which is right for a mixed digest that names no single card.
+        var scope: String? = nil
     }
+
+    /// `userInfo["scope"]` value that sends a tap to Wanted → Hunting; must equal
+    /// `WantedView.Scope.hunting.rawValue`, which is what `RootView` writes to `@AppStorage`.
+    static let huntingScope = "hunting"
 
     /// Spec batching: 1–3 movers ⇒ one notification each ("Charizard ex dropped 18% → $210");
     /// >3 ⇒ a single digest naming the top 3 by magnitude with a "…" tail. `names` maps
@@ -227,8 +236,9 @@ final class PriceAlertsService {
             let alerts = Self.targetAlerts(for: crossings, names: names)
                 + Self.alerts(for: movers.filter { !crossed.contains($0.cardId) }, names: names)
             for alert in alerts {
-                await notifier.post(title: alert.title, body: alert.body,
-                                    userInfo: ["route": Self.wishlistRoute])
+                var info = ["route": Self.wishlistRoute]
+                if let scope = alert.scope { info["scope"] = scope }
+                await notifier.post(title: alert.title, body: alert.body, userInfo: info)
             }
         }
         save(Snapshot(catalogVersion: version,

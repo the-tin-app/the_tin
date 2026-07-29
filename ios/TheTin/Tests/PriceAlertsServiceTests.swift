@@ -216,6 +216,20 @@ extension PriceAlertsServiceTests {
         XCTAssertTrue(alert.body.contains("9 days left"))
     }
 
+    /// An alert naming one hunted card must land on the Hunting list, not on whatever scope
+    /// `@AppStorage("wantedScope")` happens to hold (Sets by default — the set-goals screen,
+    /// which says nothing about the card the notification just named).
+    func testHuntingAlertStampsTheHuntingScopeAndPlainOnesDoNot() {
+        let hunted = PriceAlertsService.Crossing(cardId: "a", target: 300, newUsd: 290,
+                                                 huntDaysLeft: 9)
+        let plain = PriceAlertsService.Crossing(cardId: "b", target: 300, newUsd: 290)
+        XCTAssertEqual(PriceAlertsService.targetAlerts(for: [hunted], names: [:]).first?.scope,
+                       PriceAlertsService.huntingScope)
+        XCTAssertNil(PriceAlertsService.targetAlerts(for: [plain], names: [:]).first?.scope)
+        // The scope string is what RootView writes into @AppStorage — it must be a real segment.
+        XCTAssertEqual(PriceAlertsService.huntingScope, WantedView.Scope.hunting.rawValue)
+    }
+
     /// Existing callers must keep compiling and behaving identically.
     func testPlainCallSiteIsUnchanged() {
         let crossings = PriceAlertsService.targetCrossings(

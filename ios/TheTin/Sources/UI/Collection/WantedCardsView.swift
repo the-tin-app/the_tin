@@ -69,7 +69,9 @@ struct WantedCardsView: View {
                     Label { Text("Your wishlist is empty") }
                     icon: { Image(systemName: "heart").foregroundStyle(.pink) }
                 } description: {
-                    Text("Tap the heart on any card to start hunting for it here.")
+                    // "Hunting" now names a specific opt-in state on its own segment, so this
+                    // no longer says it loosely.
+                    Text("Tap the heart on any card to add it here.")
                 }
             } else {
                 ScrollView { content(r, displayedCards) }
@@ -208,8 +210,8 @@ struct WantedCardsView: View {
                 Section("Share a link") {
                     if let shareLink {
                         ShareLink(item: shareLink.url,
-                                  subject: Text("Cards I'm hunting"),
-                                  message: Text("Cards I'm hunting — from The Tin")) {
+                                  subject: Text("My wishlist"),
+                                  message: Text("My wishlist — from The Tin")) {
                             Text(shareLink.included < r.allCards.count
                                  ? "Link (first \(shareLink.included) cards)"
                                  : "Link to this list")

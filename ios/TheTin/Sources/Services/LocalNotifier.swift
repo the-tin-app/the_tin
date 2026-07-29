@@ -40,16 +40,19 @@ final class UserNotificationNotifier: LocalNotifier {
 /// (the delegate must exist before the app finishes launching).
 final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationRouter()
-    /// Set by TheTin; fired on the main actor when the user taps a wishlist price alert.
-    var onWishlistTap: (@MainActor () -> Void)?
+    /// Set by TheTin; fired on the main actor when the user taps a wishlist price alert. The
+    /// argument is the alert's `userInfo["scope"]` — nil for a plain target alert, "hunting"
+    /// for one naming a card you're hunting, so the tap lands on the list it's talking about.
+    var onWishlistTap: (@MainActor (String?) -> Void)?
 
     func install() { UNUserNotificationCenter.current().delegate = self }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse) async {
-        guard response.notification.request.content.userInfo["route"] as? String
-                == PriceAlertsService.wishlistRoute else { return }
-        await MainActor.run { self.onWishlistTap?() }
+        let userInfo = response.notification.request.content.userInfo
+        guard userInfo["route"] as? String == PriceAlertsService.wishlistRoute else { return }
+        let scope = userInfo["scope"] as? String
+        await MainActor.run { self.onWishlistTap?(scope) }
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,
