@@ -48,6 +48,15 @@ final class SyncService {
     private var goalsHookInstalled = false
     /// Held between presenting the seed prompt and the user answering it.
     private var pendingRemote: [SyncRecord] = []
+    /// Remote events that arrived before `subscribe()` ran.
+    ///
+    /// These must be BUFFERED, never dropped. `CKSyncEngine` advances its change token whether or
+    /// not the app did anything with the event, and `fetchAll` cannot express a deletion — so an
+    /// event lost here is lost **forever**, and the two devices stay silently divergent with no
+    /// path back. Confirmed on device 2026-07-29: a delete vanished in exactly this window and no
+    /// number of relaunches recovered it.
+    private var bufferedRemote: [(upserts: [SyncRecord], deletes: [SyncRecord])] = []
+    private var isSubscribed = false
 
     init(engine: SyncEngine? = SyncService.makeEngine(),
          collection: CollectionRepository, wants: WantsRepository,
@@ -85,6 +94,15 @@ final class SyncService {
         }
         engine.onStatus = { [weak self] status in
             Task { @MainActor in self?.status = status }
+        }
+        // Attached BEFORE `engine.start()`, unlike the old code which attached it in `subscribe()`.
+        // `CKSyncEngine` is constructed with `automaticallySync` and can deliver a fetch the moment
+        // it exists, so anything arriving in the gap hit a nil handler and was discarded — while
+        // the engine's change token advanced anyway. A discarded DELETE is unrecoverable, because
+        // `fetchAll` only reports what exists. `receiveRemote` keeps the seed-sheet guarantee the
+        // old placement was there to provide, by buffering instead of applying.
+        engine.onRemoteChange = { [weak self] upserts, deletes in
+            Task { @MainActor in self?.receiveRemote(upserts: upserts, deletes: deletes) }
         }
         do { try await engine.start() } catch { status = .unavailable; return }
         status = .syncing
@@ -165,6 +183,9 @@ final class SyncService {
         let remote = pendingRemote
         pendingRemote = []
         if useLocal {
+            // "This device's tin is the real one" — so anything that arrived from the other one
+            // while the question was open is part of what the user just chose to discard.
+            bufferedRemote = []
             let local = await currentRecords()
             let keep = Set(local.map(\.key))
             engine.send(upserts: local, deletes: remote.filter { !keep.contains($0.key) })
@@ -203,6 +224,11 @@ final class SyncService {
         streamTasks.forEach { $0.cancel() }
         streamTasks = []
         hashes = [:]
+        isSubscribed = false
+        // Sync is off. A backlog kept here would be applied against whatever the collection looks
+        // like whenever it is switched on again, which is not a decision this buffer gets to make
+        // — `start()` re-reads the zone from scratch at that point.
+        bufferedRemote = []
         engine?.stop()
     }
 
@@ -210,13 +236,28 @@ final class SyncService {
 
     // MARK: Outbound — diff the streams the repositories already publish
 
+    /// Remote changes from the engine. Applied once subscribed; buffered before that.
+    ///
+    /// Nothing may cross while the seed sheet is up, or a record arriving mid-question merges the
+    /// two collections the user is being asked to choose between — that requirement is why the
+    /// handler used to be attached late. Buffering satisfies it without losing the event.
+    private func receiveRemote(upserts: [SyncRecord], deletes: [SyncRecord]) {
+        guard isSubscribed else { bufferedRemote.append((upserts, deletes)); return }
+        Task { await applyRemote(upserts: upserts, deletes: deletes) }
+    }
+
     private func subscribe() {
         guard streamTasks.isEmpty else { return }
-        // Attached HERE, not in `start()`: while the seed sheet is up nothing may cross in either
-        // direction, or a record arriving mid-question would merge the two collections the user is
-        // being asked to choose between.
-        engine?.onRemoteChange = { [weak self] upserts, deletes in
-            Task { @MainActor in await self?.applyRemote(upserts: upserts, deletes: deletes) }
+        isSubscribed = true
+        // Whatever arrived while the answer was pending, in arrival order.
+        let backlog = bufferedRemote
+        bufferedRemote = []
+        if !backlog.isEmpty {
+            Task { [weak self] in
+                for change in backlog {
+                    await self?.applyRemote(upserts: change.upserts, deletes: change.deletes)
+                }
+            }
         }
         streamTasks.append(Task { [weak self] in
             guard let stream = self?.collection.groupsStream() else { return }

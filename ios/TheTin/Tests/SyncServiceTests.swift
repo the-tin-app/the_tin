@@ -16,9 +16,13 @@ private final class FakeSyncEngine: SyncEngine, @unchecked Sendable {
     var fetchAllError: Error?
     var fetchChangesCalls = 0
 
+    /// Delivered from inside `start()`, reproducing `CKSyncEngine` fetching the moment it exists.
+    var deliverDuringStart: ([SyncRecord], [SyncRecord])?
+
     func start() async throws {
         if let startError { throw startError }
         started = true
+        if let (upserts, deletes) = deliverDuringStart { onRemoteChange?(upserts, deletes) }
     }
     func stop() { started = false }
     func fetchChanges() async { fetchChangesCalls += 1 }
@@ -126,6 +130,30 @@ final class SyncServiceTests: XCTestCase {
         let service = makeService(engine: engine)
         await service.start()
         XCTAssertEqual(service.status, .unavailable)
+    }
+
+    /// A remote event delivered while `start()` is still running must NOT be dropped.
+    ///
+    /// `CKSyncEngine` can fetch the moment it is constructed, and the handler used to be attached
+    /// later, in `subscribe()`. Anything arriving in that gap hit a nil closure and vanished —
+    /// while the engine's change token advanced regardless, so the feed never replayed it, and
+    /// `fetchAll` cannot express a deletion. The record stayed on this device forever.
+    /// Confirmed on two real devices 2026-07-29.
+    func testRemoteDeleteDuringStartIsNotLost() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("doomed"))
+        let engine = FakeSyncEngine()
+        engine.zone = []
+        engine.deliverDuringStart = ([], [SyncRecord(type: .entry, recordName: "doomed",
+                                                     payload: nil)])
+        let service = makeService(engine: engine, collection: collection)
+
+        await service.start()
+        try await settle()
+
+        XCTAssertTrue(collection.entries.isEmpty,
+                      "delete arrived mid-start and must survive to be applied")
     }
 
     /// An unreadable zone is NOT an empty zone. Conflating them let one transient CloudKit error
