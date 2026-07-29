@@ -13,12 +13,14 @@ private final class FakeSyncEngine: SyncEngine, @unchecked Sendable {
     var sentDeletes: [SyncRecord] = []
     var started = false
     var startError: Error?
+    var fetchChangesCalls = 0
 
     func start() async throws {
         if let startError { throw startError }
         started = true
     }
     func stop() { started = false }
+    func fetchChanges() async { fetchChangesCalls += 1 }
     func send(upserts: [SyncRecord], deletes: [SyncRecord]) {
         sentUpserts += upserts
         sentDeletes += deletes
@@ -120,6 +122,45 @@ final class SyncServiceTests: XCTestCase {
         let service = makeService(engine: engine)
         await service.start()
         XCTAssertEqual(service.status, .unavailable)
+    }
+
+    // MARK: Foreground refresh
+
+    /// The foreground catch-up must go through the engine's CHANGE FEED, not another `fetchAll`.
+    /// `fetchAll` reports which records exist, and absence is not a delete — so it structurally
+    /// cannot carry a deletion. Confirmed on device 2026-07-29: a delete on one device survived
+    /// two relaunches on the other, because the feed only fires for push and for local pending
+    /// changes, and a device that merely sat there has neither.
+    func testForegroundRefreshPullsTheChangeFeed() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let engine = FakeSyncEngine()
+        let service = makeService(engine: engine)
+        await service.start()
+        try await settle()
+        // A cold launch must pull the feed too: `fetchAll` carries upserts only, and
+        // `.onChange(of: scenePhase)` never fires for the INITIAL `.active`, so a launch is not
+        // covered by `refresh()`. Without this a remote delete survives the whole session.
+        XCTAssertEqual(engine.fetchChangesCalls, 1, "cold launch must pull the change feed")
+
+        await service.refresh()
+        XCTAssertEqual(engine.fetchChangesCalls, 2, "every foreground pulls it again")
+    }
+
+    /// Before the seed choice is answered there is nothing safe to pull: subscribing the zone into
+    /// a device whose choice is still open merges the two collections the sheet is asking the user
+    /// to pick between. A foreground while that sheet is up must do nothing at all.
+    func testForegroundRefreshDoesNothingBeforeSeeding() async throws {
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("remote1"))]
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("local1"))
+        let service = makeService(engine: engine, collection: collection)
+        await service.start()
+        try await settle()
+
+        XCTAssertNotNil(service.seedPrompt, "precondition: the choice sheet is up")
+        await service.refresh()
+        XCTAssertEqual(engine.fetchChangesCalls, 0)
     }
 
     // MARK: Seeding

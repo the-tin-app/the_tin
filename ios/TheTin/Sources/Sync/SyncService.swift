@@ -116,6 +116,30 @@ final class SyncService {
             await applyRemote(upserts: remote, deletes: [])
         }
         subscribe()
+        // `fetchAll` above carries upserts only, so a cold launch alone can never learn about a
+        // DELETE made elsewhere. `.onChange(of: scenePhase)` does not fire for the INITIAL
+        // `.active` either, so `refresh()` doesn't cover a cold launch — without this line a
+        // record deleted on another device survives until the app is backgrounded and
+        // foregrounded again. Confirmed on device 2026-07-29.
+        await engine.fetchChanges()
+    }
+
+    /// Catch up now — called when the app comes to the foreground.
+    ///
+    /// `CKSyncEngine` fetches on its own only for push and for local pending changes, so a device
+    /// that has merely been sitting there never learns what the other one did. `start()` covers a
+    /// cold launch; this covers every foreground after it, which is the common case (iOS suspends
+    /// rather than terminates).
+    ///
+    /// Goes through the change feed rather than repeating `start()`'s `fetchAll`, because that is
+    /// the only path that carries **deletions** — see `SyncEngine.fetchChanges`.
+    ///
+    /// No-op before seeding: `streamTasks.isEmpty` means `start()` hasn't finished or the seed
+    /// sheet is still up, and pulling the zone into a device whose choice hasn't been made would
+    /// merge the two collections the sheet is asking the user to pick between.
+    func refresh() async {
+        guard AppConfig.syncEnabled, let engine, !streamTasks.isEmpty, seedPrompt == nil else { return }
+        await engine.fetchChanges()
     }
 
     /// The seed sheet's answer. `useLocal` = "this device's tin is the real one".
@@ -364,4 +388,5 @@ final class SyncService {
         for await value in stream { return value }
         return nil
     }
+
 }

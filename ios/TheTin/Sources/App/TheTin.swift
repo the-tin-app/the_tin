@@ -54,8 +54,14 @@ struct TheTin: App {
         .onChange(of: scenePhase) {
             if scenePhase == .background { BackgroundRefresh.scheduleRefresh() }
             // Daily catalogs usually publish while the app sits suspended — catch up on
-            // foreground instead of waiting for the next cold launch.
-            if scenePhase == .active { Task { await model.refreshIfStale() } }
+            // foreground instead of waiting for the next cold launch. The other device's edits
+            // arrive the same way and for the same reason: without push, `CKSyncEngine` fetches
+            // only for push and for local pending changes, so a device that merely sat there
+            // never hears that something was deleted. Both are cheap no-ops when nothing is new.
+            if scenePhase == .active {
+                Task { await model.refreshIfStale() }
+                Task { await model.sync?.refresh() }
+            }
         }
     }
 }

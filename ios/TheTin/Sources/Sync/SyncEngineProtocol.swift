@@ -36,6 +36,17 @@ protocol SyncEngine: AnyObject {
     func send(upserts: [SyncRecord], deletes: [SyncRecord])
     /// Everything currently in the zone. Used once, to decide seeding.
     func fetchAll() async throws -> [SyncRecord]
+    /// Pull the zone's changes NOW, through the engine's own change feed.
+    ///
+    /// This is the only route a **delete** has. `fetchAll` returns the records that exist, so a
+    /// record's absence is all it can offer — and absence is not evidence of a delete (it is
+    /// equally "queued here, not sent yet"), which is why `SyncService` applies upserts only from
+    /// it. The change feed reports deletions explicitly, as deletions.
+    ///
+    /// Without this the feed fires only for push and for local pending changes, so a device with
+    /// neither never learns that anything was deleted. Confirmed on device 2026-07-29: a delete on
+    /// one device survived two relaunches on the other.
+    func fetchChanges() async
 }
 
 /// The real engine.
@@ -105,6 +116,13 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
         lock.withLock { for record in upserts { outbound[record.key] = record } }
         engine.state.add(pendingRecordZoneChanges:
             upserts.map { .saveRecord(recordID($0)) } + deletes.map { .deleteRecord(recordID($0)) })
+    }
+
+    /// Deliberately swallows: a refresh that can't reach the network is not an error the user did
+    /// anything about, and the delegate reports real trouble through `onStatus` anyway. The engine
+    /// keeps its own change token, so the next successful call resumes exactly where this left off.
+    func fetchChanges() async {
+        try? await engine?.fetchChanges()
     }
 
     func fetchAll() async throws -> [SyncRecord] {
