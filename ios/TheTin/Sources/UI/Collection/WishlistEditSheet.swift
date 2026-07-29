@@ -84,7 +84,19 @@ struct WishlistEditSheet: View {
 
     @ViewBuilder private var huntingSection: some View {
         Section {
-            Toggle("Hunting", isOn: $hunting)
+            Toggle("Hunting", isOn: Binding(
+                get: { hunting },
+                set: { on in
+                    hunting = on
+                    if on {
+                        // Switching on by hand always starts a fresh window. `load()` assigns
+                        // `hunting` directly, so it never routes through here and a stored
+                        // deadline survives a reopen.
+                        existingUntil = nil
+                        if budget == nil { targetFocused = true }
+                    }
+                }
+            ))
             if hunting {
                 Picker("Condition floor", selection: $minCondition) {
                     ForEach(Self.floors) { Text(floorLabel($0)).tag($0) }
@@ -106,12 +118,6 @@ struct WishlistEditSheet: View {
                 Text("Set a price target above — a hunt needs a budget to watch against.")
             } else if hunting {
                 Text("Shows this card under Wanted → Hunting with a one-tap search.")
-            }
-        }
-        .onChange(of: hunting) { _, on in
-            if on {
-                existingUntil = nil                 // switching on always starts a fresh window
-                if budget == nil { targetFocused = true }
             }
         }
         .onChange(of: window) { _, _ in existingUntil = nil }

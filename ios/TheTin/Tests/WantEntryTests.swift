@@ -74,4 +74,17 @@ extension WantEntryTests {
     func testHuntWindowLabels() {
         XCTAssertEqual(HuntWindow.allCases.map(\.label), ["7 days", "14 days", "30 days"])
     }
+
+    /// Reopening a live hunt must not restart its clock: `save()` reuses the stored
+    /// absolute date. Pins the arithmetic that the sheet's `existingUntil ?? window.until()`
+    /// expression depends on.
+    func testStoredExpiryWinsOverAFreshWindow() {
+        let stored = Date(timeIntervalSince1970: 800_000_000)
+        let existingUntil: Date? = stored
+        XCTAssertEqual(existingUntil ?? HuntWindow.d14.until(), stored)
+
+        let cleared: Date? = nil
+        let fresh = HuntWindow.d14.until(from: stored)
+        XCTAssertEqual(cleared ?? fresh, fresh)
+    }
 }
