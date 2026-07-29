@@ -32,6 +32,10 @@ struct RemoteImage: View {
 /// Shared by the per-set section (`SetDetailView`) and the global `SealedListView`.
 struct SealedCard: View {
     let product: SealedProduct
+    /// Present to offer "Add to tin". nil in contexts with no collection (previews) — the tile
+    /// then reads exactly as it did before sealed became ownable.
+    var collection: CollectionModel? = nil
+    @State private var adding = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -49,6 +53,31 @@ struct SealedCard: View {
             if let low = product.lowUsd {
                 Text("low \(low, format: .currency(code: "USD"))")
                     .font(.caption2).foregroundStyle(.secondary)
+            }
+            // The only way into the tin in v1. Sealed isn't in catalog search or the scanner, so
+            // the per-set section is the single discovery surface and this is where the door goes.
+            if collection != nil {
+                Button { adding = true } label: {
+                    Label("Add to tin", systemImage: "plus")
+                        .font(.caption2)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .padding(.top, 2)
+            }
+        }
+        .contextMenu {
+            if collection != nil {
+                Button { adding = true } label: {
+                    Label("Add to tin…", systemImage: "plus.square.on.square")
+                }
+            }
+        }
+        .sheet(isPresented: $adding) {
+            if let collection {
+                NavigationStack {
+                    SealedEntryFormView(product: product) { await collection.saveSealed($0) }
+                }
             }
         }
     }
