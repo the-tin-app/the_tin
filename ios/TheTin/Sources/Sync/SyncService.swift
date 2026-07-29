@@ -107,7 +107,13 @@ final class SyncService {
             seedPrompt = SeedPrompt(localCount: localCount, remoteCount: remoteCount)
             return
         case .none:
-            break
+            // Already seeded — but the records just fetched must still be applied, not dropped.
+            // `automaticallySync` only reacts to LOCAL pending changes and to push; a device with
+            // neither never fetches on its own, so without this a card added elsewhere never
+            // arrives, even across relaunches. Upserts only: a record missing from the zone is not
+            // evidence of a delete here, and treating it as one would erase anything this device
+            // has queued but not yet sent. Observed on device 2026-07-29.
+            await applyRemote(upserts: remote, deletes: [])
         }
         subscribe()
     }

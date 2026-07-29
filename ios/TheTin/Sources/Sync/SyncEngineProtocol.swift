@@ -61,6 +61,15 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
     /// Records handed to `send` but not yet written, keyed by CloudKit record name, so
     /// `nextRecordZoneChangeBatch` can materialise a `CKRecord` on demand.
     private var outbound: [String: SyncRecord] = [:]
+    /// Whether anything failed during the sync cycle currently in flight. Reset when a cycle
+    /// opens, so `didFetchChanges`/`didSendChanges` can close it as `.synced` or `.failed`
+    /// without overwriting a failure that has already been reported.
+    private var cycleFailed = false
+    /// The server's own `CKRecord` per record name, as last seen. A save must be built from this
+    /// when it exists: CloudKit rejects a save whose change tag it doesn't recognise, and a record
+    /// constructed from scratch has no tag at all. Populated from fetches, successful saves, and
+    /// the `serverRecord` attached to a `.serverRecordChanged` failure.
+    private var serverRecords: [String: CKRecord] = [:]
     private let lock = NSLock()
 
     init(containerIdentifier: String = "iCloud.ai.reyes.thetin",
@@ -104,9 +113,11 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
         while true {
             do {
                 let changes = try await database.recordZoneChanges(inZoneWith: zoneID, since: token)
-                records += changes.modificationResultsByID.values
-                    .compactMap { try? $0.get().record }
-                    .compactMap(Self.syncRecord)
+                let fetched = changes.modificationResultsByID.values.compactMap { try? $0.get().record }
+                // Cache the change tags now, so the seeding save that follows succeeds first time
+                // instead of always costing a `.serverRecordChanged` round trip.
+                lock.withLock { for ck in fetched { serverRecords[ck.recordID.recordName] = ck } }
+                records += fetched.compactMap(Self.syncRecord)
                 guard changes.moreComing else { return records }
                 token = changes.changeToken
             } catch let error as CKError
@@ -123,6 +134,12 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
         case .stateUpdate(let update):
             defaults.set(try? JSONEncoder().encode(update.stateSerialization), forKey: Self.stateKey)
         case .fetchedRecordZoneChanges(let changes):
+            // Keep the server's copy: a CKRecord carries a change tag, and a save built from
+            // scratch has none — which CloudKit rejects as `.serverRecordChanged`.
+            lock.withLock {
+                for m in changes.modifications { serverRecords[m.record.recordID.recordName] = m.record }
+                for d in changes.deletions { serverRecords[d.recordID.recordName] = nil }
+            }
             let upserts = changes.modifications.compactMap { Self.syncRecord($0.record) }
             let deletes = changes.deletions.compactMap {
                 Self.syncRecord(recordName: $0.recordID.recordName, type: $0.recordType)
@@ -130,14 +147,38 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
             if !upserts.isEmpty || !deletes.isEmpty { onRemoteChange?(upserts, deletes) }
         case .sentRecordZoneChanges(let sent):
             lock.withLock {
-                for saved in sent.savedRecords { outbound[saved.recordID.recordName] = nil }
+                for saved in sent.savedRecords {
+                    outbound[saved.recordID.recordName] = nil
+                    serverRecords[saved.recordID.recordName] = saved
+                }
             }
-            onStatus?(sent.failedRecordSaves.isEmpty ? .synced(Date()) : .failed)
+            // Last-writer-wins, actually implemented. A save built without the server's change tag
+            // comes back as `.serverRecordChanged` carrying that server record; adopt it, stamp our
+            // payload onto it, and re-queue. Without this the record NEVER syncs — it just fails
+            // forever — which is what "use this device" hit on every record the other device had
+            // already written (observed on device 2026-07-29).
+            var retry: [CKSyncEngine.PendingRecordZoneChange] = []
+            for failure in sent.failedRecordSaves {
+                let id = failure.record.recordID
+                guard let ck = failure.error.serverRecord else { continue }
+                lock.withLock { serverRecords[id.recordName] = ck }
+                retry.append(.saveRecord(id))
+            }
+            let unresolved = sent.failedRecordSaves.count - retry.count
+            lock.withLock { cycleFailed = unresolved > 0 }
+            if !retry.isEmpty { syncEngine.state.add(pendingRecordZoneChanges: retry) }
+            onStatus?(unresolved > 0 ? .failed : .synced(Date()))
         case .accountChange:
             // Signed out or switched Apple ID: local files keep working, sync goes quiet.
             onStatus?(.unavailable)
         case .willSendChanges, .willFetchChanges:
+            lock.withLock { cycleFailed = false }
             onStatus?(.syncing)
+        // A cycle with nothing to send never emits `sentRecordZoneChanges`, and once the zone is
+        // seeded that is the steady state — so without closing the cycle here, the first idle
+        // fetch latches the UI on "Syncing…" forever. Observed on device 2026-07-29.
+        case .didSendChanges, .didFetchChanges:
+            onStatus?(lock.withLock { cycleFailed } ? .failed : .synced(Date()))
         default:
             break
         }
@@ -147,9 +188,12 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
                                    syncEngine: CKSyncEngine) async -> CKSyncEngine.RecordZoneChangeBatch? {
         let pending = syncEngine.state.pendingRecordZoneChanges.filter(context.options.scope.contains)
         return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { [weak self] id in
-            guard let self, let record = self.lock.withLock({ self.outbound[id.recordName] })
-            else { return nil }
-            return Self.ckRecord(record, zoneID: self.zoneID)
+            guard let self else { return nil }
+            let (record, base) = self.lock.withLock {
+                (self.outbound[id.recordName], self.serverRecords[id.recordName])
+            }
+            guard let record else { return nil }
+            return Self.ckRecord(record, zoneID: self.zoneID, base: base)
         }
     }
 
@@ -159,9 +203,12 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
         CKRecord.ID(recordName: record.key, zoneID: zoneID)
     }
 
-    private static func ckRecord(_ record: SyncRecord, zoneID: CKRecordZone.ID) -> CKRecord {
-        let ck = CKRecord(recordType: record.type.rawValue,
-                          recordID: CKRecord.ID(recordName: record.key, zoneID: zoneID))
+    /// `base` is the server's copy when we have one. Mutating it preserves the change tag, which is
+    /// what makes overwriting an existing record succeed instead of failing `.serverRecordChanged`.
+    private static func ckRecord(_ record: SyncRecord, zoneID: CKRecordZone.ID,
+                                 base: CKRecord? = nil) -> CKRecord {
+        let ck = base ?? CKRecord(recordType: record.type.rawValue,
+                                  recordID: CKRecord.ID(recordName: record.key, zoneID: zoneID))
         ck["payload"] = record.payload as CKRecordValue?
         return ck
     }
