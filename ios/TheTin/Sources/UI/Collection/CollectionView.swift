@@ -752,6 +752,7 @@ struct CollectionView: View {
     @State private var destroyingGroup: CardGroup?
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
+    @State private var editingSealed: SealedEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var searchIndex = CardSearchIndex()
 
@@ -771,6 +772,10 @@ struct CollectionView: View {
                     ForEach(model.groups) { group in
                         groupRow(group).tinRow()
                     }
+                    // Also on the empty branch: a tin holding only sealed products owns no CARDS,
+                    // which is what this branch is about — but it isn't empty, and hiding what
+                    // you do own behind a "your tin is empty" screen would read as data loss.
+                    sealedSection
                     if let wants, !wants.wanted.isEmpty { wishlistLink(wants).tinRow() }
                 } else {
                     header.tinRow()
@@ -784,6 +789,7 @@ struct CollectionView: View {
                         Task { await model.reorderGroups(ids: ids) }
                     }
                     newDividerRow.tinRow()
+                    sealedSection
                     if let wants { wishlistLink(wants).tinRow() }
                     // Not on the empty branch: with no entries there is nothing to trade, so the
                     // row would only be a promise the tin can't keep — same rule as the wishlist.
@@ -949,6 +955,15 @@ struct CollectionView: View {
                                   conditions: model.conditionsByCard[entry.cardId] ?? [],
                                   matrix: model.matrixByCard[entry.cardId] ?? []) { updated in
                         await model.saveEntry(updated)
+                    }
+                }
+            }
+        }
+        .sheet(item: $editingSealed) { entry in
+            if let product = model.sealedProduct(entry) {
+                NavigationStack {
+                    SealedEntryFormView(product: product, existing: entry) {
+                        await model.saveSealed($0)
                     }
                 }
             }
@@ -1140,6 +1155,37 @@ struct CollectionView: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+
+    /// Sealed products you own, as a section beside the dividers. Rendered straight into the List
+    /// (not wrapped in a container) so each row keeps its own swipe actions.
+    ///
+    /// Hidden entirely when empty — an empty section advertising a feature you aren't using is
+    /// noise, and sealed is a feature most collectors will never touch.
+    @ViewBuilder private var sealedSection: some View {
+        if !model.sealed.isEmpty {
+            SealedSectionHeader(value: model.sealedValue).tinRow()
+            ForEach(model.sealed) { entry in
+                SealedRow(entry: entry, product: model.sealedProduct(entry))
+                    .tinRow()
+                    .contentShape(Rectangle())
+                    .onTapGesture { editingSealed = entry }
+                    // Reveal-then-tap IS the confirmation, and no full swipe, so it can't fire by
+                    // accident — the same rule the tin's card rows follow.
+                    .swipeActions(allowsFullSwipe: false) {
+                        Button("Remove", role: .destructive) {
+                            Task { await model.deleteSealed(id: entry.id) }
+                        }
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button { editingSealed = entry } label: { Label("Edit", systemImage: "pencil") }
+                    }
+                    .accessibilityAction(named: "Edit") { editingSealed = entry }
+                    .accessibilityAction(named: "Remove") {
+                        Task { await model.deleteSealed(id: entry.id) }
+                    }
+            }
+        }
     }
 
     /// Whole-tin search: "do I own this?" answered from the Tin root — a card-shop moment,
