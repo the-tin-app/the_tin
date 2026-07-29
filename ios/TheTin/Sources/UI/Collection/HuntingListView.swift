@@ -91,7 +91,8 @@ struct HuntingListView: View {
                 }
                 if let url = Self.huntURL(card: card, entry: entry,
                                           setName: setsById[card.setId]?.name,
-                                          printedTotal: printedTotalBySet[card.setId]) {
+                                          printedTotal: printedTotalBySet[card.setId],
+                                          marketUsd: market) {
                     Link(destination: url) {
                         Label("Find one on eBay", systemImage: "magnifyingglass")
                             .font(.subheadline)
@@ -110,13 +111,14 @@ struct HuntingListView: View {
     /// wiring is testable without a view host. The denominator is the highest-value token in
     /// the query and reached production as `nil` once already; it needs a test that can fail.
     static func huntURL(card: CardRecord, entry: WantEntry?, setName: String?,
-                        printedTotal: Int?) -> URL? {
+                        printedTotal: Int?, marketUsd: Double? = nil) -> URL? {
         guard entry?.hunt != nil else { return nil }
         return MarketplaceLinks.ebayHunt(
             name: card.name,
             setName: setName,
             number: card.number,
             total: MarketplaceLinks.denominator(number: card.number, printedTotal: printedTotal),
-            maxUsd: entry?.targetUsd)
+            maxUsd: entry?.targetUsd,
+            marketUsd: marketUsd)
     }
 }

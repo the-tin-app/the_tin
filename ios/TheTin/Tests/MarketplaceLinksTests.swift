@@ -56,12 +56,15 @@ extension MarketplaceLinksTests {
         XCTAssertEqual(MarketplaceLinks.huntNegativeKeywords,
                        ["proxy", "repro", "reproduction", "custom", "fake", "digital",
                         "lot", "bundle", "playtest", "orica", "metal", "sticker",
-                        "fan art", "fanart"])
+                        "fan art", "fanart",
+                        "keychain", "magnet", "novelty", "jumbo", "display", "wooden",
+                        "gold foil"])
         let q = try nkw(MarketplaceLinks.ebayHunt(name: "Charizard", setName: "Base Set",
                                                   number: "4", total: "102", maxUsd: nil))
         XCTAssertEqual(q, "Charizard 4/102 Base Set -proxy -repro -reproduction -custom -fake "
                         + "-digital -lot -bundle -playtest -orica -metal -sticker "
-                        + "-\"fan art\" -fanart")
+                        + "-\"fan art\" -fanart -keychain -magnet -novelty -jumbo -display "
+                        + "-wooden -\"gold foil\"")
     }
 
     /// A phrase negative must reach eBay QUOTED. Bare `-fan art` is parsed as `-fan AND art`:
@@ -137,6 +140,51 @@ extension MarketplaceLinksTests {
                                                     total: nil, maxUsd: nil))
         XCTAssertEqual(i.first { $0.name == "LH_BIN" }?.value, "1")
         XCTAssertEqual(i.first { $0.name == "_sop" }?.value, "15")
+    }
+
+    /// The literal id, not the constant, for the same reason the keyword list is asserted
+    /// literally: a wrong `_sacat` returns the wrong listings SILENTLY. 183454 is CCG Individual
+    /// Cards, verified against live eBay 2026-07-29 — without it the top hit for Charizard 4/102
+    /// was a $4.44 keychain, with it a $44.64 card.
+    func testHuntIsScopedToTheSingleCardsCategory() throws {
+        let i = try items(MarketplaceLinks.ebayHunt(name: "Pikachu", setName: nil, number: "25",
+                                                    total: nil, maxUsd: nil))
+        XCTAssertEqual(i.first { $0.name == "_sacat" }?.value, "183454")
+    }
+
+    /// A counterfeit doesn't say so in its title, so the price is the only signal. A $12 listing
+    /// for a $250 card is not a bargain.
+    func testHuntFloorsThePriceAtAFractionOfMarket() throws {
+        let i = try items(MarketplaceLinks.ebayHunt(name: "Charizard", setName: nil, number: "4",
+                                                    total: nil, maxUsd: 300, marketUsd: 250))
+        XCTAssertEqual(i.first { $0.name == "_udlo" }?.value, "62.50")
+    }
+
+    /// No market price, no floor — a guessed one is worse than none. Cards priced only in EUR
+    /// or only as graded reach here with a nil raw price.
+    func testHuntHasNoFloorWithoutAMarketPrice() throws {
+        let i = try items(MarketplaceLinks.ebayHunt(name: "Charizard", setName: nil, number: "4",
+                                                    total: nil, maxUsd: 300, marketUsd: nil))
+        XCTAssertNil(i.first { $0.name == "_udlo" })
+    }
+
+    /// The floor must never cross the budget. Hunting well below market is the normal case, and
+    /// `_udlo > _udhi` returns an empty page that reads as "none exist" — the exact lie about the
+    /// market that the missing-ceiling rule above exists to prevent. The user's number wins.
+    func testHuntDropsTheFloorWhenItWouldReachTheBudget() throws {
+        let i = try items(MarketplaceLinks.ebayHunt(name: "Charizard", setName: nil, number: "4",
+                                                    total: nil, maxUsd: 50, marketUsd: 250))
+        XCTAssertNil(i.first { $0.name == "_udlo" }, "floor $62.50 above a $50 budget: empty page")
+        XCTAssertEqual(i.first { $0.name == "_udhi" }?.value, "50")
+    }
+
+    /// Boundary: equal is still empty-ish, so equal must drop too.
+    func testHuntPriceFloorRules() {
+        XCTAssertEqual(MarketplaceLinks.priceFloor(marketUsd: 250, maxUsd: 300), 62.5)
+        XCTAssertEqual(MarketplaceLinks.priceFloor(marketUsd: 250, maxUsd: nil), 62.5)
+        XCTAssertNil(MarketplaceLinks.priceFloor(marketUsd: 250, maxUsd: 62.5))
+        XCTAssertNil(MarketplaceLinks.priceFloor(marketUsd: 0, maxUsd: 300))
+        XCTAssertNil(MarketplaceLinks.priceFloor(marketUsd: nil, maxUsd: 300))
     }
 
     /// The budget is the price ceiling. No budget means no ceiling — NOT a ceiling of 0,

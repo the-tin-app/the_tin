@@ -31,6 +31,11 @@ enum MarketplaceLinks {
         "proxy", "repro", "reproduction", "custom", "fake", "digital",
         "lot", "bundle", "playtest", "orica", "metal", "sticker",
         "fan art", "fanart",
+        // Merchandise wearing the card's name. Every one of these was observed at the top of a
+        // live Charizard 4/102 hunt on 2026-07-29: novelty keychains, a fridge magnet, a wooden
+        // jumbo, and a "gold foil display card". They are not cards, they clear every filter
+        // above, and being cheap they sort to the very top of a cheapest-first search.
+        "keychain", "magnet", "novelty", "jumbo", "display", "wooden", "gold foil",
     ]
 
     /// The `total` to hand `ebayHunt`, from a set's **printed** total (`CatalogStore.printedTotal`,
@@ -50,9 +55,17 @@ enum MarketplaceLinks {
     /// listings excluded. This is the part of Hunting that only The Tin can build — it is
     /// the only thing that holds the printing, the number and the set together.
     ///
-    /// Deliberately carries NO `_sacat` category filter: a wrong category id returns the
-    /// wrong listings silently instead of erroring, and the name + number + negatives
-    /// already scope this hard. Add one only after verifying it against live eBay by hand.
+    /// Scoped to `_sacat=183454` (CCG Individual Cards). This was deliberately absent until
+    /// **verified against live eBay by hand on 2026-07-29** — a wrong category id returns the
+    /// wrong listings silently instead of erroring, so it could not be adopted on reasoning.
+    /// What the check showed: without it a Charizard 4/102 hunt opened on a $4.44 novelty
+    /// keychain; with it, on a $44.64 card. It does structurally what the merch negatives below
+    /// do by keyword, and the negatives stay anyway because the category is a *seller-declared*
+    /// field and miscategorised junk is exactly the junk that reaches the top of a cheap sort.
+    ///
+    /// `_udlo` floors the price at a fraction of what the card is actually worth — see
+    /// `priceFloor`. Counterfeits don't say they're counterfeits, so no keyword can catch them;
+    /// the price is the only tell, and The Tin is the rare tool that already knows it.
     ///
     /// No printing qualifier either — a wishlist entry has no printing, only a card id, and
     /// where the catalog separates printings it separates them BY id. There is nothing to
@@ -61,8 +74,35 @@ enum MarketplaceLinks {
     /// `minCondition` is deliberately absent: eBay's condition aspects are inconsistently
     /// populated on singles, so filtering on them loses real listings. It stays a display
     /// fact on the Hunting row.
+    /// eBay's "CCG Individual Cards" category — singles only, so merchandise bearing a card's
+    /// name (keychains, magnets, fridge art) is out of scope structurally.
+    static let ebayCardCategory = "183454"
+
+    /// A listing under this fraction of the card's market price is a counterfeit or a novelty,
+    /// not a bargain. Low enough that a genuinely beaten-up copy still clears it: a heavily
+    /// played Base Set Charizard trades around a third of a clean one, and 0.25 sits under that.
+    static let huntPriceFloorFraction = 0.25
+
+    /// The `_udlo` floor, or nil when there shouldn't be one.
+    ///
+    /// Two ways this must refuse to act, both because an over-tight band returns an empty page
+    /// that reads as "none exist" — a lie about the market, and the same failure the `_udhi`
+    /// note below guards against:
+    /// - **No market price** (EUR-only or graded-only cards) — there is nothing to take a
+    ///   fraction of, and a guessed floor is worse than none.
+    /// - **The floor reaching the user's budget.** Hunting far below market is a legitimate,
+    ///   common thing to do; `_udlo > _udhi` guarantees zero results. The budget is the user's
+    ///   explicit instruction and the floor is our heuristic, so the instruction wins and the
+    ///   floor is dropped — they asked for cheap, they get cheap, fakes included.
+    static func priceFloor(marketUsd: Double?, maxUsd: Double?) -> Double? {
+        guard let marketUsd, marketUsd > 0 else { return nil }
+        let floor = marketUsd * huntPriceFloorFraction
+        if let maxUsd, floor >= maxUsd { return nil }
+        return floor
+    }
+
     static func ebayHunt(name: String, setName: String?, number: String, total: String?,
-                         maxUsd: Double?) -> URL {
+                         maxUsd: Double?, marketUsd: Double? = nil) -> URL {
         let collector = total.map { "\(number)/\($0)" } ?? number
         let positives = [name, collector, setName].compactMap { $0 }
         // A negative that appears in a POSITIVE term cancels the query it belongs to:
@@ -84,12 +124,16 @@ enum MarketplaceLinks {
         var c = URLComponents(string: "https://www.ebay.com/sch/i.html")!
         var items = [
             URLQueryItem(name: "_nkw", value: (positives + negatives).joined(separator: " ")),
+            URLQueryItem(name: "_sacat", value: ebayCardCategory),  // singles, not merchandise
             URLQueryItem(name: "LH_BIN", value: "1"),   // buy it now — an auction isn't a decision
             URLQueryItem(name: "_sop", value: "15"),    // price + shipping, lowest first
         ]
         // No budget means no ceiling. A `_udhi` of 0 would return an empty page that reads
         // as "none exist", which is a lie about the market.
         if let maxUsd { items.append(URLQueryItem(name: "_udhi", value: money(maxUsd))) }
+        if let floor = priceFloor(marketUsd: marketUsd, maxUsd: maxUsd) {
+            items.append(URLQueryItem(name: "_udlo", value: money(floor)))
+        }
         c.queryItems = items
         return c.url!
     }
