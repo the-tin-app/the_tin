@@ -4,7 +4,7 @@ import Observation
 /// One backup file's contents: the whole owned collection + wishlist, reusing the models'
 /// existing Codable conformances verbatim. `schemaVersion` gates future migrations.
 struct BackupSnapshot: Codable, Equatable {
-    var schemaVersion: Int = 3
+    var schemaVersion: Int = 4
     var exportedAt: Date
     var groups: [CardGroup]
     var entries: [CollectionEntry]
@@ -16,6 +16,10 @@ struct BackupSnapshot: Codable, Equatable {
     /// decodes with this nil, and `performRestore` then leaves local goals alone rather than
     /// clearing them from a file that never knew about them.
     var setGoals: [String]? = nil
+    /// v4: the sealed products you own. Optional + defaulted for the same reason as the two above
+    /// — a v3 backup decodes with this nil, and `performRestore` then leaves local sealed alone
+    /// rather than clearing it from a file that never knew about it.
+    var sealed: [SealedEntry]? = nil
 }
 
 /// Why a backup read failed. Manual restore surfaces these; auto-restore treats all as absent.
@@ -205,12 +209,14 @@ final class BackupService {
         var groups: [CardGroup] = []
         var entries: [CollectionEntry] = []
         var wantMap: [String: WantEntry] = [:]
+        var sealed: [SealedEntry] = []
         for await v in collection.groupsStream() { groups = v; break }
         for await v in collection.entriesStream() { entries = v; break }
+        for await v in collection.sealedStream() { sealed = v; break }
         for await v in wants.stream(uid: uid) { wantMap = v; break }
         return BackupSnapshot(exportedAt: now(), groups: groups, entries: entries,
                               wanted: wantMap.keys.sorted(), wantEntries: wantMap,
-                              setGoals: setGoals?.setIds.sorted())
+                              setGoals: setGoals?.setIds.sorted(), sealed: sealed)
     }
 
     // MARK: Reading
@@ -281,12 +287,15 @@ final class BackupService {
     /// whatever the file on disk holds now (a debounced auto-backup can swap it in between).
     /// Throws BackupError so the manual Settings path can surface what went wrong.
     func performRestore(snapshot: BackupSnapshot) async throws {
-        // `replaceAll` rewrites the whole file, so sealed has to be handed back to it explicitly
-        // or a restore would silently destroy every sealed product on the device.
-        var sealed: [SealedEntry] = []
-        for await v in collection.sealedStream() { sealed = v; break }
+        // nil = a pre-v4 backup, which says nothing about sealed; keep whatever is on the device.
+        // `replaceAll` rewrites the whole file, so falling through with an empty array here would
+        // silently destroy every sealed product on it — the same trap `setGoals` documents below.
+        var sealed = snapshot.sealed
+        if sealed == nil {
+            for await v in collection.sealedStream() { sealed = v; break }
+        }
         try await collection.replaceAll(groups: snapshot.groups, entries: snapshot.entries,
-                                        sealed: sealed)
+                                        sealed: sealed ?? [])
         let restoredWants = snapshot.wantEntries
             ?? Dictionary(uniqueKeysWithValues: snapshot.wanted.map { ($0, WantEntry()) })
         try await wants.save(uid: uid, entries: restoredWants)

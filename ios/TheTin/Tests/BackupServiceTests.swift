@@ -80,7 +80,7 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(service.status, .backedUp(fixedNow))
 
         let snapshot = try await service.loadBackup()
-        XCTAssertEqual(snapshot.schemaVersion, 3)
+        XCTAssertEqual(snapshot.schemaVersion, 4)
         XCTAssertEqual(snapshot.setGoals, ["base1"])
         XCTAssertEqual(snapshot.exportedAt, fixedNow)
         XCTAssertEqual(snapshot.groups.map(\.id), [gid])
@@ -253,6 +253,55 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(goals.setIds, ["base1"])
         let restoredWants = await firstValue(wants.stream(uid: "local")) ?? [:]
         XCTAssertEqual(Set(restoredWants.keys), ["a1"])
+    }
+
+    // MARK: Sealed products (schema v4)
+
+    /// A v3 backup file has no `sealed` key. It must still decode (as nil), and restoring it must
+    /// leave the device's own sealed products alone rather than wiping them — the same rule
+    /// `setGoals` earns, and the reason both are real Optionals.
+    func testV3BackupDecodesAndLeavesSealedUntouched() async throws {
+        let v3JSON = """
+        {"schemaVersion":3,"exportedAt":"2023-11-14T22:13:20Z","groups":[],"entries":[],
+         "wanted":[],"setGoals":[]}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let snapshot = try decoder.decode(BackupSnapshot.self, from: v3JSON)
+        XCTAssertEqual(snapshot.schemaVersion, 3)
+        XCTAssertNil(snapshot.sealed)
+
+        let (col, wants) = try makeRepos(sub: "deviceV3")
+        try await col.addSealed(SealedEntry(id: "mine", productId: 517_898, qty: 2,
+                                            pricePaid: 900, addedAt: fixedNow))
+        try await makeService(collection: col, wants: wants).performRestore(snapshot: snapshot)
+
+        let sealed = await firstValue(col.sealedStream()) ?? []
+        XCTAssertEqual(sealed.map(\.id), ["mine"], "a v3 backup says nothing about sealed")
+        XCTAssertEqual(sealed.first?.pricePaid, 900)
+    }
+
+    /// A v4 backup carries sealed, and restoring it replaces what's on the device — last writer
+    /// wins, exactly as it does for cards.
+    func testV4BackupCapturesAndRestoresSealed() async throws {
+        let (colA, wantsA) = try makeRepos(sub: "sealedA")
+        try await colA.addSealed(SealedEntry(id: "s1", productId: 517_898, qty: 3, pricePaid: 1350,
+                                             acquiredFrom: "card show", addedAt: fixedNow))
+        await makeService(collection: colA, wants: wantsA).backUpNow()
+
+        let written = try await makeService(collection: colA, wants: wantsA).loadBackup()
+        XCTAssertEqual(written.schemaVersion, 4)
+        XCTAssertEqual(written.sealed?.map(\.id), ["s1"])
+
+        let (colB, wantsB) = try makeRepos(sub: "sealedB")
+        try await colB.addSealed(SealedEntry(id: "replaced", productId: 1, qty: 1, addedAt: fixedNow))
+        try await makeService(collection: colB, wants: wantsB).performRestore(snapshot: written)
+
+        let restored = await firstValue(colB.sealedStream()) ?? []
+        XCTAssertEqual(restored.map(\.id), ["s1"])
+        XCTAssertEqual(restored.first?.qty, 3)
+        XCTAssertEqual(restored.first?.pricePaid, 1350)
+        XCTAssertEqual(restored.first?.acquiredFrom, "card show")
     }
 
     /// Chasing a set is a backup-worthy change on its own — it must arm the debounce even when

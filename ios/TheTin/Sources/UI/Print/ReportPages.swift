@@ -13,28 +13,139 @@ enum ReportPages {
 
     @MainActor
     static func build(rows: [ReportRow], totals: ReportTotals, subtotals: [DividerSubtotal],
-                      images: [String: UIImage], asOf: String?, contact: String?) -> [SheetPage<AnyView>] {
+                      images: [String: UIImage], asOf: String?, contact: String?,
+                      sealed: [SealedReportRow] = []) -> [SheetPage<AnyView>] {
         let generated = Date.now.formatted(date: .long, time: .omitted)
         let rowChunks = rows.chunked(into: rowsPerPage)
+        // Sealed pages sit between the cards and the divider appendix — after the cards, because
+        // that is the inventory the document is mostly about, and before the appendix, because the
+        // appendix closes the report with the grand totals.
+        let sealedChunks = sealed.isEmpty ? [] : sealed.chunked(into: sealedRowsPerPage)
         let subChunks = subtotals.isEmpty ? [[]] : subtotals.chunked(into: subtotalsPerPage)
-        let total = 1 + rowChunks.count + subChunks.count
+        let total = 1 + rowChunks.count + sealedChunks.count + subChunks.count
 
         func page(_ n: Int, _ body: @escaping () -> AnyView) -> SheetPage<AnyView> {
             SheetPage(title: "Collection Report", subtitle: generated, contact: contact,
                       pageNumber: n, pageCount: total, asOf: asOf, content: body)
         }
 
-        var pages = [page(1) { AnyView(ReportCoverBody(totals: totals, asOf: asOf)) }]
+        var pages = [page(1) { AnyView(ReportCoverBody(totals: totals, asOf: asOf, sealed: sealed)) }]
         for (i, chunk) in rowChunks.enumerated() {
             pages.append(page(2 + i) { AnyView(ReportTableBody(rows: chunk, images: images)) })
         }
-        for (i, chunk) in subChunks.enumerated() {
+        for (i, chunk) in sealedChunks.enumerated() {
             pages.append(page(2 + rowChunks.count + i) {
+                AnyView(ReportSealedBody(rows: chunk,
+                                         total: sealed.compactMap(\.currentValue).reduce(0, +),
+                                         boxes: sealed.reduce(0) { $0 + $1.qty },
+                                         showTotals: i == sealedChunks.count - 1))
+            })
+        }
+        for (i, chunk) in subChunks.enumerated() {
+            pages.append(page(2 + rowChunks.count + sealedChunks.count + i) {
                 AnyView(ReportAppendixBody(subtotals: chunk, totals: totals,
                                            showTotals: i == subChunks.count - 1))
             })
         }
         return pages
+    }
+
+    /// Sealed rows are text-only (no thumbnail column), so more fit on a page than card rows.
+    static let sealedRowsPerPage = 22
+}
+
+/// The sealed inventory: one table section after the cards, with its own subtotal.
+///
+/// Its own section rather than extra rows in the card table, for the same reason sealed is its own
+/// section in the tin: the card table's CARD/DETAIL/QTY columns describe a printing, a condition
+/// and a grade, none of which a shrink-wrapped box has.
+struct ReportSealedBody: View {
+    let rows: [SealedReportRow]
+    let total: Double
+    let boxes: Int
+    let showTotals: Bool      // true only on the final sealed page
+
+    private static let zebra = Color(white: 0.949)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Sealed products").font(.system(size: 13, weight: .bold))
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.bottom, 8)
+            headerRow
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                tableRow(row).background(index.isMultiple(of: 2) ? Self.zebra : Color.clear)
+            }
+            if showTotals {
+                HStack(spacing: 6) {
+                    Text("Sealed total").font(.system(size: 11, weight: .bold))
+                    Spacer()
+                    Text("\(boxes) box\(boxes == 1 ? "" : "es")").font(.system(size: 11))
+                        .frame(width: 70, alignment: .trailing)
+                    Text(total.formatted(.currency(code: "USD")))
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(width: 80, alignment: .trailing)
+                }
+                .padding(.vertical, 5)
+                // Sealed products carry a market price and no price history, so they are valued
+                // but never charted. Stated here because an insurance document must not leave the
+                // reader to infer which numbers cover what.
+                Text("Sealed products are valued at market price; they have no price history.")
+                    .font(.system(size: 9)).foregroundStyle(.black.opacity(0.6))
+                    .padding(.top, 4)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var headerRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("PRODUCT").font(.system(size: 7, weight: .semibold))
+                .foregroundStyle(.black.opacity(0.6))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            head("QTY", width: 22, alignment: .trailing)
+            head("ACQUIRED", width: 56)
+            head("FROM", width: 70)
+            head("PAID", width: 54, alignment: .trailing)
+            head("VALUE", width: 58, alignment: .trailing)
+        }
+        .padding(.bottom, 2)
+        .overlay(alignment: .bottom) { Rectangle().fill(.black).frame(height: 0.8) }
+    }
+
+    private func head(_ s: String, width: CGFloat, alignment: Alignment = .leading) -> some View {
+        Text(s).font(.system(size: 7, weight: .semibold))
+            .foregroundStyle(.black.opacity(0.6))
+            .frame(width: width, alignment: alignment)
+    }
+
+    private func tableRow(_ row: SealedReportRow) -> some View {
+        HStack(alignment: .center, spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.name).font(.system(size: 9, weight: .semibold)).lineLimit(1)
+                if !row.productType.isEmpty {
+                    Text(row.productType).font(.system(size: 8))
+                        .foregroundStyle(.black.opacity(0.6)).lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            cell("\(row.qty)", width: 22, alignment: .trailing)
+            cell(row.acquiredAt.map { $0.formatted(date: .numeric, time: .omitted) } ?? "", width: 56)
+            cell(row.acquiredFrom ?? "", width: 70)
+            cell(row.pricePaid.map { $0.formatted(.currency(code: "USD")) } ?? "",
+                 width: 54, alignment: .trailing)
+            // "—", never $0 — the same rule the card table follows for an unpriced row.
+            Text(row.currentValue.map { $0.formatted(.currency(code: "USD")) } ?? "—")
+                .font(.system(size: 9, weight: .bold))
+                .frame(width: 58, alignment: .trailing)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func cell(_ s: String, width: CGFloat, alignment: Alignment = .leading) -> some View {
+        Text(s).font(.system(size: 8)).lineLimit(2)
+            .frame(width: width, alignment: alignment)
     }
 }
 
@@ -43,6 +154,11 @@ enum ReportPages {
 struct ReportCoverBody: View {
     let totals: ReportTotals
     let asOf: String?
+    var sealed: [SealedReportRow] = []
+
+    private var sealedValue: Double { sealed.compactMap(\.currentValue).reduce(0, +) }
+    private var sealedBoxes: Int { sealed.reduce(0) { $0 + $1.qty } }
+    private var sealedBasis: Double { sealed.compactMap(\.pricePaid).reduce(0, +) }
 
     private var appVersion: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
@@ -52,7 +168,11 @@ struct ReportCoverBody: View {
 
     var body: some View {
         VStack(alignment: .center, spacing: 0) {
-            Text(totals.totalValue.formatted(.currency(code: "USD")))
+            // Cards AND sealed. This number is what the document is FOR — an insurance report that
+            // silently omits the sealed half would understate the claim it exists to support. The
+            // breakdown below keeps the two legible, and the per-divider appendix still means
+            // cards, because dividers hold cards.
+            Text((totals.totalValue + sealedValue).formatted(.currency(code: "USD")))
                 .font(.system(size: 44, weight: .bold))
                 .padding(.top, 100)   // mockup B: .total{margin-top:120px} vs A's 60px
             if let asOf {
@@ -64,7 +184,10 @@ struct ReportCoverBody: View {
                 Text("\(totals.totalCards) cards · \(totals.totalEntries) entries")
                 // Coverage note — an insurance document must not silently pretend coverage.
                 Text("Valued: \(totals.pricedCards) of \(totals.totalCards) cards")
-                Text("Cost basis: \(totals.costBasis.formatted(.currency(code: "USD")))")
+                if sealedBoxes > 0 {
+                    Text("Cards \(totals.totalValue.formatted(.currency(code: "USD"))) · Sealed \(sealedValue.formatted(.currency(code: "USD"))) across \(sealedBoxes) box\(sealedBoxes == 1 ? "" : "es")")
+                }
+                Text("Cost basis: \((totals.costBasis + sealedBasis).formatted(.currency(code: "USD")))")
             }
             .font(.system(size: 12))
             .multilineTextAlignment(.center)
@@ -264,6 +387,8 @@ private struct CollectionReportFlow: ViewModifier {
         let conditionsByCard = collection.conditionsByCard
         let matrixByCard = collection.matrixByCard
         let gradedByPrintingByCard = collection.gradedByPrintingByCard
+        let sealedRows = InsuranceReport.sealedRows(collection.sealed,
+                                                    products: collection.sealedProducts)
         let store = store
 
         // DB reads (CatalogStore is not @MainActor) + InsuranceReport aggregation are
@@ -305,7 +430,8 @@ private struct CollectionReportFlow: ViewModifier {
         phase = "Rendering PDF…"
         let pages = ReportPages.build(rows: rows, totals: totals, subtotals: subs, images: images,
                                       asOf: asOf,
-                                      contact: UserDefaults.standard.string(forKey: SheetPDF.contactLineKey))
+                                      contact: UserDefaults.standard.string(forKey: SheetPDF.contactLineKey),
+                                      sealed: sealedRows)
         // ponytail: ImageRenderer is MainActor-bound, so page rasterization runs on main
         // (SheetPDF.render checks Task.isCancelled between pages). Everything slow —
         // aggregation and image fetch/decoding — already ran off-main above. Revisit only if
