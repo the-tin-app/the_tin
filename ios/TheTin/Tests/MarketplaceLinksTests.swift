@@ -55,11 +55,32 @@ extension MarketplaceLinksTests {
     func testHuntQueryAppendsExactlyTheKnownNegativeKeywords() throws {
         XCTAssertEqual(MarketplaceLinks.huntNegativeKeywords,
                        ["proxy", "repro", "reproduction", "custom", "fake", "digital",
-                        "lot", "bundle", "playtest", "orica", "metal", "sticker"])
+                        "lot", "bundle", "playtest", "orica", "metal", "sticker",
+                        "fan art", "fanart"])
         let q = try nkw(MarketplaceLinks.ebayHunt(name: "Charizard", setName: "Base Set",
                                                   number: "4", total: "102", maxUsd: nil))
         XCTAssertEqual(q, "Charizard 4/102 Base Set -proxy -repro -reproduction -custom -fake "
-                        + "-digital -lot -bundle -playtest -orica -metal -sticker")
+                        + "-digital -lot -bundle -playtest -orica -metal -sticker "
+                        + "-\"fan art\" -fanart")
+    }
+
+    /// A phrase negative must reach eBay QUOTED. Bare `-fan art` is parsed as `-fan AND art`:
+    /// it would require the word "art" in every listing and exclude Pokémon Fan Club outright.
+    func testHuntQueryQuotesMultiWordNegatives() throws {
+        let q = try nkw(MarketplaceLinks.ebayHunt(name: "Charizard", setName: "Base Set",
+                                                  number: "4", total: "102", maxUsd: nil))
+        XCTAssertTrue(q.contains("-\"fan art\""), "unquoted phrase negative: \(q)")
+        XCTAssertFalse(q.contains("-fan art"), "bare phrase would AND \"art\": \(q)")
+    }
+
+    /// Sharing ONE word with a phrase negative is not a collision. "Pokémon Fan Club" is a real
+    /// card; dropping -"fan art" for it would let fan art back into the one hunt most likely to
+    /// surface it, and the old single-word rule is unchanged for every other keyword.
+    func testHuntQueryKeepsAPhraseNegativeThatSharesOneWordWithTheName() throws {
+        let q = try nkw(MarketplaceLinks.ebayHunt(name: "Pokemon Fan Club", setName: nil,
+                                                  number: "83", total: nil, maxUsd: nil))
+        XCTAssertTrue(q.contains("-\"fan art\""))
+        XCTAssertTrue(q.contains("-fanart"))
     }
 
     /// The self-cancelling query. "Metal Energy" is a real, widely collected card, and

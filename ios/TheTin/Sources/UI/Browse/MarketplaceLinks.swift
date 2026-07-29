@@ -23,9 +23,14 @@ enum MarketplaceLinks {
     /// Terms that turn a hunt into a disappointment. A fixed constant, not configuration —
     /// there is no user for whom "show me the proxies" is the right answer, and a settings
     /// screen for it would cost more than the whole feature.
+    ///
+    /// Both spellings of fan art are listed because sellers use both freely, and neither is
+    /// covered by "custom" or "proxy" — a fan-art card is not sold as a reproduction of a real
+    /// one, so it clears every other filter here and lands at the top of a cheapest-first hunt.
     static let huntNegativeKeywords = [
         "proxy", "repro", "reproduction", "custom", "fake", "digital",
         "lot", "bundle", "playtest", "orica", "metal", "sticker",
+        "fan art", "fanart",
     ]
 
     /// The `total` to hand `ebayHunt`, from a set's **printed** total (`CatalogStore.printedTotal`,
@@ -65,9 +70,17 @@ enum MarketplaceLinks {
         // reports that as "nothing for sale". Dropping the colliding negative loses one filter;
         // keeping it loses every result, so the drop always wins. Checked against the set name
         // as well as the card name — both are required terms, so both cancel the same way.
+        //
+        // A MULTI-word negative collides only when EVERY one of its words is a positive, so
+        // "Pokémon Fan Club" keeps -"fan art" while still dropping a negative it truly contains.
+        // For single-word negatives this is exactly the old rule.
         let words = Set(positives.joined(separator: " ").lowercased()
             .split { !$0.isLetter }.map(String.init))
-        let negatives = huntNegativeKeywords.filter { !words.contains($0) }.map { "-\($0)" }
+        let negatives = huntNegativeKeywords
+            .filter { !$0.split(separator: " ").allSatisfy { words.contains(String($0)) } }
+            // eBay needs a phrase exclusion quoted: bare `-fan art` parses as `-fan AND art`,
+            // which drops the Fan Club card AND makes "art" a required term.
+            .map { $0.contains(" ") ? "-\"\($0)\"" : "-\($0)" }
         var c = URLComponents(string: "https://www.ebay.com/sch/i.html")!
         var items = [
             URLQueryItem(name: "_nkw", value: (positives + negatives).joined(separator: " ")),
