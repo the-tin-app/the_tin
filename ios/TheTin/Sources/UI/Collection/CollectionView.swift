@@ -107,12 +107,14 @@ final class CollectionModel {
     /// Re-read the catalog rows behind the sealed you own, then re-total. Skips the table scan
     /// entirely when there's no sealed — which is every tin that hasn't used the feature.
     private func reloadSealedProducts() {
-        guard !sealed.isEmpty else {
+        guard !allSealed.isEmpty else {
             sealedProducts = [:]
             sealedValue = (0, 0, 0)
             return
         }
-        let wanted = Set(sealed.map(\.productId))
+        // Keyed off `allSealed`, not `sealed`: a SOLD box still needs its product name for the
+        // CSV export and the report, even though it contributes nothing to the value.
+        let wanted = Set(allSealed.map(\.productId))
         let all = (try? store.allSealedProducts()) ?? []
         sealedProducts = Dictionary(uniqueKeysWithValues:
             all.filter { wanted.contains($0.tcgplayerId) }.map { ($0.tcgplayerId, $0) })

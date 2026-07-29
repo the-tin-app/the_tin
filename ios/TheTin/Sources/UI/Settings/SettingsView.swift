@@ -402,6 +402,9 @@ struct SettingsView: View {
         let conditionsByCard = collection.conditionsByCard
         let matrixByCard = collection.matrixByCard
         let gradedByPrintingByCard = collection.gradedByPrintingByCard
+        // `allSealed` for the same reason as `allEntries`: an export is the whole file.
+        let sealed = collection.allSealed
+        let sealedProducts = collection.sealedProducts
         return await Task.detached {
             let ids = Array(Set(entries.map(\.cardId)))
             let cards = Dictionary(uniqueKeysWithValues: ((try? store.cards(ids: ids)) ?? []).map { ($0.id, $0) })
@@ -411,7 +414,8 @@ struct SettingsView: View {
                 prices: prices, variantsByCard: variantsByCard,
                 conditionsByCard: conditionsByCard,
                 matrixByCard: matrixByCard,
-                gradedByPrintingByCard: gradedByPrintingByCard))
+                gradedByPrintingByCard: gradedByPrintingByCard,
+                sealed: sealed, sealedProducts: sealedProducts))
         }.value
     }
 
@@ -476,6 +480,11 @@ struct SettingsView: View {
             if !result.entries.isEmpty {
                 let entries = await fileImportedEntries(result, into: collection)
                 await collection.addEntries(entries)
+            }
+            // Sealed isn't filed behind a divider — it has its own section — so these land as
+            // they are, with no "Imported <date>" pile to re-file from.
+            for entry in result.sealed {
+                await collection.saveSealed(entry)
             }
             var skippedURL: URL?
             if !result.skipped.isEmpty {

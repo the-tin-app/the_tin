@@ -6,10 +6,13 @@ enum CollectionCSV {
     /// so a new trailing column can't shift anything a third-party format reads positionally.
     // `sold_at`/`sold_for` are appended, never inserted: importers (ours and other people's)
     // read this by position as often as by name. `acquired_via` follows the same rule.
+    // `tcgplayer_id` is appended last for the same reason as the columns before it, and carries
+    // the sealed product id on sealed rows. It is blank on card rows: the catalog's own
+    // tcgplayer_id for a card is derivable from card_id, so writing it there would be noise.
     static let header = ["card_id", "name", "set_id", "set_name", "number", "rarity", "qty",
                          "variant", "condition", "grade", "price_paid", "acquired_at",
                          "acquired_from", "added_at", "divider", "current_value", "value_as_of",
-                         "for_trade", "sold_at", "sold_for", "acquired_via"]
+                         "for_trade", "sold_at", "sold_for", "acquired_via", "tcgplayer_id"]
 
     /// ISO 8601 with time, UTC — every exported date column uses this.
     static let iso: ISO8601DateFormatter = {
@@ -61,7 +64,9 @@ enum CollectionCSV {
                        variantsByCard: [String: [VariantPrice]] = [:],
                        conditionsByCard: [String: [ConditionPrice]] = [:],
                        matrixByCard: [String: [MatrixPrice]] = [:],
-                       gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]) -> Data {
+                       gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:],
+                       sealed: [SealedEntry] = [],
+                       sealedProducts: [Int: SealedProduct] = [:]) -> Data {
         let groupName = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.name) })
         let rows = entries.map { e -> [String] in
             let card = cards[e.cardId]
@@ -79,9 +84,33 @@ enum CollectionCSV {
                     groupName[e.groupId] ?? "", money(value),
                     value == nil ? "" : (price?.asOf ?? ""),
                     e.isForTrade ? "true" : "",
-                    date(e.soldAt), money(e.soldFor), e.acquiredVia ?? ""]
+                    date(e.soldAt), money(e.soldFor), e.acquiredVia ?? "", ""]
         }
-        return data([header] + rows)
+        return data([header] + rows + sealedRows(sealed, products: sealedProducts, sets: sets))
+    }
+
+    /// Sealed rows, appended after the cards.
+    ///
+    /// They carry an EMPTY `number` — precisely the shape `CollectionCSVImport` already reads as
+    /// "this is a sealed product" for third-party files — plus `tcgplayer_id`, which is what makes
+    /// OUR round trip exact rather than a name-matching guess. Third-party importers reading this
+    /// by position see a row with no card number and no card id, which is the truth about it.
+    ///
+    /// A product the catalog no longer carries still exports: quantity and cost basis are the
+    /// user's data, and dropping the row to avoid an empty name column would lose them.
+    private static func sealedRows(_ sealed: [SealedEntry], products: [Int: SealedProduct],
+                                   sets: [String: SetRecord]) -> [[String]] {
+        sealed.map { s -> [String] in
+            let p = products[s.productId]
+            let setId = p?.setId ?? ""
+            let value = p?.marketUsd.map { $0 * Double(s.qty) }
+            return ["", p?.name ?? "", setId, sets[setId]?.name ?? "", "", p?.productType ?? "",
+                    String(s.qty), "", "", "",
+                    money(s.pricePaid), date(s.acquiredAt), s.acquiredFrom ?? "", date(s.addedAt),
+                    "", money(value), value == nil ? "" : (p?.asOf ?? ""),
+                    "", date(s.soldAt), money(s.soldFor), s.acquiredVia ?? "",
+                    String(s.productId)]
+        }
     }
 
     static let wishlistHeader = ["card_id", "name", "set_id", "set_name", "number",

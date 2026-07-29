@@ -203,6 +203,63 @@ final class CSVImportCoreTests: XCTestCase {
         XCTAssertEqual(e.groupId, "")   // caller re-homes into the "Imported …" divider
     }
 
+    /// The round trip the importer used to apologise for. Export a sealed product, feed the bytes
+    /// straight back, and quantity, cost basis, provenance and sold state all survive — matched by
+    /// `tcgplayer_id`, so it's exact rather than a name guess.
+    func testTinRoundTripCarriesSealedProducts() throws {
+        let store = try FixtureCatalog.makeWithSealed()
+        let sealedMatcher = CardMatcher(store: store)
+        let products = Dictionary(uniqueKeysWithValues:
+            try store.allSealedProducts().map { ($0.tcgplayerId, $0) })
+        let sets = Dictionary(uniqueKeysWithValues: try store.sets().map { ($0.id, $0) })
+        let original = SealedEntry(id: "s1", productId: FixtureCatalog.sealedBoosterBoxId, qty: 3,
+                                   pricePaid: 1350,
+                                   acquiredAt: Date(timeIntervalSince1970: 1_700_000_000),
+                                   acquiredFrom: "trade, local show",
+                                   acquiredVia: AcquiredVia.bought.rawValue,
+                                   addedAt: Date(timeIntervalSince1970: 1_750_000_000))
+        let sold = SealedEntry(id: "s2", productId: FixtureCatalog.sealedETBId, qty: 1,
+                               pricePaid: 50, addedAt: Date(timeIntervalSince1970: 0),
+                               soldAt: Date(timeIntervalSince1970: 1_760_000_000), soldFor: 80)
+
+        let csv = CollectionCSV.export(entries: [], groups: [], cards: [:], sets: sets, prices: [:],
+                                       sealed: [original, sold], sealedProducts: products)
+        let result = try CollectionCSVImport.importCSV(String(decoding: csv, as: UTF8.self),
+                                                       matcher: sealedMatcher)
+
+        XCTAssertEqual(result.formatName, "The Tin")
+        XCTAssertTrue(result.skipped.isEmpty)
+        XCTAssertTrue(result.entries.isEmpty)
+        XCTAssertEqual(result.sealed.count, 2)
+
+        let box = try XCTUnwrap(result.sealed.first { $0.productId == original.productId })
+        XCTAssertEqual(box.qty, original.qty)
+        XCTAssertEqual(box.pricePaid, original.pricePaid)
+        XCTAssertEqual(box.acquiredAt, original.acquiredAt)
+        XCTAssertEqual(box.acquiredFrom, original.acquiredFrom)   // survives the comma + quoting
+        XCTAssertEqual(box.acquiredVia, original.acquiredVia)
+        XCTAssertEqual(box.addedAt, original.addedAt)
+        XCTAssertFalse(box.isSold)
+
+        // A box you've already flipped keeps what it cost AND what it realised — the whole reason
+        // the row survives the sale instead of being deleted.
+        let gone = try XCTUnwrap(result.sealed.first { $0.productId == sold.productId })
+        XCTAssertEqual(gone.soldAt, sold.soldAt)
+        XCTAssertEqual(gone.soldFor, 80)
+        XCTAssertEqual(gone.pricePaid, 50)
+        XCTAssertTrue(gone.isSold)
+    }
+
+    /// A sealed row whose product this catalog doesn't carry must not take the card path and be
+    /// reported as a missing card_id — it's a sealed product we can't place, and says so.
+    func testSealedRowWithUnknownProductIdIsReportedAsSealed() throws {
+        let csv = "card_id,name,qty,tcgplayer_id\n,Mystery Box,1,999999\n"
+        let result = try CollectionCSVImport.importCSV(
+            csv, matcher: CardMatcher(store: try FixtureCatalog.makeWithSealed()))
+        XCTAssertTrue(result.sealed.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(result.skipped.first).reason.contains("not in the catalog"))
+    }
+
     /// Files exported before `for_trade` existed have no such column. They must import exactly as
     /// they always did — unflagged, not rejected.
     func testTinImportWithoutForTradeColumnDefaultsToUnflagged() throws {
@@ -356,11 +413,50 @@ final class CollectrImportTests: XCTestCase {
         XCTAssertEqual(result.entries[1].variant, CardVariant.regular.rawValue)
     }
 
-    func testSealedEmptyNumberSkippedAndCountedSeparately() throws {
-        let result = try run(["Main,Pokemon,Evolving Skies,Booster Box,,,Normal,Ungraded,Near Mint,$120,1,$150,,No,2026-01-10,"])
+    /// Runs against a fixture that HAS a `sealed_product` table — the shipped one doesn't, so a
+    /// matcher over it could never resolve a sealed row.
+    private func runSealed(_ rows: [String]) throws -> CollectionCSVImport.Result {
+        let text = ([header] + rows).joined(separator: "\n") + "\n"
+        return try CollectionCSVImport.importCSV(
+            text, matcher: CardMatcher(store: try FixtureCatalog.makeWithSealed()))
+    }
+
+    /// A Collectr row with no Card Number is a sealed product. It used to be skipped with an
+    /// apology; it now imports, matched on the product name because Collectr carries no ids.
+    func testSealedEmptyNumberImportsByName() throws {
+        let result = try runSealed([
+            "Main,Pokemon,Evolving Skies,Evolving Skies Booster Box,,,Normal,Ungraded,Near Mint,$400,2,$150,,No,2026-01-10,from grandma",
+        ])
         XCTAssertTrue(result.entries.isEmpty)
-        XCTAssertTrue(result.skipped[0].reason.hasPrefix("sealed"))
-        XCTAssertEqual(result.summary, "0 cards imported, 1 rows skipped. 1 sealed products (not supported).")
+        XCTAssertTrue(result.skipped.isEmpty)
+        let box = try XCTUnwrap(result.sealed.first)
+        XCTAssertEqual(box.productId, FixtureCatalog.sealedBoosterBoxId)
+        XCTAssertEqual(box.qty, 2)
+        XCTAssertEqual(box.pricePaid, 400)
+        XCTAssertEqual(box.acquiredFrom, "from grandma")
+        XCTAssertEqual(result.summary, "0 cards imported, 0 rows skipped. 1 sealed product imported.")
+    }
+
+    /// An unrecognised sealed product is still skipped — with a reason you can read in
+    /// skipped-rows.csv, rather than being quietly matched to something else.
+    func testUnknownSealedProductIsSkippedWithAReason() throws {
+        let result = try runSealed([
+            "Main,Pokemon,Evolving Skies,Nonexistent Mega Box,,,Normal,Ungraded,Near Mint,$1,1,$2,,No,2026-01-10,",
+        ])
+        XCTAssertTrue(result.sealed.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(result.skipped.first).reason.contains("not in the catalog"))
+    }
+
+    /// Two sets sell a product under the same name. The set narrows it; with no usable set the
+    /// matcher refuses rather than guessing — the wrong booster box is worse than a visible skip.
+    func testAmbiguousSealedNameIsNarrowedBySetAndOtherwiseRefused() throws {
+        let name = FixtureCatalog.sealedAmbiguousName
+        let result = try runSealed([
+            "Main,Pokemon,Evolving Skies,\(name),,,Normal,Ungraded,Near Mint,$40,1,$40,,No,2026-01-10,",
+            "Main,Pokemon,Not A Real Set,\(name),,,Normal,Ungraded,Near Mint,$40,1,$40,,No,2026-01-10,",
+        ])
+        XCTAssertEqual(result.sealed.map(\.productId), [600_001])   // narrowed to swsh7
+        XCTAssertTrue(try XCTUnwrap(result.skipped.first).reason.contains("ambiguous"))
     }
 
     func testNonPokemonCategorySkipped() throws {
