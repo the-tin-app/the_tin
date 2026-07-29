@@ -62,4 +62,27 @@ enum WishlistGrid {
         guard let t = entry?.targetUsd, let p = price else { return false }
         return p <= t
     }
+
+    /// Cards with a live hunt, ordered by how close the market is to your budget
+    /// (`market / target`, ascending) — the top row is the one most likely to be buyable
+    /// today, which is a different question from "cheapest" or "biggest discount".
+    ///
+    /// Unpriced cards sort last: with no market price there is nothing to rank against the
+    /// budget, and slotting them at 0 would present unknown as "free".
+    /// Ties break on the soonest deadline, then card id, so the order is total.
+    static func huntSorted(cards: [CardRecord], entries: [String: WantEntry],
+                           prices: [String: Double], now: Date = Date()) -> [CardRecord] {
+        struct Key { let ratio: Double; let until: Date; let id: String }
+        let keyed: [(CardRecord, Key)] = cards.compactMap { card in
+            guard let e = entries[card.id], let hunt = e.hunt, hunt.isActive(now: now),
+                  let target = e.targetUsd, target > 0 else { return nil }
+            let ratio = prices[card.id].map { $0 / target } ?? .greatestFiniteMagnitude
+            return (card, Key(ratio: ratio, until: hunt.until, id: card.id))
+        }
+        return keyed.sorted { a, b in
+            if a.1.ratio != b.1.ratio { return a.1.ratio < b.1.ratio }
+            if a.1.until != b.1.until { return a.1.until < b.1.until }
+            return a.1.id < b.1.id
+        }.map(\.0)
+    }
 }

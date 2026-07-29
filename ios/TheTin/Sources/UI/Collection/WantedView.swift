@@ -14,8 +14,14 @@ struct WantedView: View {
     @AppStorage("wantedScope") private var scopeRaw: String = Scope.sets.rawValue
 
     enum Scope: String, CaseIterable {
-        case sets, singles
-        var label: String { self == .sets ? "Sets" : "Singles" }
+        case sets, singles, hunting
+        var label: String {
+            switch self {
+            case .sets: return "Sets"
+            case .singles: return "Singles"
+            case .hunting: return "Hunting"
+            }
+        }
     }
 
     private var scope: Scope { Scope(rawValue: scopeRaw) ?? .sets }
@@ -27,6 +33,8 @@ struct WantedView: View {
                 SetGoalsListView(store: store, goals: goals, collection: collection, wants: wants)
             case .singles:
                 WantedCardsView(store: store, wants: wants, collection: collection, goals: goals)
+            case .hunting:
+                HuntingListView(store: store, wants: wants)
             }
         }
         .safeAreaInset(edge: .top) {
