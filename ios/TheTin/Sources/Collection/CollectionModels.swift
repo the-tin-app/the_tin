@@ -103,6 +103,59 @@ enum AcquiredVia: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// One sealed product you own — a booster box, an Elite Trainer Box, a tin off the shelf.
+///
+/// Deliberately NOT a `CollectionEntry`. That type is `cardId`-keyed and carries condition, grade
+/// and printing, none of which mean anything for a shrink-wrapped box; bending it to fit would
+/// have put four meaningless fields on every sealed row and a required card id it can never have.
+/// What the two genuinely share is the acquisition block, and that is exactly what this mirrors.
+///
+/// `productId` is `sealed_product.tcgplayer_id` — the same key `SealedProduct.id` uses, so the
+/// catalog join is a dictionary lookup and the CSV round-trip has a stable identifier to write.
+///
+/// There is no "opened" state, by decision: opening a box is a delete, or a quantity decrement.
+struct SealedEntry: Identifiable, Equatable, Codable {
+    var id: String
+    var productId: Int
+    var qty: Int
+    var pricePaid: Double? = nil
+    var acquiredAt: Date? = nil
+    var acquiredFrom: String? = nil
+    /// `AcquiredVia` rawValue; nil = not recorded. Same contract as `CollectionEntry.acquiredVia`
+    /// — an unanswered question must never read as an answer.
+    var acquiredVia: String? = nil
+    var addedAt: Date
+    /// When this box left — sold, traded away, or opened. Same contract as
+    /// `CollectionEntry.soldAt`: the row keeps its cost basis and stops counting toward what you
+    /// own, so selling at a loss can't improve the numbers by removing itself from them.
+    var soldAt: Date? = nil
+    var soldFor: Double? = nil
+
+    var isSold: Bool { soldAt != nil }
+    var acquiredViaValue: AcquiredVia? { acquiredVia.flatMap(AcquiredVia.init(rawValue:)) }
+}
+
+extension Array where Element == SealedEntry {
+    /// Physical box count = Σ qty, sold boxes excluded — the sealed mirror of `cardCount`.
+    var boxCount: Int { lazy.filter { !$0.isSold }.reduce(0) { $0 + $1.qty } }
+
+    /// What the sealed you still own is worth: `market_usd × qty`, sold boxes excluded.
+    ///
+    /// A product the catalog no longer prices contributes NOTHING rather than zero — the same rule
+    /// the card totals follow — and `priced` reports how many of `boxes` were actually valued, so
+    /// the UI can admit the gap instead of implying full coverage.
+    func marketValue(products: [Int: SealedProduct]) -> (total: Double, priced: Int, boxes: Int) {
+        var total = 0.0, priced = 0, boxes = 0
+        for entry in self where !entry.isSold {
+            boxes += entry.qty
+            guard let usd = products[entry.productId]?.marketUsd else { continue }
+            total += usd * Double(entry.qty)
+            priced += entry.qty
+        }
+        return (total, priced, boxes)
+    }
+}
+
 struct CollectionEntry: Identifiable, Equatable, Codable {
     var id: String
     var cardId: String        // REQUIRED by contract — server jobs read it

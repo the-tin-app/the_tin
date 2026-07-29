@@ -22,6 +22,12 @@ final class LocalCollectionRepository: CollectionRepository {
     private struct Snapshot: Codable {
         var groups: [CardGroup] = []
         var entries: [CollectionEntry] = []
+        /// Sealed products you own. A real `Optional`, NOT `= []`: a defaulted non-optional still
+        /// makes synthesized `Decodable` *demand* the key, so every `collection.json` written
+        /// before sealed existed would fail to decode — and this repository degrades a read
+        /// failure to an empty in-memory collection, so the whole tin would silently vanish.
+        /// Same convention as `CollectionEntry.forTrade`/`soldAt`/`acquiredVia`.
+        var sealed: [SealedEntry]? = nil
     }
 
     private var data: Snapshot
