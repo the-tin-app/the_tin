@@ -27,7 +27,7 @@ struct RootView: View {
         case .ready:
             if let store = model.store, let collection = model.collection {
                 MainTabView(store: store, collection: collection, wants: model.wants, model: model)
-                    .restoreBackupPrompt(model.backup)
+                    .syncSeedPrompt(model.sync)
             }
         }
     }
@@ -466,43 +466,46 @@ private struct OfflineBanner: View {
     }
 }
 
-/// Presents the launch restore prompt whenever `BackupService` publishes an offer. When
-/// acceptance detects the collection is no longer empty (first-scan race), the service
-/// re-publishes the offer with `requiresOverwriteConfirmation` and this re-presents it as a
-/// destructive warn-and-confirm.
-private struct RestoreBackupPrompt: ViewModifier {
-    let backup: BackupService
-    @State private var offer: BackupService.RestoreOffer?
+/// The one question sync ever asks: two devices already hold different collections, and one of
+/// them has to win. Real counts, not adjectives — "2,847 cards" is something you can recognise as
+/// yours; "your other device" is not. `syncSeeded` means this can never be asked twice, and a
+/// `BackupService` snapshot is written before either replacement, so a mis-tap costs a trip to
+/// Settings → Restore rather than the collection.
+///
+/// (The launch *backup* restore prompt that used to live here is gone — with sync converging
+/// devices continuously it was redundant, and two competing "restore your collection?" flows at
+/// launch is worse than either alone. Back Up Now / Restore from backup… stay in Settings.)
+private struct SyncSeedPrompt: ViewModifier {
+    @Bindable var sync: SyncService
+    @State private var prompt: SeedPrompt?
     @State private var presented = false
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: backup.restoreOffer, initial: true) { _, new in
-                if let new { offer = new; presented = true }
+            .onChange(of: sync.seedPrompt, initial: true) { _, new in
+                if let new { prompt = new; presented = true }
             }
-            .alert(offer?.requiresOverwriteConfirmation == true
-                       ? "Replace everything in your tin?" : "iCloud Backup Found",
-                   isPresented: $presented, presenting: offer) { offer in
-                Button("Restore",
-                       role: offer.requiresOverwriteConfirmation ? ButtonRole.destructive : nil) {
-                    Task { await backup.acceptRestore(offer) }
+            .alert("Which tin should both devices use?", isPresented: $presented,
+                   presenting: prompt) { prompt in
+                Button("Use iCloud (\(prompt.remoteCount) cards)", role: .destructive) {
+                    Task { await sync.resolveSeed(useLocal: false) }
                 }
-                Button("Not Now", role: .cancel) { backup.restoreOffer = nil }
-            } message: { offer in
-                Text(offer.requiresOverwriteConfirmation
-                     ? "Your tin is no longer empty. Restoring replaces everything in it with the \(offer.entryCount)-card backup from \(dateText(offer))."
-                     : "Restore \(offer.entryCount) cards from the iCloud backup made \(dateText(offer))?")
+                Button("Use this device (\(prompt.localCount) cards)", role: .destructive) {
+                    Task { await sync.resolveSeed(useLocal: true) }
+                }
+                // Neither choice is safe to guess, so declining is allowed: sync stays inert for
+                // the session and the question comes back next launch (the flag is only set once
+                // an answer is actually given).
+                Button("Not Now", role: .cancel) { sync.declineSeed() }
+            } message: { prompt in
+                Text("Your other device already has a tin in iCloud — \(prompt.remoteCount) cards. This device has \(prompt.localCount). The one you don't pick is replaced; a backup is saved first.")
             }
-    }
-
-    private func dateText(_ offer: BackupService.RestoreOffer) -> String {
-        offer.exportedAt.formatted(date: .abbreviated, time: .omitted)
     }
 }
 
 private extension View {
     @ViewBuilder
-    func restoreBackupPrompt(_ backup: BackupService?) -> some View {
-        if let backup { modifier(RestoreBackupPrompt(backup: backup)) } else { self }
+    func syncSeedPrompt(_ sync: SyncService?) -> some View {
+        if let sync { modifier(SyncSeedPrompt(sync: sync)) } else { self }
     }
 }

@@ -95,18 +95,6 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: prev.path))
     }
 
-    func testRestoreEligibilityMatrix() {
-        // eligible: empty local × non-empty backup
-        XCTAssertTrue(BackupService.restoreEligible(localEntryCount: 0, localWantCount: 0, backupEntryCount: 5))
-        // any local data blocks auto-restore
-        XCTAssertFalse(BackupService.restoreEligible(localEntryCount: 1, localWantCount: 0, backupEntryCount: 5))
-        XCTAssertFalse(BackupService.restoreEligible(localEntryCount: 0, localWantCount: 1, backupEntryCount: 5))
-        XCTAssertFalse(BackupService.restoreEligible(localEntryCount: 3, localWantCount: 2, backupEntryCount: 5))
-        // empty backup / missing-or-undecodable backup (nil) never restores
-        XCTAssertFalse(BackupService.restoreEligible(localEntryCount: 0, localWantCount: 0, backupEntryCount: 0))
-        XCTAssertFalse(BackupService.restoreEligible(localEntryCount: 0, localWantCount: 0, backupEntryCount: nil))
-    }
-
     func testBackupUnavailableWhenNoContainer() async {
         struct NoContainerStore: BackupStore {
             func containerURL() -> URL? { nil }
@@ -122,7 +110,9 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(service.status, .unavailable)   // skipped silently, status recorded
     }
 
-    func testRestoreWritesThroughRepositoriesAndOffersOnlyWhenEmpty() async throws {
+    /// The manual Settings restore — the only restore path left now that the launch offer is
+    /// gone. Ids are preserved and the rich wishlist fields survive the whole round trip.
+    func testRestoreWritesThroughRepositories() async throws {
         // Seed "device A" and back it up.
         let (colA, wantsA) = try makeRepos(sub: "deviceA")
         let gid = try await colA.createGroup(name: "Binder")
@@ -132,16 +122,11 @@ final class BackupServiceTests: XCTestCase {
             ["sv1-25": WantEntry(priority: .high, targetUsd: 25, notes: "grail")])
         await makeService(collection: colA, wants: wantsA).backUpNow()
 
-        // Empty "device B": the launch check offers the restore.
+        // "Device B" restores it — repositories hold the backup, persisted to disk.
         let (colB, wantsB) = try makeRepos(sub: "deviceB")
         let serviceB = makeService(collection: colB, wants: wantsB)
-        await serviceB.offerRestoreIfEligible()
-        XCTAssertEqual(serviceB.restoreOffer,
-                       BackupService.RestoreOffer(entryCount: 1, exportedAt: fixedNow))
+        try await serviceB.performRestore(snapshot: serviceB.loadBackup())
 
-        // Accept → repositories hold the backup (ids preserved), persisted to disk.
-        await serviceB.acceptRestore(serviceB.restoreOffer!)
-        XCTAssertNil(serviceB.restoreOffer)
         let groups = await firstValue(colB.groupsStream()) ?? []
         let entries = await firstValue(colB.entriesStream()) ?? []
         let wanted = await firstValue(wantsB.stream(uid: "local")) ?? [:]
@@ -154,37 +139,13 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(wanted["sv1-25"]?.targetUsd, 25)
         XCTAssertEqual(wanted["sv1-25"]?.notes, "grail")
 
-        // Non-empty "device C0": never offered.
-        let (colC0, wantsC0) = try makeRepos(sub: "deviceC0")
-        try await colC0.addEntry(fixtureEntry(id: "x1", groupId: ""))
-        let serviceC0 = makeService(collection: colC0, wants: wantsC0)
-        await serviceC0.offerRestoreIfEligible()
-        XCTAssertNil(serviceC0.restoreOffer)
-
-        // "device C": offered while empty (captures the 1-entry snapshot), then a first scan
-        // lands locally before the user confirms (the race) — accepting downgrades to
-        // warn-and-confirm instead of overwriting.
+        // A restore REPLACES: whatever device C held before is gone, not merged.
         let (colC, wantsC) = try makeRepos(sub: "deviceC")
-        let serviceC = makeService(collection: colC, wants: wantsC)
-        await serviceC.offerRestoreIfEligible()
-        let offerC = serviceC.restoreOffer!
         try await colC.addEntry(fixtureEntry(id: "c1", groupId: ""))
-
-        // Between the offer and the confirm, device A's debounced auto-backup fires again
-        // with more data — the file on disk is no longer what was shown to the user.
-        try await colA.addEntry(fixtureEntry(id: "e2", groupId: gid))
-        await makeService(collection: colA, wants: wantsA).backUpNow()
-
-        await serviceC.acceptRestore(offerC)
-        XCTAssertEqual(serviceC.restoreOffer?.requiresOverwriteConfirmation, true)
-        let entriesC = await firstValue(colC.entriesStream()) ?? []
-        XCTAssertEqual(entriesC.map(\.id), ["c1"])   // nothing was overwritten yet
-
-        // Second accept (now carrying the confirmation flag) restores the snapshot that was
-        // ORIGINALLY OFFERED — not the newer file that landed on disk in the meantime.
-        await serviceC.acceptRestore(serviceC.restoreOffer!)
+        let serviceC = makeService(collection: colC, wants: wantsC)
+        try await serviceC.performRestore(snapshot: serviceC.loadBackup())
         let replacedC = await firstValue(colC.entriesStream()) ?? []
-        XCTAssertEqual(replacedC.map(\.id), ["e1"])   // NOT ["e1", "e2"]
+        XCTAssertEqual(replacedC.map(\.id), ["e1"])
     }
 
     /// A v1 backup file predates `wantEntries` — the decoded snapshot has it as nil (the field's

@@ -65,11 +65,18 @@ private func backupDecoder() -> JSONDecoder {
     return d
 }
 
-/// Backs up the owned collection + wishlist to iCloud Drive and restores from it. Backup-first
-/// by design (no live sync): one snapshot file, last writer wins, two-slot rotation. All iCloud
-/// IO goes through the injected `BackupStore` and runs off-main (container resolution and
-/// coordinated reads can block). Failures never crash — they only surface as `status`
-/// (same degrade philosophy as the repositories).
+/// Backs up the owned collection + wishlist to iCloud Drive and restores from it: one snapshot
+/// file, last writer wins, two-slot rotation. All iCloud IO goes through the injected
+/// `BackupStore` and runs off-main (container resolution and coordinated reads can block).
+/// Failures never crash — they only surface as `status` (same degrade philosophy as the
+/// repositories).
+///
+/// **Demoted to Settings-only** now that `SyncService` converges devices continuously. The launch
+/// restore *offer* is gone: with sync running it was redundant, and two competing "restore your
+/// collection?" flows at launch is worse than either alone. `Back Up Now` and
+/// `Restore from backup…` stay in Settings unchanged — and the backup earns its keep as the
+/// file-shaped undo `SyncService` writes before the one destructive moment it has (the seeding
+/// choice), so a mis-tap costs a trip to Settings rather than the collection.
 @MainActor @Observable
 final class BackupService {
     enum Status: Equatable {
@@ -79,25 +86,10 @@ final class BackupService {
         case failed           // last write threw; retried on the next change
     }
 
-    /// The launch restore prompt's payload. `requiresOverwriteConfirmation` flips when the local
-    /// collection stopped being empty between offer and acceptance (first-scan race) — the UI
-    /// then re-presents as a warn-and-confirm instead of restoring silently.
-    struct RestoreOffer: Equatable {
-        var entryCount: Int
-        var exportedAt: Date
-        var requiresOverwriteConfirmation = false
-    }
-
     static let fileName = "backup-v1.json"
     static let prevFileName = "backup-v1.prev.json"
 
     private(set) var status: Status = .unknown
-    var restoreOffer: RestoreOffer?
-
-    /// The snapshot behind the current/last `restoreOffer`, captured at offer time so
-    /// `acceptRestore` restores exactly what the user was shown — never a re-read of the file,
-    /// which a debounced auto-backup could have swapped out from under them in the meantime.
-    private var offeredSnapshot: BackupSnapshot?
 
     private let store: BackupStore
     private let collection: CollectionRepository
@@ -129,7 +121,7 @@ final class BackupService {
     /// Subscribe to the repositories; every mutation re-arms the debounce so the snapshot lands
     /// ~`debounce` after the last write. Each stream's initial emission (current state on
     /// subscribe) is skipped — a fresh install must never clobber a real backup with an empty
-    /// snapshot before the restore prompt runs. Idempotent.
+    /// snapshot on launch. Idempotent.
     func start() {
         guard streamTasks.isEmpty else { return }
         // Goals have no stream (one small file, written whole), so the model calls back instead.
@@ -170,15 +162,6 @@ final class BackupService {
             // detached write then persists an EMPTY snapshot over real data.
             Task { await self?.backUpNow() }
         }
-    }
-
-    // MARK: Eligibility (pure)
-
-    /// Auto-restore is offered only to an empty device holding a non-empty backup.
-    /// `backupEntryCount` nil = missing or undecodable backup (treated as absent).
-    static func restoreEligible(localEntryCount: Int, localWantCount: Int,
-                                backupEntryCount: Int?) -> Bool {
-        localEntryCount == 0 && localWantCount == 0 && (backupEntryCount ?? 0) > 0
     }
 
     // MARK: Backup
@@ -251,37 +234,6 @@ final class BackupService {
 
     // MARK: Restore
 
-    /// Launch check: offer a restore when the device is empty and a non-empty backup exists.
-    /// Missing/undecodable backups are treated as absent (auto-restore never surfaces errors).
-    func offerRestoreIfEligible() async {
-        let counts = await currentCounts()
-        guard counts.entries == 0, counts.wants == 0 else { return }
-        guard let snapshot = try? await loadBackup(),
-              Self.restoreEligible(localEntryCount: counts.entries, localWantCount: counts.wants,
-                                   backupEntryCount: snapshot.entries.count) else { return }
-        offeredSnapshot = snapshot
-        restoreOffer = RestoreOffer(entryCount: snapshot.entries.count,
-                                    exportedAt: snapshot.exportedAt)
-    }
-
-    /// The launch prompt's accept. Re-checks emptiness at acceptance time; a first scan that
-    /// landed meanwhile downgrades the offer to warn-and-confirm instead of overwriting.
-    func acceptRestore(_ offer: RestoreOffer) async {
-        if !offer.requiresOverwriteConfirmation {
-            let counts = await currentCounts()
-            if counts.entries + counts.wants > 0 {
-                restoreOffer = RestoreOffer(entryCount: offer.entryCount,
-                                            exportedAt: offer.exportedAt,
-                                            requiresOverwriteConfirmation: true)
-                return
-            }
-        }
-        restoreOffer = nil
-        guard let snapshot = offeredSnapshot else { return }
-        offeredSnapshot = nil
-        try? await performRestore(snapshot: snapshot)   // failure leaves the collection untouched
-    }
-
     /// Replace the local collection + wishlist with `snapshot` (last-writer-wins by design).
     /// Takes the snapshot explicitly — callers restore exactly what the user was shown, not
     /// whatever the file on disk holds now (a debounced auto-backup can swap it in between).
@@ -301,12 +253,5 @@ final class BackupService {
         try await wants.save(uid: uid, entries: restoredWants)
         // nil = a pre-v3 backup, which says nothing about goals; keep whatever is on the device.
         if let ids = snapshot.setGoals { setGoals?.replaceAll(Set(ids)) }
-    }
-
-    private func currentCounts() async -> (entries: Int, wants: Int) {
-        var e = 0, w = 0
-        for await v in collection.entriesStream() { e = v.count; break }
-        for await v in wants.stream(uid: uid) { w = v.count; break }
-        return (e, w)
     }
 }

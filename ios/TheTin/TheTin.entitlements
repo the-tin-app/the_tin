@@ -12,6 +12,26 @@
     <array>
         <string>iCloud.ai.reyes.thetin</string>
     </array>
+    <!--
+      MULTI-DEVICE SYNC IS NOT LIVE YET. To turn it on, add <string>CloudKit</string> to the array
+      below (the container iCloud.ai.reyes.thetin already exists for CloudDocuments; CloudKit
+      enables the database side of the SAME container — no new container is needed) and define
+      TIN_CLOUDKIT in project.yml so SyncService.makeEngine() returns a real engine:
+
+        <key>com.apple.developer.icloud-services</key>
+        <array>
+            <string>CloudDocuments</string>
+            <string>CloudKit</string>
+        </array>
+
+      Left off on purpose. Applying it requires the CloudKit capability on App ID ai.reyes.thetin
+      in the developer portal, which has NOT been done — an applied entitlement without the portal
+      capability fails to sign. Inert, SyncService reports `unavailable`, which is the same code
+      path as signed-out, and the app behaves exactly as it does today.
+
+      The full five-step order — and why doing it out of order fails SILENTLY for every TestFlight
+      tester — is in CLAUDE.md, "Rolling out iCloud sync". Read it before flipping this.
+    -->
     <key>com.apple.developer.icloud-services</key>
     <array>
         <string>CloudDocuments</string>

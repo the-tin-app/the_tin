@@ -552,11 +552,29 @@ struct SettingsView: View {
             if importInFlight {
                 HStack(spacing: 6) { ProgressView(); Text("Importing…") }
             }
+            if let sync = app.sync {
+                Toggle("Sync with iCloud", isOn: Binding(
+                    get: { sync.isEnabled },
+                    set: { on in Task { await sync.setEnabled(on) } }))
+                LabeledContent("Sync status", value: Self.syncStatusText(sync.status))
+            }
             if let backup = app.backup {
                 LabeledContent("iCloud Backup", value: Self.backupStatusText(backup.status))
                 Button("Back Up Now") { Task { await backup.backUpNow() } }
                 Button("Restore from backup…") { Task { await prepareManualRestore(backup) } }
             }
+        }
+    }
+
+    private static func syncStatusText(_ status: SyncStatus) -> String {
+        switch status {
+        // Deliberately not "Off": signed out, offline-forever, and "the entitlement isn't live
+        // yet" all land here, and none of them are a failure the user can act on.
+        case .unavailable: return "Not syncing"
+        case .syncing: return "Syncing…"
+        case .synced(let date):
+            return "Synced \(date.formatted(date: .abbreviated, time: .shortened))"
+        case .failed: return "Last sync failed"
         }
     }
 
