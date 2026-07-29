@@ -34,6 +34,7 @@ final class LocalCollectionRepository: CollectionRepository {
     private let fileURL: URL
     private var groupContinuations: [UUID: AsyncStream<[CardGroup]>.Continuation] = [:]
     private var entryContinuations: [UUID: AsyncStream<[CollectionEntry]>.Continuation] = [:]
+    private var sealedContinuations: [UUID: AsyncStream<[SealedEntry]>.Continuation] = [:]
 
     // nonisolated so it can be built from AppModel's default-argument closure (matches
     // InMemoryCollectionRepository's implicit nonisolated init); it only assigns stored state.
@@ -84,9 +85,23 @@ final class LocalCollectionRepository: CollectionRepository {
         }
     }
 
+    nonisolated func sealedStream() -> AsyncStream<[SealedEntry]> {
+        AsyncStream { continuation in
+            Task { @MainActor in
+                let key = UUID()
+                self.sealedContinuations[key] = continuation
+                continuation.onTermination = { _ in
+                    Task { @MainActor in self.sealedContinuations[key] = nil }
+                }
+                continuation.yield(self.data.sealed ?? [])
+            }
+        }
+    }
+
     private func notify() {
         for c in groupContinuations.values { c.yield(data.groups) }
         for c in entryContinuations.values { c.yield(data.entries) }
+        for c in sealedContinuations.values { c.yield(data.sealed ?? []) }
     }
 
     func createGroup(name: String) async throws -> String {
@@ -158,7 +173,34 @@ final class LocalCollectionRepository: CollectionRepository {
         try mutate { $0.entries.removeAll { $0.id == id } }
     }
 
-    func replaceAll(groups: [CardGroup], entries: [CollectionEntry]) async throws {
-        try mutate { $0 = Snapshot(groups: groups, entries: entries) }
+    // MARK: Sealed products
+    //
+    // `data.sealed` stays nil until something is actually written, so a collection that has never
+    // owned a sealed product keeps writing exactly the file it always did — no new key appears,
+    // and nothing older reading it sees a shape it doesn't know.
+
+    func addSealed(_ entry: SealedEntry) async throws {
+        try mutate { $0.sealed = ($0.sealed ?? []) + [entry] }
+    }
+
+    func updateSealed(_ entry: SealedEntry) async throws {
+        guard data.sealed?.contains(where: { $0.id == entry.id }) == true else { return }
+        try mutate { snapshot in
+            if let i = snapshot.sealed?.firstIndex(where: { $0.id == entry.id }) {
+                snapshot.sealed?[i] = entry
+            }
+        }
+    }
+
+    func deleteSealed(id: String) async throws {
+        try mutate { $0.sealed?.removeAll { $0.id == id } }
+    }
+
+    func replaceAll(groups: [CardGroup], entries: [CollectionEntry],
+                    sealed: [SealedEntry]) async throws {
+        // Empty stays nil rather than becoming `[]`, so restoring a backup into a tin that has
+        // never held sealed leaves the file byte-identical to what it was.
+        try mutate { $0 = Snapshot(groups: groups, entries: entries,
+                                   sealed: sealed.isEmpty ? nil : sealed) }
     }
 }

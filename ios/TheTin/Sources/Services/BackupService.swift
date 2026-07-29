@@ -281,7 +281,12 @@ final class BackupService {
     /// whatever the file on disk holds now (a debounced auto-backup can swap it in between).
     /// Throws BackupError so the manual Settings path can surface what went wrong.
     func performRestore(snapshot: BackupSnapshot) async throws {
-        try await collection.replaceAll(groups: snapshot.groups, entries: snapshot.entries)
+        // `replaceAll` rewrites the whole file, so sealed has to be handed back to it explicitly
+        // or a restore would silently destroy every sealed product on the device.
+        var sealed: [SealedEntry] = []
+        for await v in collection.sealedStream() { sealed = v; break }
+        try await collection.replaceAll(groups: snapshot.groups, entries: snapshot.entries,
+                                        sealed: sealed)
         let restoredWants = snapshot.wantEntries
             ?? Dictionary(uniqueKeysWithValues: snapshot.wanted.map { ($0, WantEntry()) })
         try await wants.save(uid: uid, entries: restoredWants)
