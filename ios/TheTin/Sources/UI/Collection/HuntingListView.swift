@@ -45,6 +45,11 @@ struct HuntingListView: View {
             row(card, rawUsd: rawUsd, setsById: setsById)
                 .contentShape(Rectangle())
                 .onTapGesture { editing = card }
+                // `.onTapGesture` alone is silent to VoiceOver — a `Button` wrapping a row that
+                // itself contains a `Link` (the eBay button) is the awkward alternative, so the
+                // tap gesture stays and picks up the traits/action a real control would carry.
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { editing = card }
         }
         .listStyle(.plain)
     }
@@ -68,7 +73,7 @@ struct HuntingListView: View {
                     .font(.subheadline)
                 }
                 if let hunt = entry?.hunt {
-                    Text("\(daysLeft(hunt))  ·  \(floorLabel(hunt.minCondition))")
+                    Text("\(Self.daysLeft(hunt))  ·  \(hunt.minCondition.floorLabel)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let url = huntURL(card, entry: entry, setsById: setsById) {
@@ -87,19 +92,12 @@ struct HuntingListView: View {
     }
 
     /// Whole days remaining, rounded up — "0 days left" on a hunt that still has hours to
-    /// run reads as expired.
-    private func daysLeft(_ hunt: Hunt) -> String {
-        let days = max(0, Int((hunt.until.timeIntervalSinceNow / 86_400).rounded(.up)))
+    /// run reads as expired. `now` is injectable (not `private`, so tests can reach it via
+    /// `@testable import`) for the same reason `WishlistGrid.huntSorted` takes one: the wall
+    /// clock is untestable.
+    static func daysLeft(_ hunt: Hunt, now: Date = Date()) -> String {
+        let days = max(0, Int((hunt.until.timeIntervalSince(now) / 86_400).rounded(.up)))
         return days == 1 ? "1 day left" : "\(days) days left"
-    }
-
-    private func floorLabel(_ c: CardCondition) -> String {
-        switch c {
-        case .hp: return "Anything but DMG"
-        case .lp: return "LP or better"
-        case .nm: return "NM only"
-        case .mp, .dmg: return c.rawValue
-        }
     }
 
     private func huntURL(_ card: CardRecord, entry: WantEntry?,

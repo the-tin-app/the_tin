@@ -22,6 +22,20 @@ enum CardCondition: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+extension CardCondition {
+    /// How a buyer describes this as a *floor* ("I'll accept this or better"), which is not
+    /// how the same value reads as a fact about a card you own. Shared by the wishlist edit
+    /// sheet and the Hunting row so the two screens can't drift apart.
+    var floorLabel: String {
+        switch self {
+        case .hp: return "Anything but DMG"
+        case .lp: return "LP or better"
+        case .nm: return "NM only"
+        case .mp, .dmg: return rawValue
+        }
+    }
+}
+
 /// Card finish/printing. Fixed list offered for every card (no per-card finish data exists yet).
 /// Recorded on drafts and committed entries so future per-variant pricing lights up with no UI rework.
 enum CardVariant: String, CaseIterable, Identifiable, Codable {

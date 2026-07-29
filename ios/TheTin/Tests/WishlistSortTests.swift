@@ -91,4 +91,28 @@ extension WishlistSortTests {
                                              entries: entries, prices: ["priced": 95], now: now)
         XCTAssertEqual(sorted.map(\.id), ["priced", "unpriced"])
     }
+
+    /// The distinguishing case: A is dearer in absolute terms but closer to its budget.
+    /// Ratio ordering gives [A, B]; cheapest-first would give [B, A]. Without differing
+    /// targets, every other test in this file passes even with the division removed.
+    func testHuntSortIsProximityToBudgetNotCheapest() {
+        let now = Date(timeIntervalSince1970: 800_000_000)
+        let entries = ["a": hunting(target: 100, days: 10, from: now),   // 90/100 = 0.90
+                       "b": hunting(target: 10,  days: 10, from: now)]   // 20/10  = 2.00
+        let sorted = WishlistGrid.huntSorted(cards: [card("b"), card("a")],
+                                             entries: entries,
+                                             prices: ["a": 90, "b": 20], now: now)
+        XCTAssertEqual(sorted.map(\.id), ["a", "b"])
+    }
+
+    /// A zero (or negative) target can't be ranked against a budget any more than a missing
+    /// one can — `WishlistEditSheet` treats "0" the same as "no target" for the same reason.
+    func testHuntSortExcludesZeroAndNilTargets() {
+        let now = Date(timeIntervalSince1970: 800_000_000)
+        let entries = ["zero": hunting(target: 0, days: 5, from: now),
+                       "ok":   hunting(target: 50, days: 5, from: now)]
+        let sorted = WishlistGrid.huntSorted(cards: [card("zero"), card("ok")], entries: entries,
+                                             prices: ["zero": 10, "ok": 25], now: now)
+        XCTAssertEqual(sorted.map(\.id), ["ok"])
+    }
 }

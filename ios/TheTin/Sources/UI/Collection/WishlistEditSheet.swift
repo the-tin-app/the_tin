@@ -31,16 +31,13 @@ struct WishlistEditSheet: View {
     /// is not a floor, it's the absence of one, and nobody hunting a grail means it.
     private static let floors: [CardCondition] = [.hp, .lp, .nm]
 
-    private func floorLabel(_ c: CardCondition) -> String {
-        switch c {
-        case .hp: return "Anything but DMG"
-        case .lp: return "LP or better"
-        case .nm: return "NM only"
-        case .mp, .dmg: return c.rawValue
-        }
+    /// A non-positive budget is no budget: `Double("0")` is non-nil, and a zero-target hunt
+    /// would be stored, promised in the footer, then silently dropped by `huntSorted`'s
+    /// `target > 0` guard. One definition of "has a budget", used by the footer and by save().
+    private var budget: Double? {
+        guard let v = Double(targetText.trimmingCharacters(in: .whitespaces)), v > 0 else { return nil }
+        return v
     }
-
-    private var budget: Double? { Double(targetText.trimmingCharacters(in: .whitespaces)) }
 
     var body: some View {
         NavigationStack {
@@ -99,7 +96,7 @@ struct WishlistEditSheet: View {
             ))
             if hunting {
                 Picker("Condition floor", selection: $minCondition) {
-                    ForEach(Self.floors) { Text(floorLabel($0)).tag($0) }
+                    ForEach(Self.floors) { Text($0.floorLabel).tag($0) }
                 }
                 Picker("Buying within", selection: $window) {
                     ForEach(HuntWindow.allCases) { Text($0.label).tag($0) }
