@@ -64,7 +64,7 @@ private struct MainTabView: View {
     @State private var tinPath = NavigationPath()
     /// The same key `WantedView` reads, so a hunting alert can preselect its segment before
     /// the push. Written only when an alert asks for a scope; never on a manual open.
-    @AppStorage("wantedScope") private var wantedScopeRaw = WantedView.Scope.sets.rawValue
+    @AppStorage(WantedView.Scope.storageKey) private var wantedScopeRaw = WantedView.Scope.sets.rawValue
     /// Path for the Discover stack, so the empty tin's "Browse sets" CTA lands ON the catalog
     /// rather than on Discover's home with the catalog somewhere below the fold.
     @State private var discoverPath = NavigationPath()
