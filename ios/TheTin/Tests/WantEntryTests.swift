@@ -61,3 +61,17 @@ extension WantEntryTests {
         XCTAssertEqual(WantPriority.high.label.lowercased(), "high")
     }
 }
+
+extension WantEntryTests {
+    /// The window picker stores an ABSOLUTE date at save time, so "14 days" doesn't quietly
+    /// re-mean something else every time the sheet is reopened.
+    func testHuntWindowProducesAnAbsoluteDate() {
+        let from = Date(timeIntervalSince1970: 800_000_000)
+        XCTAssertEqual(HuntWindow.d7.until(from: from), from.addingTimeInterval(7 * 86_400))
+        XCTAssertEqual(HuntWindow.d30.until(from: from), from.addingTimeInterval(30 * 86_400))
+    }
+
+    func testHuntWindowLabels() {
+        XCTAssertEqual(HuntWindow.allCases.map(\.label), ["7 days", "14 days", "30 days"])
+    }
+}
