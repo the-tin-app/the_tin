@@ -33,6 +33,9 @@ final class PriceAlertsService {
         let cardId: String
         let target: Double
         let newUsd: Double
+        /// Whole days left on an active hunt, `nil` if this card isn't being hunted.
+        /// Carries the deadline into the copy without the alert layer needing the Hunt.
+        var huntDaysLeft: Int? = nil
     }
 
     /// Cards that crossed their target price since the last snapshot.
@@ -50,19 +53,34 @@ final class PriceAlertsService {
     /// describe different printings, so any "crossing" between them is arithmetic on a basis
     /// flip rather than a market move — the exact defect PRs #83/#84 fixed in the pipeline, and
     /// the one thing that would make this feature cry wolf on its very first outing.
+    ///
+    /// `hunts` marks the cards you told the app you're actively buying. Their crossings lead the
+    /// digest regardless of ratio — a hunted card is a decision you already made, where a plain
+    /// target is a price you were curious about. An expired hunt is not a hunt.
     static func targetCrossings(old: [String: Double], new: [String: Double],
                                 targets: [String: Double],
                                 changedBasis: Set<String> = [],
-                                floorUsd: Double = 1.0) -> [Crossing] {
+                                hunts: [String: Hunt] = [:],
+                                floorUsd: Double = 1.0,
+                                now: Date = Date()) -> [Crossing] {
         targets.compactMap { id, target -> Crossing? in
             guard target >= floorUsd,
                   !changedBasis.contains(id),
                   let oldUsd = old[id], let newUsd = new[id],
                   oldUsd > target, newUsd <= target else { return nil }
-            return Crossing(cardId: id, target: target, newUsd: newUsd)
+            var days: Int? = nil
+            if let h = hunts[id], h.isActive(now: now) {
+                days = max(0, Int((h.until.timeIntervalSince(now) / 86_400).rounded(.up)))
+            }
+            return Crossing(cardId: id, target: target, newUsd: newUsd, huntDaysLeft: days)
         }
-        // Cheapest-relative-to-target first: the best deal leads the digest.
-        .sorted { ($0.newUsd / $0.target, $0.cardId) < ($1.newUsd / $1.target, $1.cardId) }
+        // Hunted cards first, then cheapest-relative-to-target: the deal you're committed to
+        // leads, and within each bucket the best deal leads.
+        .sorted {
+            let (ah, bh) = ($0.huntDaysLeft != nil, $1.huntDaysLeft != nil)
+            if ah != bh { return ah }
+            return ($0.newUsd / $0.target, $0.cardId) < ($1.newUsd / $1.target, $1.cardId)
+        }
     }
 
     /// Target hits get their own notifications, ahead of the percentage movers: you asked for
@@ -73,8 +91,13 @@ final class PriceAlertsService {
         func name(_ c: Crossing) -> String { names[c.cardId] ?? c.cardId }
         if crossings.count <= 3 {
             return crossings.map { c in
-                Alert(title: "\(name(c)) hit your target — \(usd(c.newUsd))",
-                      body: "You were watching for \(usd(c.target)).")
+                if let days = c.huntDaysLeft {
+                    let left = days == 1 ? "1 day left" : "\(days) days left"
+                    return Alert(title: "\(name(c)) is at \(usd(c.newUsd))",
+                                 body: "You're hunting this — \(left).")
+                }
+                return Alert(title: "\(name(c)) hit your target — \(usd(c.newUsd))",
+                             body: "You were watching for \(usd(c.target)).")
             }
         }
         let top = crossings.prefix(3).map { "\(name($0)) \(usd($0.newUsd))" }
@@ -188,8 +211,10 @@ final class PriceAlertsService {
                 return was == printing ? nil : id
             })
             let targets = wants.compactMapValues(\.targetUsd)
+            let hunts = wants.compactMapValues(\.hunt)
             let crossings = Self.targetCrossings(old: old.prices, new: newPrices,
-                                                 targets: targets, changedBasis: changedBasis)
+                                                 targets: targets, changedBasis: changedBasis,
+                                                 hunts: hunts)
             let movers = Self.movers(old: old.prices, new: newPrices,
                                      threshold: Double(AppConfig.priceAlertSensitivityPct) / 100)
                 .filter { !changedBasis.contains($0.cardId) }

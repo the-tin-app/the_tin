@@ -179,3 +179,48 @@ final class PriceAlertsServiceTests: XCTestCase {
                        "wished card's price must be captured, proving its id was read from the new format")
     }
 }
+
+extension PriceAlertsServiceTests {
+    /// A hunting card's crossing leads the digest: you told the app you're buying this one.
+    func testHuntingCrossingsSortAheadOfPlainOnes() {
+        let now = Date(timeIntervalSince1970: 800_000_000)
+        let crossings = PriceAlertsService.targetCrossings(
+            old: ["plain": 120, "hunted": 520],
+            new: ["plain": 50, "hunted": 480],          // plain is a far better ratio
+            targets: ["plain": 100, "hunted": 500],
+            hunts: ["hunted": Hunt(minCondition: .hp,
+                                   until: now.addingTimeInterval(9 * 86_400))],
+            now: now)
+        XCTAssertEqual(crossings.map(\.cardId), ["hunted", "plain"])
+        XCTAssertEqual(crossings.first?.huntDaysLeft, 9)
+        XCTAssertNil(crossings.last?.huntDaysLeft)
+    }
+
+    /// An expired hunt is not a hunt — it produces an ordinary target alert.
+    func testExpiredHuntYieldsAPlainCrossing() {
+        let now = Date(timeIntervalSince1970: 800_000_000)
+        let crossings = PriceAlertsService.targetCrossings(
+            old: ["c": 520], new: ["c": 480], targets: ["c": 500],
+            hunts: ["c": Hunt(minCondition: .hp, until: now.addingTimeInterval(-86_400))],
+            now: now)
+        XCTAssertEqual(crossings.count, 1)
+        XCTAssertNil(crossings.first?.huntDaysLeft)
+    }
+
+    func testHuntingAlertCopyNamesTheDeadline() throws {
+        let c = PriceAlertsService.Crossing(cardId: "base1-4", target: 300,
+                                            newUsd: 290, huntDaysLeft: 9)
+        let alert = try XCTUnwrap(
+            PriceAlertsService.targetAlerts(for: [c], names: ["base1-4": "Charizard"]).first)
+        XCTAssertTrue(alert.title.contains("Charizard"))
+        XCTAssertTrue(alert.body.contains("9 days left"))
+    }
+
+    /// Existing callers must keep compiling and behaving identically.
+    func testPlainCallSiteIsUnchanged() {
+        let crossings = PriceAlertsService.targetCrossings(
+            old: ["c": 520], new: ["c": 480], targets: ["c": 500])
+        XCTAssertEqual(crossings.count, 1)
+        XCTAssertNil(crossings.first?.huntDaysLeft)
+    }
+}
