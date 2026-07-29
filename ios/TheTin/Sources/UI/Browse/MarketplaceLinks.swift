@@ -63,8 +63,14 @@ enum MarketplaceLinks {
     }
 
     /// Whole dollars stay whole ("300", not "300.0"); anything else gets exactly two places.
+    ///
+    /// `en_US_POSIX` is explicit rather than relying on `String(format:)`'s default
+    /// non-localized behaviour — this string goes into a URL query, where a comma decimal
+    /// separator would be percent-encoded and silently rejected, and the default is subtle
+    /// enough to be misread.
     private static func money(_ v: Double) -> String {
-        v == v.rounded() ? String(Int(v)) : String(format: "%.2f", v)
+        v == v.rounded() ? String(Int(v))
+                          : String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), v)
     }
 
     private static func query(name: String, setName: String?, number: String) -> String {
