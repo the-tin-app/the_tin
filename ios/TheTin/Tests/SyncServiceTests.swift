@@ -341,15 +341,81 @@ final class SyncServiceTests: XCTestCase {
 
         XCTAssertNil(service.seedPrompt)
         XCTAssertEqual(collection.entries.map(\.id).sorted(), ["local1", "remote1"])
-        // Nothing is pushed on launch: the first stream emission after `start()` is seed-only, so
-        // it populates the hash map without re-pushing the whole collection. `local1` therefore
-        // stays local until something changes it.
+        // `local1` IS pushed, and `remote1` is not. This assertion was inverted on 2026-07-29.
         //
-        // ⚠️ That leaves a narrow hole, deliberately recorded rather than silently patched: a
-        // record created while the sync TOGGLE WAS OFF is never subscribed, so it is never pushed,
-        // and turning sync back on seeds it into the hash map as already-known. It reaches the zone
-        // only if it is edited again. See the handoff doc, §4.
-        XCTAssertTrue(engine.sentUpserts.isEmpty)
+        // It used to assert that launch pushes nothing, on the reasoning that the first stream
+        // emission is seed-only and re-pushing the whole collection would be wasteful — with a
+        // comment conceding the "narrow hole" that left: a record created while the sync toggle was
+        // off never reached the zone at all. The hole turned out not to be narrow. Sealed products
+        // added before the first sealed-syncing build hit it universally (measured on device: two
+        // boxes on the iPad, zero on the iPhone, stable across relaunches), and the cost of closing
+        // it is not a whole-collection re-push — only records the zone has never held move, so a
+        // healthy device sends nothing.
+        //
+        // The echo guard still holds, which is the half that must not regress: `remote1` came FROM
+        // the zone and must not go back up.
+        XCTAssertEqual(engine.sentUpserts.map(\.recordName), ["local1"])
+    }
+
+    /// A device whose records are all already in the zone must send NOTHING on launch. This is the
+    /// guard on the fix above: "upload what the zone is missing" must not become "re-upload
+    /// everything every launch", which is the waste the seed-only fold was there to prevent.
+    func testASyncedDeviceUploadsNothingOnLaunch() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("e1"))
+        try await collection.addSealed(sealed("s1"))
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("e1")), try SyncRecord.sealed(sealed("s1"))]
+        let service = makeService(engine: engine, collection: collection)
+
+        await service.start()
+        try await settle()
+
+        XCTAssertTrue(engine.sentUpserts.isEmpty, "everything is already in the zone")
+    }
+
+    /// The device measurement that started this, as a test: sealed products that predate the first
+    /// sealed-syncing build reach the zone on the next launch, with no edit and no user action.
+    func testSealedProductsThatPredateSyncAreUploadedOnLaunch() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("e1"))
+        try await collection.addSealed(sealed("s1"))
+        try await collection.addSealed(sealed("s2", productId: 620024))
+        let engine = FakeSyncEngine()
+        // The zone as it was before sealed synced: the cards are up there, the boxes never were.
+        engine.zone = [try SyncRecord.entry(entry("e1"))]
+        let service = makeService(engine: engine, collection: collection)
+
+        await service.start()
+        try await settle()
+
+        XCTAssertEqual(engine.sentUpserts.filter { $0.type == .sealed }.map(\.recordName).sorted(),
+                       ["s1", "s2"])
+    }
+
+    /// A record queued but not yet sent must not be uploaded twice, and one the zone deleted must
+    /// not be resurrected by the very pass that deletes it — `vanished` and `stranded` partition
+    /// "absent from the zone", so a key can belong to at most one of them.
+    func testUploadSkipsPendingRecordsAndOnesBeingDeleted() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        defaults.set(["Entry/wasDeleted"], forKey: SyncService.knownRemoteKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("wasDeleted"))   // seen in the zone before, now gone
+        try await collection.addEntry(entry("queued"))       // still on its way up
+        try await collection.addEntry(entry("stranded"))     // never uploaded
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("anchor"))]
+        engine.pendingKeys = ["Entry/queued"]
+        let service = makeService(engine: engine, collection: collection)
+
+        await service.start()
+        try await settle()
+
+        XCTAssertEqual(engine.sentUpserts.filter { $0.type == .entry }.map(\.recordName), ["stranded"])
+        XCTAssertFalse(collection.entries.contains { $0.id == "wasDeleted" },
+                       "it was deleted elsewhere, so it is deleted here — not re-uploaded")
     }
 
     // MARK: Reconcile — the second delivery path for a deletion
@@ -474,9 +540,12 @@ final class SyncServiceTests: XCTestCase {
         let service = makeService(engine: engine, collection: collection)
         await service.start()
         try await settle()
-        // The first emission of each stream seeds the hash map and pushes nothing.
-        XCTAssertTrue(engine.sentUpserts.isEmpty)
+        // `e1` predates sync and the zone is empty, so launch uploads it — see `stranded`. (This
+        // assertion used to be `sentUpserts.isEmpty`; the seed-only fold left such a record
+        // stranded forever, which is the bug `stranded` closes.)
+        XCTAssertEqual(engine.sentUpserts.filter { $0.type == .entry }.map(\.recordName), ["e1"])
 
+        engine.reset()
         try await collection.addEntry(entry("e2"))
         try await settle()
         XCTAssertEqual(engine.sentUpserts.filter { $0.type == .entry }.map(\.recordName), ["e2"])
@@ -615,8 +684,10 @@ final class SyncServiceTests: XCTestCase {
         let service = makeService(engine: engine, collection: collection)
         await service.start()
         try await settle()
-        XCTAssertTrue(engine.sentUpserts.isEmpty, "the first emission seeds the map and pushes nothing")
+        // `s1` predates sync and the zone is empty, so launch uploads it (see `stranded`).
+        XCTAssertEqual(engine.sentUpserts.filter { $0.type == .sealed }.map(\.recordName), ["s1"])
 
+        engine.reset()
         try await collection.addSealed(sealed("s2", productId: 620024))
         try await settle()
         XCTAssertEqual(engine.sentUpserts.filter { $0.type == .sealed }.map(\.recordName), ["s2"])

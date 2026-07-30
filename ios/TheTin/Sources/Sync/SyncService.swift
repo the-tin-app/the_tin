@@ -129,6 +129,11 @@ final class SyncService {
         case .pullDown:
             await applyRemote(upserts: remote, deletes: [])
             markSeeded()
+            // "Empty" here means no CARDS — `SyncSeeding.decide` counts entries only. A tin holding
+            // sealed products and no cards still pulls down, and its boxes would otherwise be
+            // stranded by the same seed-only fold.
+            upload(stranded(local: local, remote: remote, deleting: [], engine: engine),
+                   to: engine)
         case .ask(let localCount, let remoteCount):
             // Subscribe to NOTHING until the user answers: a local edit pushed before the choice
             // would silently merge the two collections the sheet is asking them to pick between.
@@ -140,8 +145,13 @@ final class SyncService {
             // `automaticallySync` only reacts to LOCAL pending changes and to push; a device with
             // neither never fetches on its own, so without this a card added elsewhere never
             // arrives, even across relaunches. Observed on device 2026-07-29.
-            await applyRemote(upserts: remote,
-                              deletes: vanished(local: local, remote: remote, engine: engine))
+            let deletes = vanished(local: local, remote: remote, engine: engine)
+            await applyRemote(upserts: remote, deletes: deletes)
+            // …and the other half of the same question: what the ZONE is missing. `vanished` and
+            // `stranded` partition "absent from the zone" between them, so neither can claim a
+            // record the other does.
+            upload(stranded(local: local, remote: remote, deleting: deletes, engine: engine),
+                   to: engine)
         }
         subscribe()
         // `fetchAll` above carries upserts only, so a cold launch alone can never learn about a
@@ -193,6 +203,46 @@ final class SyncService {
             !remoteKeys.contains($0.key) && known.contains($0.key) && !pending.contains($0.key)
         }
         .map { SyncRecord(type: $0.type, recordName: $0.recordName, payload: nil) }
+    }
+
+    /// Queue records for upload, and say so in the status. No-op when there is nothing to send, so
+    /// a healthy launch doesn't flicker through `.syncing`.
+    private func upload(_ records: [SyncRecord], to engine: SyncEngine) {
+        guard !records.isEmpty else { return }
+        engine.send(upserts: records, deletes: [])
+        status = .syncing
+    }
+
+    /// Local records the zone has never held — the ones to upload.
+    ///
+    /// The mirror image of `vanished`, off the same three causes of "absent from the zone". That
+    /// function keeps case 3 (never uploaded) SAFE FROM DELETION; this one gives it the way up it
+    /// never had. Between them the three cases are now fully covered, which they were not before:
+    /// deleted-elsewhere is deleted here, queued-here is left to the queue, and never-uploaded is
+    /// uploaded.
+    ///
+    /// **Why it was needed.** Each stream's first emission after `start()` is `seedOnly`, folding
+    /// whatever is already on disk into the hash map as already-known. So a record that existed
+    /// before sync began was never pushed and never would be — it reached the zone only if the user
+    /// happened to edit it again. Narrow for cards (it needed the sync toggle to have been off).
+    /// **Universal for sealed on upgrade:** every box added under #98 predates the first build that
+    /// syncs sealed at all, so every one of them was stranded. Measured on device 2026-07-29 — two
+    /// boxes on the iPad, zero on the iPhone, stable across relaunches with a green test suite.
+    ///
+    /// ⚠️ **Accepted trade.** If this device MISSED a deletion made elsewhere *and* never once saw
+    /// the record in a successful zone read, it now re-uploads it instead of keeping it silently.
+    /// That resurrects a deletion in a narrow case — but the alternative is the permanent, silent
+    /// divergence `vanished` exists to end, and a collection that converges on "the card exists" is
+    /// recoverable by deleting it once, while divergence is not recoverable at all.
+    private func stranded(local: [SyncRecord], remote: [SyncRecord],
+                          deleting: [SyncRecord], engine: SyncEngine) -> [SyncRecord] {
+        let remoteKeys = Set(remote.map(\.key))
+        let deletingKeys = Set(deleting.map(\.key))
+        let pending = engine.pendingKeys
+        return local.filter {
+            !remoteKeys.contains($0.key) && !deletingKeys.contains($0.key)
+                && !pending.contains($0.key)
+        }
     }
 
     /// Catch up now — called when the app comes to the foreground.
