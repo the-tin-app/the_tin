@@ -49,12 +49,17 @@ private final class FailingReplaceAllRepository: CollectionRepository {
     private let inner = InMemoryCollectionRepository()
     var entries: [CollectionEntry] { inner.entries }
 
-    func replaceAll(groups: [CardGroup], entries: [CollectionEntry]) async throws {
+    func replaceAll(groups: [CardGroup], entries: [CollectionEntry],
+                    sealed: [SealedEntry]) async throws {
         throw WriteFailed()
     }
 
     nonisolated func groupsStream() -> AsyncStream<[CardGroup]> { inner.groupsStream() }
     nonisolated func entriesStream() -> AsyncStream<[CollectionEntry]> { inner.entriesStream() }
+    nonisolated func sealedStream() -> AsyncStream<[SealedEntry]> { inner.sealedStream() }
+    func addSealed(_ entry: SealedEntry) async throws { try await inner.addSealed(entry) }
+    func updateSealed(_ entry: SealedEntry) async throws { try await inner.updateSealed(entry) }
+    func deleteSealed(id: String) async throws { try await inner.deleteSealed(id: id) }
     func createGroup(name: String) async throws -> String { try await inner.createGroup(name: name) }
     func renameGroup(id: String, name: String) async throws { try await inner.renameGroup(id: id, name: name) }
     func deleteGroup(id: String, keepingEntries: Bool) async throws {
@@ -597,8 +602,97 @@ final class SyncServiceTests: XCTestCase {
         XCTAssertEqual(collection.entries.map(\.id), ["afterOff"])   // local keeps working
     }
 
+    // MARK: Sealed products
+
+    /// Sealed has its own stream and its own record type, so it needs its own proof that a local
+    /// change reaches the zone. Until this branch it was `case .sealed: continue` on both sides —
+    /// a user with sealed inventory had it on one device and nothing said so.
+    func testLocalSealedMutationsPushAndDeletesPropagate() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addSealed(sealed("s1"))
+        let engine = FakeSyncEngine()
+        let service = makeService(engine: engine, collection: collection)
+        await service.start()
+        try await settle()
+        XCTAssertTrue(engine.sentUpserts.isEmpty, "the first emission seeds the map and pushes nothing")
+
+        try await collection.addSealed(sealed("s2", productId: 620024))
+        try await settle()
+        XCTAssertEqual(engine.sentUpserts.filter { $0.type == .sealed }.map(\.recordName), ["s2"])
+
+        engine.reset()
+        try await collection.deleteSealed(id: "s1")
+        try await settle()
+        XCTAssertEqual(engine.sentDeletes.filter { $0.type == .sealed }.map(\.recordName), ["s1"])
+    }
+
+    /// The receive half. A sealed record from the other device has to land in the repository, and
+    /// a sealed deletion has to remove it — `replaceAll` writes groups, entries and sealed as one
+    /// file, so getting this wrong doesn't just drop a box, it can take the cards with it.
+    func testRemoteSealedRecordIsAppliedAndDeleted() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("e1"))
+        let engine = FakeSyncEngine()
+        let service = makeService(engine: engine, collection: collection)
+        await service.start()
+        try await settle()
+
+        engine.onRemoteChange?([try SyncRecord.sealed(sealed("fromOtherDevice"))], [])
+        try await settle()
+        XCTAssertEqual(collection.sealed.map(\.id), ["fromOtherDevice"])
+        XCTAssertEqual(collection.entries.map(\.id), ["e1"], "the cards must survive a sealed write")
+
+        engine.onRemoteChange?([], [try SyncRecord.sealed(sealed("fromOtherDevice"))])
+        try await settle()
+        XCTAssertTrue(collection.sealed.isEmpty)
+        XCTAssertEqual(collection.entries.map(\.id), ["e1"])
+    }
+
+    /// The dangerous direction: a CARD arriving from the other device must not take the sealed
+    /// products with it. `replaceAll` rewrites groups, entries and sealed as one file, so an apply
+    /// path that rebuilt the file from the records in the batch alone would silently empty the
+    /// sealed section every time a card synced. Same trap `replaceAll`'s own doc comment names,
+    /// and the reason `sealed` is read here even when no sealed record is in the batch.
+    func testApplyingACardDoesNotDeleteSealedProducts() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addSealed(sealed("s1"))
+        let engine = FakeSyncEngine()
+        let service = makeService(engine: engine, collection: collection)
+        await service.start()
+        try await settle()
+
+        engine.onRemoteChange?([try SyncRecord.entry(entry("fromOtherDevice"))], [])
+        try await settle()
+
+        XCTAssertEqual(collection.entries.map(\.id), ["fromOtherDevice"])
+        XCTAssertEqual(collection.sealed.map(\.id), ["s1"], "a card sync must not empty the tin's sealed section")
+    }
+
+    /// Seeding an empty zone must carry sealed too. This is really a test of `currentRecords()`,
+    /// which is also what `vanished` diffs against — so a sealed product missing from it would
+    /// both fail to seed AND be invisible to the deletion reconcile.
+    func testSeedingAnEmptyZoneCarriesSealedProducts() async throws {
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("e1"))
+        try await collection.addSealed(sealed("s1"))
+        let engine = FakeSyncEngine()
+        let service = makeService(engine: engine, collection: collection)
+        await service.start()
+        try await settle()
+
+        XCTAssertEqual(engine.sentUpserts.filter { $0.type == .sealed }.map(\.recordName), ["s1"])
+    }
+
     private func entry(_ id: String) -> CollectionEntry {
         CollectionEntry(id: id, cardId: "base1-4", groupId: "", qty: 1,
                         addedAt: Date(timeIntervalSince1970: 0))
+    }
+
+    private func sealed(_ id: String, productId: Int = 598488, qty: Int = 1) -> SealedEntry {
+        SealedEntry(id: id, productId: productId, qty: qty,
+                    addedAt: Date(timeIntervalSince1970: 0))
     }
 }

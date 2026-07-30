@@ -335,6 +335,15 @@ final class SyncService {
                 first = false
             }
         })
+        streamTasks.append(Task { [weak self] in
+            guard let stream = self?.collection.sealedStream() else { return }
+            var first = true
+            for await sealed in stream {
+                await self?.push(.sealed, sealed.compactMap { try? SyncRecord.sealed($0) },
+                                 seedOnly: first)
+                first = false
+            }
+        })
         streamTasks.append(Task { [weak self, uid = self.uid] in
             guard let stream = self?.wants.stream(uid: uid) else { return }
             var first = true
@@ -413,6 +422,10 @@ final class SyncService {
 
         var groups = await first(collection.groupsStream()) ?? []
         var entries = await first(collection.entriesStream()) ?? []
+        // Read even when no sealed record is in this batch: `replaceAll` writes groups, entries
+        // and sealed as ONE file, so a card-only change still has to hand back the sealed products
+        // that are already there or the write deletes them.
+        var sealed = await first(collection.sealedStream()) ?? []
         var wantMap = await first(wants.stream(uid: uid)) ?? [:]
         var goals = setGoals?.setIds ?? []
         var touchedCollection = false, touchedWants = false, touchedGoals = false
@@ -437,7 +450,10 @@ final class SyncService {
                 goals.insert(record.recordName)
                 touchedGoals = true
             case .sealed:
-                continue   // storage arrives with the sealed-ownership branch
+                guard let box = try? record.decode(SealedEntry.self) else { continue }
+                if let i = sealed.firstIndex(where: { $0.id == box.id }) { sealed[i] = box }
+                else { sealed.append(box) }
+                touchedCollection = true
             }
         }
         for record in deletes {
@@ -453,7 +469,8 @@ final class SyncService {
             case .setGoal:
                 if goals.remove(record.recordName) != nil { touchedGoals = true }
             case .sealed:
-                continue
+                sealed.removeAll { $0.id == record.recordName }
+                touchedCollection = true
             }
         }
 
@@ -466,8 +483,10 @@ final class SyncService {
             failed = true
         }
         if touchedCollection {
-            do { try await collection.replaceAll(groups: groups, entries: entries) }
-            catch { rollBack([.group, .entry]) }
+            // One write, so one rollback set: sealed rides the same file as groups and entries,
+            // and a failed `replaceAll` loses all three or none.
+            do { try await collection.replaceAll(groups: groups, entries: entries, sealed: sealed) }
+            catch { rollBack([.group, .entry, .sealed]) }
         }
         if touchedWants {
             do { try await wants.save(uid: uid, entries: wantMap) }
@@ -490,10 +509,16 @@ final class SyncService {
         let groups = await first(collection.groupsStream()) ?? []
         let entries = await first(collection.entriesStream()) ?? []
         let wantMap = await first(wants.stream(uid: uid)) ?? [:]
-        return groups.compactMap { try? SyncRecord.group($0) }
-            + entries.compactMap { try? SyncRecord.entry($0) }
-            + wantMap.compactMap { try? SyncRecord.want(cardId: $0.key, $0.value) }
-            + (setGoals?.setIds ?? []).sorted().map(SyncRecord.setGoal)
+        let sealed = await first(collection.sealedStream()) ?? []
+        // Accumulated statement by statement, not as one `+` chain: five heterogeneous
+        // `compactMap`s in a single expression time the type-checker out (a real xcodebuild error
+        // here, not SourceKit noise).
+        var records: [SyncRecord] = groups.compactMap { try? SyncRecord.group($0) }
+        records += entries.compactMap { try? SyncRecord.entry($0) }
+        records += sealed.compactMap { try? SyncRecord.sealed($0) }
+        records += wantMap.compactMap { try? SyncRecord.want(cardId: $0.key, $0.value) }
+        records += (setGoals?.setIds ?? []).sorted().map(SyncRecord.setGoal)
+        return records
     }
 
     private func first<T>(_ stream: AsyncStream<T>) async -> T? {

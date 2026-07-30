@@ -51,6 +51,13 @@ extension SyncRecord {
         SyncRecord(type: .setGoal, recordName: setId, payload: nil)
     }
 
+    /// Keyed by the entry id, not the product id: two rows can hold the same `productId` (buying a
+    /// second box at a different price makes its own row with its own cost basis), so keying by
+    /// product would make the second one overwrite the first across devices.
+    static func sealed(_ entry: SealedEntry) throws -> SyncRecord {
+        SyncRecord(type: .sealed, recordName: entry.id, payload: try encoder.encode(entry))
+    }
+
     func decode<T: Decodable>(_ type: T.Type) throws -> T {
         guard let payload else {
             throw DecodingError.valueNotFound(T.self, .init(codingPath: [],
