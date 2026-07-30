@@ -150,7 +150,7 @@ struct SetDetailView: View {
                     Divider().padding(.vertical, 6)
                     Text("Sealed products").font(.headline)
                     LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(model.sealed) { SealedCard(product: $0) }
+                        ForEach(model.sealed) { SealedCard(product: $0, collection: collection) }
                     }
                 }
             }

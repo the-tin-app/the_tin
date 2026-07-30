@@ -18,7 +18,43 @@ struct DividerSubtotal: Identifiable, Equatable {
     let value: Double
 }
 
+/// One sealed line in the report. Sealed has no condition, grade or printing to put in a `detail`
+/// column and no divider to subtotal it under, so it gets its own row shape rather than a
+/// `ReportRow` with four permanently-empty cells.
+struct SealedReportRow: Identifiable, Equatable {
+    let id: String              // sealed entry id
+    let name: String            // product name, or a readable stand-in when the catalog lost it
+    let productType: String     // "Booster Box", "Elite Trainer Box" — "" when unknown
+    let qty: Int
+    let acquiredAt: Date?
+    let acquiredFrom: String?
+    let pricePaid: Double?
+    let currentValue: Double?   // market × qty; nil when this catalog can't price it
+}
+
 enum InsuranceReport {
+    /// Sealed lines, most valuable first (unpriced last), sold boxes excluded — an insurance
+    /// inventory lists what you HOLD.
+    ///
+    /// A product the catalog no longer carries still prints, named by its id: you own the box
+    /// whether or not the price feed still lists it, and an inventory that drops rows it can't
+    /// price is exactly the wrong failure for this document.
+    static func sealedRows(_ sealed: [SealedEntry],
+                           products: [Int: SealedProduct]) -> [SealedReportRow] {
+        sealed.filter { !$0.isSold }.map { entry in
+            let p = products[entry.productId]
+            return SealedReportRow(
+                id: entry.id,
+                name: p?.name ?? "Sealed product \(entry.productId)",
+                productType: p?.productType ?? "",
+                qty: entry.qty,
+                acquiredAt: entry.acquiredAt, acquiredFrom: entry.acquiredFrom,
+                pricePaid: entry.pricePaid,
+                currentValue: p?.marketUsd.map { $0 * Double(entry.qty) })
+        }
+        .sorted { ($0.currentValue ?? -1) > ($1.currentValue ?? -1) }
+    }
+
     static func totals(entries: [CollectionEntry], prices: [String: PriceRecord],
                        variantsByCard: [String: [VariantPrice]],
                        conditionsByCard: [String: [ConditionPrice]],

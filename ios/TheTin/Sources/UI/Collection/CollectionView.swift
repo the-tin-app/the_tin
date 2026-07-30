@@ -22,6 +22,18 @@ final class CollectionModel {
     private(set) var allEntries: [CollectionEntry] = []
     /// Copies that have left, most recently gone first.
     private(set) var soldEntries: [CollectionEntry] = []
+    /// The sealed products you own, sold boxes filtered out — same owned/sold split as `entries`,
+    /// made in the one place so no consumer has to remember it.
+    private(set) var sealed: [SealedEntry] = []
+    /// Every sealed row on file, owned and sold alike. Only for whole-collection rewrites (undo,
+    /// backup) and CSV export, where dropping the sold rows would look like a successful save.
+    private(set) var allSealed: [SealedEntry] = []
+    /// tcgplayer_id → catalog product, for the sealed you own. Loaded only when there IS sealed:
+    /// `allSealedProducts()` is a full table scan over ~2,500 rows, and a tin with no boxes must
+    /// not pay for it on every entries-stream emission.
+    private(set) var sealedProducts: [Int: SealedProduct] = [:]
+    /// What the sealed you own is worth, in the same best-effort terms as `tinValue`.
+    private(set) var sealedValue: (total: Double, priced: Int, boxes: Int) = (0, 0, 0)
     private(set) var prices: [String: PriceRecord] = [:]
     private(set) var variantsByCard: [String: [VariantPrice]] = [:]
     private(set) var conditionsByCard: [String: [ConditionPrice]] = [:]
@@ -82,6 +94,31 @@ final class CollectionModel {
                 self?.publishWidgetSnapshot()
             }
         })
+        streamTasks.append(Task { [weak self] in
+            guard let stream = self?.repository.sealedStream() else { return }
+            for await all in stream {
+                self?.allSealed = all
+                self?.sealed = all.filter { !$0.isSold }
+                self?.reloadSealedProducts()
+            }
+        })
+    }
+
+    /// Re-read the catalog rows behind the sealed you own, then re-total. Skips the table scan
+    /// entirely when there's no sealed — which is every tin that hasn't used the feature.
+    private func reloadSealedProducts() {
+        guard !allSealed.isEmpty else {
+            sealedProducts = [:]
+            sealedValue = (0, 0, 0)
+            return
+        }
+        // Keyed off `allSealed`, not `sealed`: a SOLD box still needs its product name for the
+        // CSV export and the report, even though it contributes nothing to the value.
+        let wanted = Set(allSealed.map(\.productId))
+        let all = (try? store.allSealedProducts()) ?? []
+        sealedProducts = Dictionary(uniqueKeysWithValues:
+            all.filter { wanted.contains($0.tcgplayerId) }.map { ($0.tcgplayerId, $0) })
+        sealedValue = sealed.marketValue(products: sealedProducts)
     }
 
     /// The catalog artifact was swapped under the live store (daily update installed
@@ -89,6 +126,7 @@ final class CollectionModel {
     func catalogDidChange() {
         catalogGeneration += 1   // views keying caches (card names) off the catalog watch this
         reloadPrices()
+        reloadSealedProducts()
         publishWidgetSnapshot()
     }
     private(set) var catalogGeneration = 0
@@ -335,8 +373,12 @@ final class CollectionModel {
                 restoredEntries.append(entry)
             }
         }
+        // `sealed` is passed through UNCHANGED. Undo only ever restores cards and dividers, but
+        // `replaceAll` rewrites the whole file — omitting sealed here would make pressing Undo on
+        // a deleted divider silently destroy every sealed product in the tin.
         await write("undo that") {
-            try await repository.replaceAll(groups: restoredGroups, entries: restoredEntries)
+            try await repository.replaceAll(groups: restoredGroups, entries: restoredEntries,
+                                            sealed: sealed)
         }
     }
 
@@ -475,6 +517,31 @@ final class CollectionModel {
         offerUndo(UndoableDelete(message: "Removed \(cardName(removed.cardId))",
                                  groups: [], entries: [removed]))
     }
+
+    // MARK: Sealed products
+
+    /// Add or update a sealed product. `allSealed`, not `sealed`: editing a sold box from a future
+    /// "gone" surface must route a known id to `updateSealed` rather than minting a duplicate.
+    ///
+    /// There is deliberately no add-or-increment twin rule here (`CollectionEntry.isSameCopy`).
+    /// Sealed has no condition/grade/printing to compare, so "the same product twice" is just a
+    /// quantity — which the form already asks for directly.
+    @discardableResult
+    func saveSealed(_ entry: SealedEntry) async -> Bool {
+        if allSealed.contains(where: { $0.id == entry.id }) {
+            return await write("save the sealed product") { try await repository.updateSealed(entry) }
+        }
+        return await write("save the sealed product") { try await repository.addSealed(entry) }
+    }
+
+    func deleteSealed(id: String) async {
+        await write("remove the sealed product") { try await repository.deleteSealed(id: id) }
+    }
+
+    /// The catalog row behind a sealed entry, or nil when this catalog doesn't carry it (an older
+    /// artifact, or a product that has since left the feed). Callers show the raw id rather than
+    /// dropping the row — you still own the box.
+    func sealedProduct(_ entry: SealedEntry) -> SealedProduct? { sealedProducts[entry.productId] }
 
     // MARK: Trade list
 
@@ -687,6 +754,7 @@ struct CollectionView: View {
     @State private var destroyingGroup: CardGroup?
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
+    @State private var editingSealed: SealedEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var searchIndex = CardSearchIndex()
 
@@ -706,6 +774,10 @@ struct CollectionView: View {
                     ForEach(model.groups) { group in
                         groupRow(group).tinRow()
                     }
+                    // Also on the empty branch: a tin holding only sealed products owns no CARDS,
+                    // which is what this branch is about — but it isn't empty, and hiding what
+                    // you do own behind a "your tin is empty" screen would read as data loss.
+                    sealedSection
                     if let wants, !wants.wanted.isEmpty { wishlistLink(wants).tinRow() }
                 } else {
                     header.tinRow()
@@ -719,6 +791,7 @@ struct CollectionView: View {
                         Task { await model.reorderGroups(ids: ids) }
                     }
                     newDividerRow.tinRow()
+                    sealedSection
                     if let wants { wishlistLink(wants).tinRow() }
                     // Not on the empty branch: with no entries there is nothing to trade, so the
                     // row would only be a promise the tin can't keep — same rule as the wishlist.
@@ -888,6 +961,15 @@ struct CollectionView: View {
                 }
             }
         }
+        .sheet(item: $editingSealed) { entry in
+            if let product = model.sealedProduct(entry) {
+                NavigationStack {
+                    SealedEntryFormView(product: product, existing: entry) {
+                        await model.saveSealed($0)
+                    }
+                }
+            }
+        }
         .navigationDestination(for: CardID.self) { cardID in
             if let card = try? store.card(id: cardID.raw) {
                 CardDetailView(model: CardDetailModel(store: store, card: card, history: CatalogPriceHistory(store: store)),
@@ -900,9 +982,15 @@ struct CollectionView: View {
     /// Only rendered once there's a card to total — `emptyTin` owns the first-run screen.
     private var header: some View {
         let v = model.tinValue
+        // Sealed is added to the DISPLAYED total but deliberately not folded into `tinValue`
+        // itself: forty-odd consumers of that number (GroupStats, the widget, per-divider totals,
+        // set completion) all mean "cards", and quietly redefining it would change all of them.
+        // This is the one place the two are shown as one figure — and it has to be, because
+        // tapping it opens the Portfolio, which totals them together.
+        let total = v.total + model.sealedValue.total
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text(v.total, format: WidgetShared.tinCurrency(v.total))
+                Text(total, format: WidgetShared.tinCurrency(total))
                     .font(.system(.largeTitle, design: .rounded).weight(.bold))
                     .monospacedDigit()
                     .contentTransition(.numericText())
@@ -910,10 +998,14 @@ struct CollectionView: View {
                     .font(.body.weight(.semibold)).foregroundStyle(.tertiary)
             }
             .background { navLink(PortfolioRoute()) }
-            .accessibilityLabel("Tin value, \(v.total.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
+            .accessibilityLabel("Tin value, \(total.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
             .accessibilityHint("Shows portfolio value history")
             Text("\(v.totalCards) cards in your tin · \(v.pricedCards) of \(v.totalCards) priced")
                 .font(.footnote).foregroundStyle(.secondary)
+            if model.sealedValue.boxes > 0 {
+                Text("plus ^[\(model.sealedValue.boxes) sealed box](inflect: true)")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             if let asOf = model.priceAsOf {
                 AsOfLabel(date: asOf)
             }
@@ -1075,6 +1167,37 @@ struct CollectionView: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+
+    /// Sealed products you own, as a section beside the dividers. Rendered straight into the List
+    /// (not wrapped in a container) so each row keeps its own swipe actions.
+    ///
+    /// Hidden entirely when empty — an empty section advertising a feature you aren't using is
+    /// noise, and sealed is a feature most collectors will never touch.
+    @ViewBuilder private var sealedSection: some View {
+        if !model.sealed.isEmpty {
+            SealedSectionHeader(value: model.sealedValue).tinRow()
+            ForEach(model.sealed) { entry in
+                SealedRow(entry: entry, product: model.sealedProduct(entry))
+                    .tinRow()
+                    .contentShape(Rectangle())
+                    .onTapGesture { editingSealed = entry }
+                    // Reveal-then-tap IS the confirmation, and no full swipe, so it can't fire by
+                    // accident — the same rule the tin's card rows follow.
+                    .swipeActions(allowsFullSwipe: false) {
+                        Button("Remove", role: .destructive) {
+                            Task { await model.deleteSealed(id: entry.id) }
+                        }
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button { editingSealed = entry } label: { Label("Edit", systemImage: "pencil") }
+                    }
+                    .accessibilityAction(named: "Edit") { editingSealed = entry }
+                    .accessibilityAction(named: "Remove") {
+                        Task { await model.deleteSealed(id: entry.id) }
+                    }
+            }
+        }
     }
 
     /// Whole-tin search: "do I own this?" answered from the Tin root — a card-shop moment,
