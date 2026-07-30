@@ -29,6 +29,8 @@ final class SyncService {
     var seedPrompt: SeedPrompt?
 
     static let seededKey = "syncSeeded"
+    /// Record keys this device has actually seen in the zone. See `vanished`.
+    static let knownRemoteKey = "syncKnownRemote"
 
     private let engine: SyncEngine?
     private let collection: CollectionRepository
@@ -137,10 +139,9 @@ final class SyncService {
             // Already seeded — but the records just fetched must still be applied, not dropped.
             // `automaticallySync` only reacts to LOCAL pending changes and to push; a device with
             // neither never fetches on its own, so without this a card added elsewhere never
-            // arrives, even across relaunches. Upserts only: a record missing from the zone is not
-            // evidence of a delete here, and treating it as one would erase anything this device
-            // has queued but not yet sent. Observed on device 2026-07-29.
-            await applyRemote(upserts: remote, deletes: [])
+            // arrives, even across relaunches. Observed on device 2026-07-29.
+            await applyRemote(upserts: remote,
+                              deletes: vanished(local: local, remote: remote, engine: engine))
         }
         subscribe()
         // `fetchAll` above carries upserts only, so a cold launch alone can never learn about a
@@ -149,6 +150,49 @@ final class SyncService {
         // record deleted on another device survives until the app is backgrounded and
         // foregrounded again. Confirmed on device 2026-07-29.
         await engine.fetchChanges()
+    }
+
+    /// Records this device holds that the zone does not, and that are genuinely safe to delete.
+    ///
+    /// **Why this exists.** `CKSyncEngine`'s change feed is once-only: its token advances whether or
+    /// not the app did anything with an event, and `fetchAll` cannot express a deletion. So a
+    /// deletion had exactly ONE delivery path and no recovery if it was missed — and it was missed
+    /// twice on 2026-07-29 (once to a startup race, once to a token already past the change). The
+    /// symptom is permanent, silent divergence that no pull, relaunch or reinstall can heal: the
+    /// iPad held 59 entries against the zone's 58 and stayed there through three fetch cycles that
+    /// correctly reported nothing new. This gives deletions a second path.
+    ///
+    /// **Why it is safe, which is the whole difficulty.** Absence from the zone has three causes and
+    /// only one of them is a deletion:
+    ///
+    /// 1. deleted on another device — delete it here too ✅
+    /// 2. queued here and not sent yet — `pendingKeys` excludes it, or this erases a card the user
+    ///    just added while offline
+    /// 3. never uploaded at all (added while the sync toggle was off, or a send that failed for
+    ///    good) — `knownRemote` excludes it, because a record this device has never once seen in the
+    ///    zone cannot have been deleted from it
+    ///
+    /// An empty zone is refused outright: a wiped or newly-recreated zone would otherwise read as
+    /// "everything was deleted" and take the entire local collection with it. A genuine mass delete
+    /// still propagates through the change feed, which reports deletions explicitly — guessing at it
+    /// from silence is exactly the wrong risk to take.
+    private func vanished(local: [SyncRecord], remote: [SyncRecord],
+                          engine: SyncEngine) -> [SyncRecord] {
+        guard !remote.isEmpty else { return [] }
+        let remoteKeys = Set(remote.map(\.key))
+        let known = Set(defaults.stringArray(forKey: Self.knownRemoteKey) ?? [])
+        let pending = engine.pendingKeys
+        defer {
+            // Recorded AFTER the decision, so a record's first sighting can never also authorise its
+            // deletion in the same pass.
+            // ponytail: a plain key list in UserDefaults — fine at collection scale (tens of KB for
+            // thousands of cards); move it beside the engine state if it ever gets big.
+            defaults.set(Array(remoteKeys), forKey: Self.knownRemoteKey)
+        }
+        return local.filter {
+            !remoteKeys.contains($0.key) && known.contains($0.key) && !pending.contains($0.key)
+        }
+        .map { SyncRecord(type: $0.type, recordName: $0.recordName, payload: nil) }
     }
 
     /// Catch up now — called when the app comes to the foreground.
@@ -164,13 +208,27 @@ final class SyncService {
     /// No-op before seeding: `streamTasks.isEmpty` means `start()` hasn't finished or the seed
     /// sheet is still up, and pulling the zone into a device whose choice hasn't been made would
     /// merge the two collections the sheet is asking the user to pick between.
-    func refresh() async {
+    /// `reconcile` is for a PULL, not for a foreground. Pulling down is the user saying "I know
+    /// something changed", which makes it the right moment to pay for a whole-zone read and heal a
+    /// divergence the change feed can no longer report (see `vanished`). Doing the same on every
+    /// `.active` transition would put a full fetch on every app switch — fine for sixty cards,
+    /// wasteful for six thousand.
+    func refresh(reconcile: Bool = false) async {
         guard AppConfig.syncEnabled, let engine, seedPrompt == nil else { return }
         // Nothing subscribed means `start()` never got past the zone read (or hasn't run). A
         // foreground is the natural moment to try again — otherwise one failed read at launch
-        // leaves sync dead for the whole session and only a relaunch revives it.
+        // leaves sync dead for the whole session and only a relaunch revives it. `start()` does its
+        // own reconcile, so this covers the pull case too.
         guard !streamTasks.isEmpty else { return await start() }
         await engine.fetchChanges()
+        guard reconcile else { return }
+        // Read the zone explicitly rather than with `try?`: a failed read must decide NOTHING here.
+        // Conflating "couldn't read" with "the zone is empty" is the bug `3faab6a` fixed once
+        // already, and the consequence would be worse on this path.
+        let remote: [SyncRecord]
+        do { remote = try await engine.fetchAll() } catch { status = .failed; return }
+        let deletes = vanished(local: await currentRecords(), remote: remote, engine: engine)
+        if !deletes.isEmpty { await applyRemote(upserts: [], deletes: deletes) }
     }
 
     /// The seed sheet's answer. `useLocal` = "this device's tin is the real one".

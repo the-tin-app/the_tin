@@ -15,6 +15,9 @@ private final class FakeSyncEngine: SyncEngine, @unchecked Sendable {
     var startError: Error?
     var fetchAllError: Error?
     var fetchChangesCalls = 0
+    /// Stands in for `CKSyncEngine.State.pendingRecordZoneChanges` — what this device still owes the
+    /// zone, and therefore must never interpret the zone's silence about as a deletion.
+    var pendingKeys: Set<String> = []
 
     /// Delivered from inside `start()`, reproducing `CKSyncEngine` fetching the moment it exists.
     var deliverDuringStart: ([SyncRecord], [SyncRecord])?
@@ -342,6 +345,118 @@ final class SyncServiceTests: XCTestCase {
         // and turning sync back on seeds it into the hash map as already-known. It reaches the zone
         // only if it is edited again. See the handoff doc, §4.
         XCTAssertTrue(engine.sentUpserts.isEmpty)
+    }
+
+    // MARK: Reconcile — the second delivery path for a deletion
+
+    /// The bug this exists for. A record this device HAS seen in the zone, now gone from it, with
+    /// nothing pending, was deleted elsewhere — and the change feed is once-only, so if its event
+    /// was missed there is no other way to learn. Measured on device 2026-07-29: an iPad held 59
+    /// entries against the zone's 58 and stayed diverged through three fetch cycles, a
+    /// pull-to-refresh and a relaunch.
+    func testARecordSeenInTheZoneAndThenMissingIsDeletedLocally() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("keep"))
+        try await collection.addEntry(entry("gone"))
+
+        // First launch: both records are in the zone, so both become "known remote".
+        let first = FakeSyncEngine()
+        first.zone = [try SyncRecord.entry(entry("keep")), try SyncRecord.entry(entry("gone"))]
+        await makeService(engine: first, collection: collection).start()
+
+        // Second launch: the other device deleted "gone", and its feed event never arrived.
+        let second = FakeSyncEngine()
+        second.zone = [try SyncRecord.entry(entry("keep"))]
+        await makeService(engine: second, collection: collection).start()
+
+        XCTAssertEqual(collection.entries.map(\.id), ["keep"],
+                       "a record deleted elsewhere must not survive forever just because its feed event was missed")
+    }
+
+    /// A record this device has NEVER seen in the zone was never uploaded — added while the sync
+    /// toggle was off, or a send that failed for good. Absence from the zone is not evidence it was
+    /// deleted, and erasing it would destroy a card the user added.
+    func testARecordNeverSeenInTheZoneIsNotDeleted() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("neverUploaded"))
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("somethingElse"))]
+
+        await makeService(engine: engine, collection: collection).start()
+
+        XCTAssertTrue(collection.entries.contains { $0.id == "neverUploaded" },
+                      "never having reached the zone is not the same as having been deleted from it")
+    }
+
+    /// Queued locally and not sent yet — the exact case that made this approach look too dangerous
+    /// to attempt. `pendingKeys` is what makes it safe.
+    func testAPendingRecordIsNotDeletedEvenIfPreviouslySeen() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("queued"))
+        let first = FakeSyncEngine()
+        first.zone = [try SyncRecord.entry(entry("queued")), try SyncRecord.entry(entry("other"))]
+        await makeService(engine: first, collection: collection).start()
+
+        let second = FakeSyncEngine()
+        second.zone = [try SyncRecord.entry(entry("other"))]
+        second.pendingKeys = [try SyncRecord.entry(entry("queued")).key]
+        await makeService(engine: second, collection: collection).start()
+
+        XCTAssertTrue(collection.entries.contains { $0.id == "queued" },
+                      "an unsent local change must never be read as a remote deletion")
+    }
+
+    /// A wiped or recreated zone must never be read as "the user deleted everything". A genuine mass
+    /// delete arrives through the change feed, which says so explicitly.
+    func testAnEmptyZoneNeverDeletesAnything() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("a"))
+        try await collection.addEntry(entry("b"))
+        let first = FakeSyncEngine()
+        first.zone = [try SyncRecord.entry(entry("a")), try SyncRecord.entry(entry("b"))]
+        await makeService(engine: first, collection: collection).start()
+
+        let second = FakeSyncEngine()
+        second.zone = []
+        await makeService(engine: second, collection: collection).start()
+
+        XCTAssertEqual(collection.entries.count, 2,
+                       "an empty zone is not permission to empty the collection")
+    }
+
+    /// A PULL heals; a foreground does not. The gesture means "I know something changed", so it pays
+    /// for a whole-zone read; an `.active` transition happens constantly and must stay cheap.
+    func testPullReconcilesButForegroundDoesNot() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("keep"))
+        try await collection.addEntry(entry("gone"))
+        let first = FakeSyncEngine()
+        first.zone = [try SyncRecord.entry(entry("keep")), try SyncRecord.entry(entry("gone"))]
+        await makeService(engine: first, collection: collection).start()
+
+        // A second session, subscribed, with "gone" no longer in the zone and its feed event missed.
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("keep")),
+                       try SyncRecord.entry(entry("gone"))]
+        let service = makeService(engine: engine, collection: collection)
+        await service.start()
+        try await settle()
+        engine.zone = [try SyncRecord.entry(entry("keep"))]
+
+        await service.refresh()
+        try await settle()
+        XCTAssertTrue(collection.entries.contains { $0.id == "gone" },
+                      "a plain foreground must not pay for a whole-zone read")
+
+        await service.refresh(reconcile: true)
+        try await settle()
+        XCTAssertEqual(collection.entries.map(\.id), ["keep"],
+                       "pulling down is exactly when a stranded deletion should be healed")
     }
 
     // MARK: Live operation

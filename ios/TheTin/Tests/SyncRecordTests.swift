@@ -80,4 +80,38 @@ final class SyncRecordTests: XCTestCase {
     func testDecodeOfAPayloadlessRecordThrows() {
         XCTAssertThrowsError(try SyncRecord.setGoal("base1").decode(CardGroup.self))
     }
+
+    /// A deletion must decode from the record NAME alone, with no reference to CloudKit's
+    /// `recordType`. The two used to have to agree, and a disagreement dropped the deletion —
+    /// permanently, because the change feed is once-only and `fetchAll` cannot express a delete.
+    /// A card deleted on an iPhone survived a pull-to-refresh AND a relaunch on an iPad this way
+    /// (2026-07-29), with the zone holding 59 records to the iPad's 60.
+    func testDeletionDecodesFromRecordNameAlone() throws {
+        let key = try SyncRecord.entry(entry).key
+        let parsed = try XCTUnwrap(CloudKitSyncEngine.deletedRecord(recordName: key))
+        XCTAssertEqual(parsed.type, SyncRecordType.entry)
+        XCTAssertEqual(parsed.recordName, "e1")
+        XCTAssertNil(parsed.payload, "a deletion carries no payload")
+    }
+
+    /// Every type round-trips, so no record type can be the one that silently fails to delete.
+    func testEveryTypeDeletionRoundTrips() throws {
+        for type in SyncRecordType.allCases {
+            let parsed = CloudKitSyncEngine.deletedRecord(recordName: "\(type.rawValue)/abc-123")
+            XCTAssertEqual(parsed?.type, type, "\(type.rawValue) deletion failed to decode")
+            XCTAssertEqual(parsed?.recordName, "abc-123")
+        }
+    }
+
+    /// An id containing a slash must not be truncated: only the FIRST slash separates type from id.
+    func testDeletionKeepsSlashesInTheIdentifier() {
+        let parsed = CloudKitSyncEngine.deletedRecord(recordName: "Want/sv06.5-086/extra")
+        XCTAssertEqual(parsed?.type, .want)
+        XCTAssertEqual(parsed?.recordName, "sv06.5-086/extra")
+    }
+
+    func testUnknownTypePrefixIsRejectedRatherThanGuessed() {
+        XCTAssertNil(CloudKitSyncEngine.deletedRecord(recordName: "Sprocket/abc"))
+        XCTAssertNil(CloudKitSyncEngine.deletedRecord(recordName: "noslash"))
+    }
 }

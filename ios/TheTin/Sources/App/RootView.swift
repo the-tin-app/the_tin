@@ -144,7 +144,11 @@ private struct MainTabView: View {
                                // repeatedly stays cheap. Both awaited in sequence so the spinner
                                // stays up until the work is actually finished.
                                onRefresh: {
-                                   await model.sync?.refresh()
+                                   // `reconcile: true` because this is a PULL — the user asserting
+                                   // something changed. It buys a whole-zone read that can heal a
+                                   // divergence the once-only change feed will never report again;
+                                   // the automatic foreground refresh deliberately skips it.
+                                   await model.sync?.refresh(reconcile: true)
                                    await model.refreshIfStale()
                                },
                                // The gear belongs to CollectionView's own toolbar. Applying it

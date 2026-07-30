@@ -36,6 +36,14 @@ protocol SyncEngine: AnyObject {
     func send(upserts: [SyncRecord], deletes: [SyncRecord])
     /// Everything currently in the zone. Used once, to decide seeding.
     func fetchAll() async throws -> [SyncRecord]
+    /// Record keys with an outbound change the engine has not confirmed as sent yet.
+    ///
+    /// This is what makes reconciling local-against-zone safe. Absence from the zone means either
+    /// "deleted on another device" or "queued here, not sent yet", and deleting the second kind is
+    /// real data loss — so the reconcile has to be able to tell them apart. `CKSyncEngine.State`
+    /// exposes `pendingRecordZoneChanges`, which is exactly that set; an earlier round of this work
+    /// assumed it wasn't reachable and rejected the whole approach on that basis.
+    var pendingKeys: Set<String> { get }
     /// Pull the zone's changes NOW, through the engine's own change feed.
     ///
     /// This is the only route a **delete** has. `fetchAll` returns the records that exist, so a
@@ -111,6 +119,22 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
         lock.withLock { outbound.removeAll() }
     }
 
+    /// Both halves matter: `pendingRecordZoneChanges` is what the engine still intends to send, and
+    /// `outbound` is what `send` accepted this session. A record in either has not been confirmed
+    /// into the zone, so its absence there says nothing about whether it was deleted elsewhere.
+    var pendingKeys: Set<String> {
+        var keys = Set(lock.withLock { outbound.keys })
+        if let pending = engine?.state.pendingRecordZoneChanges {
+            for change in pending {
+                switch change {
+                case .saveRecord(let id), .deleteRecord(let id): keys.insert(id.recordName)
+                default: break
+                }
+            }
+        }
+        return keys
+    }
+
     func send(upserts: [SyncRecord], deletes: [SyncRecord]) {
         guard let engine else { return }
         lock.withLock { for record in upserts { outbound[record.key] = record } }
@@ -160,7 +184,7 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
             }
             let upserts = changes.modifications.compactMap { Self.syncRecord($0.record) }
             let deletes = changes.deletions.compactMap {
-                Self.syncRecord(recordName: $0.recordID.recordName, type: $0.recordType)
+                Self.deletedRecord(recordName: $0.recordID.recordName)
             }
             if !upserts.isEmpty || !deletes.isEmpty { onRemoteChange?(upserts, deletes) }
         case .sentRecordZoneChanges(let sent):
@@ -234,6 +258,28 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
     private static func syncRecord(_ ck: CKRecord) -> SyncRecord? {
         syncRecord(recordName: ck.recordID.recordName, type: ck.recordType,
                    payload: ck["payload"] as? Data)
+    }
+
+    /// A deletion, decoded from the record NAME alone.
+    ///
+    /// ⚠️ Deliberately does **not** consult `recordType`. The old code required `recordType` and the
+    /// name's prefix to agree, and dropped the deletion via `compactMap` if they didn't — which is
+    /// the worst possible failure for this particular event, because `CKSyncEngine`'s change feed is
+    /// once-only: the token advances whether or not the app did anything, and `fetchAll` cannot
+    /// express a deletion. So a single disagreement diverges the two devices **permanently**, with no
+    /// self-healing path. Measured 2026-07-29: a card deleted on an iPhone (iOS 27) reached the zone
+    /// (which held 59 to the iPad's 60) and was consumed but never applied on an iPad (iOS 18.7.9),
+    /// surviving a pull-to-refresh and a relaunch.
+    ///
+    /// The name is authoritative on its own: `SyncRecord.key` is `"<type>/<id>"` by construction, so
+    /// the prefix IS the type. One source of truth cannot disagree with itself.
+    /// Internal, not private, only so a test can reach it — an unrecoverable path deserves one.
+    static func deletedRecord(recordName: String) -> SyncRecord? {
+        guard let slash = recordName.firstIndex(of: "/"),
+              let kind = SyncRecordType(rawValue: String(recordName[..<slash])) else { return nil }
+        return SyncRecord(type: kind,
+                          recordName: String(recordName[recordName.index(after: slash)...]),
+                          payload: nil)
     }
 
     private static func syncRecord(recordName: String, type: String,
