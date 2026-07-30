@@ -81,6 +81,10 @@ struct ImportedRow {
     var note: String? = nil          // merged into acquiredFrom (e.g. "Grade: CGC 9.5")
     var forTrade: Bool = false       // The Tin only — round-trips the trade-list flag
     var acquiredVia: String? = nil   // The Tin only — AcquiredVia rawValue, nil if unreadable
+    /// The Tin only — a copy that has already left the collection. Other formats never set these,
+    /// so their rows import as owned, which is the only thing they can mean.
+    var soldAt: Date? = nil
+    var soldFor: Double? = nil
     /// The Tin only — the divider this copy was filed under. Empty string means deliberately
     /// ungrouped (the tin at large), which is NOT the same as "this format didn't say".
     var divider: String? = nil
@@ -462,6 +466,7 @@ enum CollectionCSVImport {
                                acquiredFrom: from.isEmpty ? nil : from,
                                addedAt: row.addedAt ?? now, variant: row.variant,
                                forTrade: row.forTrade ? true : nil,
+                               soldAt: row.soldAt, soldFor: row.soldFor,
                                acquiredVia: row.acquiredVia)
     }
 
@@ -532,6 +537,13 @@ enum CollectionCSVImport {
             // a provenance label is not worth failing a card over.
             row.acquiredVia = h.value("acquired_via", in: f)
                 .flatMap(AcquiredVia.init(rawValue:))?.rawValue
+            // Sold state, Tin-format only. The sealed path has always round-tripped this and the
+            // card path never did, so re-importing our own export resurrected a sold copy as
+            // owned — back in the tin, back in the portfolio total, sale price gone. Read only
+            // here, because a TCGplayer or Dex export has no sold concept and its rows must keep
+            // landing as owned.
+            row.soldAt = CSVField.date(h.value("sold_at", in: f))
+            row.soldFor = CSVField.money(h.value("sold_for", in: f))
             // The divider IS read back, and empty means ungrouped rather than unknown — an
             // export→import of our own file has to reproduce the tin, not flatten it into one
             // "Imported <date>" pile.

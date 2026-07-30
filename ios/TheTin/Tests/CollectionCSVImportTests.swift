@@ -203,6 +203,41 @@ final class CSVImportCoreTests: XCTestCase {
         XCTAssertEqual(e.groupId, "")   // caller re-homes into the "Imported …" divider
     }
 
+    /// A SOLD copy must come back sold.
+    ///
+    /// The Tin's own format is headed "lossless round-trip", and a card returning as owned has
+    /// silently undone a sale: the copy re-enters the tin, re-enters the portfolio total, and the
+    /// price it realised is gone. Export has always written `sold_at`/`sold_for`; the card
+    /// importer simply never read them back.
+    ///
+    /// Found on a device 2026-07-29, not by this suite — re-importing a real export and diffing
+    /// against a second device showed 111 of 112 rows were exact copies and the sold one was not.
+    /// Deliberately Tin-format only: a TCGplayer or Dex export has no sold concept, so those
+    /// paths still leave the fields nil.
+    func testTinRoundTripKeepsACardSold() throws {
+        let original = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "g1", qty: 1,
+                                       condition: "NM", grade: nil, pricePaid: 300,
+                                       acquiredAt: nil, acquiredFrom: nil,
+                                       addedAt: Date(timeIntervalSince1970: 0), variant: "holo",
+                                       soldAt: Date(timeIntervalSince1970: 86_400), soldFor: 420)
+        let store = try FixtureCatalog.make()
+        let cards = Dictionary(uniqueKeysWithValues: try store.cards(ids: ["swsh7-215"]).map { ($0.id, $0) })
+        let sets = Dictionary(uniqueKeysWithValues: try store.sets().map { ($0.id, $0) })
+        let group = CardGroup(id: "g1", name: "Binder", sortOrder: 0, createdAt: Date())
+        let csv = CollectionCSV.export(entries: [original], groups: [group],
+                                       cards: cards, sets: sets, prices: [:])
+
+        let result = try CollectionCSVImport.importCSV(String(decoding: csv, as: UTF8.self),
+                                                       matcher: matcher)
+
+        let e = try XCTUnwrap(result.entries.first)
+        XCTAssertEqual(e.soldAt, original.soldAt, "a sold copy must not come back owned")
+        XCTAssertEqual(e.soldFor, original.soldFor, "the sale price must survive the round trip")
+        XCTAssertTrue(e.isSold)
+        // The cost basis rides along, so profit on the re-imported row is still computable.
+        XCTAssertEqual(e.pricePaid, 300)
+    }
+
     /// The round trip the importer used to apologise for. Export a sealed product, feed the bytes
     /// straight back, and quantity, cost basis, provenance and sold state all survive — matched by
     /// `tcgplayer_id`, so it's exact rather than a name guess.
