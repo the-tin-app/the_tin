@@ -16,7 +16,9 @@ struct ScanTabContainer: View {
     /// driving it from a SwiftUI `onChange` here never fired on device.
     let network: NetworkMonitor
     @State private var source = AVCaptureFrameSource()
-    @State private var staging = ScanStagingStore.persisted()
+    /// Owned by `MainTabView`, not here: a trade's incoming cards land in the same tray, and two
+    /// `persisted()` instances over one file would each erase the other's cards.
+    let staging: ScanStagingStore
     /// Built ONCE and held here, never constructed in `body`.
     ///
     /// It used to be `ScanView(model: makeScanModel(…))` inline, so every body re-evaluation minted

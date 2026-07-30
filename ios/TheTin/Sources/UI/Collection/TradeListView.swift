@@ -61,7 +61,17 @@ struct TradeListView: View {
         .overlay { if model.tradeEntries.isEmpty { emptyState } }
         .navigationTitle("For Trade")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { shareMenu }
+        .toolbar {
+            shareMenu
+            ToolbarItem(placement: .primaryAction) {
+                // The list you'd already be looking at across a table, so the trade starts from
+                // here rather than from a menu somewhere else in the app.
+                NavigationLink(value: TradeSessionRoute()) {
+                    Label("Start a trade", systemImage: "arrow.left.arrow.right.circle")
+                }
+                .accessibilityLabel("Start a trade")
+            }
+        }
         .printSheetFlow($printRequest)
         .task(id: model.tradeEntries.count) { rebuildShareLink() }
         .sheet(item: $editingEntry) { entry in

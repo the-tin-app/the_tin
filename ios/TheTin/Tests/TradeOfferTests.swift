@@ -1,0 +1,166 @@
+import XCTest
+@testable import TheTin
+
+final class TradeOfferBuilderTests: XCTestCase {
+    private func c(_ id: String, _ v: Double) -> TradeOfferBuilder.Candidate {
+        TradeOfferBuilder.Candidate(entryId: id, value: v)
+    }
+
+    /// The headline behaviour: 100/95/90% of what you're TAKING, not of what you own.
+    func testOffersScaleToWhatYouAreTaking() {
+        let out = TradeOfferBuilder.suggest(taking: 100, from: [c("a", 100), c("b", 95), c("c", 90)])
+        XCTAssertEqual(out.map(\.percent), [100, 95, 90])
+        XCTAssertEqual(out[0].entryIds, ["a"])
+        XCTAssertEqual(out[1].entryIds, ["b"])
+        XCTAssertEqual(out[2].entryIds, ["c"])
+    }
+
+    /// Largest first, so the offer reads as "my two best cards" rather than as an arbitrary
+    /// basket of seven — you have to justify this pile to the person across the table.
+    func testFillsLargestFirst() {
+        let out = TradeOfferBuilder.suggest(taking: 100, from: [c("s", 10), c("big", 60), c("mid", 30)],
+                                           percents: [100])
+        XCTAssertEqual(out[0].entryIds, ["big", "mid", "s"])
+        XCTAssertEqual(out[0].total, 100, accuracy: 0.001)
+    }
+
+    /// The closing move. Stopping $92 short when an unused $95 card exists is the wrong answer by
+    /// any reading, so one overshoot is allowed when it lands nearer the target.
+    func testTakesOneOvershootWhenItLandsNearerTheTarget() {
+        // Target 100. Greedy alone picks nothing ($95 fits, actually) — use a case where it can't:
+        // target 100, only a $120 card. Greedy takes nothing and stops $100 short; $120 is $20 off.
+        let out = TradeOfferBuilder.suggest(taking: 100, from: [c("big", 120)], percents: [100])
+        XCTAssertEqual(out[0].entryIds, ["big"])
+        XCTAssertEqual(out[0].total, 120, accuracy: 0.001)
+    }
+
+    /// …but not when the overshoot is worse than falling short. A $500 card is not a sane answer
+    /// to a $100 trade, and offering it would be the app arguing against its own user.
+    func testRefusesAnOvershootThatIsWorseThanStoppingShort() {
+        let out = TradeOfferBuilder.suggest(taking: 100, from: [c("huge", 500), c("fits", 80)],
+                                           percents: [100])
+        XCTAssertEqual(out[0].entryIds, ["fits"])
+    }
+
+    /// Nothing to suggest is an empty list, not three suggestions of zero cards — a "0%" row on
+    /// screen reads as a broken feature.
+    func testNothingToSuggest() {
+        XCTAssertTrue(TradeOfferBuilder.suggest(taking: 0, from: [c("a", 10)]).isEmpty)
+        XCTAssertTrue(TradeOfferBuilder.suggest(taking: 100, from: []).isEmpty)
+        // Unpriced candidates carry a 0 value and cannot contribute to a target.
+        XCTAssertTrue(TradeOfferBuilder.suggest(taking: 100, from: [c("a", 0)]).isEmpty)
+    }
+
+    func testNoCandidateIsUsedTwiceInOneOffer() {
+        let out = TradeOfferBuilder.suggest(taking: 1_000, from: [c("a", 10), c("b", 20)],
+                                           percents: [100])
+        XCTAssertEqual(Set(out[0].entryIds).count, out[0].entryIds.count)
+    }
+}
+
+@MainActor
+final class TradeDeepLinkTests: XCTestCase {
+
+    private func tradeLink(_ items: [ShareList.Item]) throws -> URL {
+        try ShareList.link(kind: .trade, items: items).url
+    }
+
+    func testASharedTradeLinkOpensATrade() throws {
+        let model = AppModel.makeDefault(skipFirebase: true)
+        let url = try tradeLink([ShareList.Item(c: "swsh7-215", n: "Rayquaza VMAX", q: 2, d: "LP")])
+        let before = model.tradeRouteToken
+
+        model.handleDeepLink(url)
+        XCTAssertEqual(model.tradeRouteToken, before + 1)
+        let payload = try XCTUnwrap(model.pendingTradeOffer)
+        XCTAssertEqual(payload.k, .trade)
+        XCTAssertEqual(payload.i.first?.c, "swsh7-215")
+    }
+
+    /// A want link is what somebody is LOOKING for. Seeding it as "what they'll give you" would
+    /// invert the entire screen, so it must not route here at all.
+    func testAWantLinkDoesNotOpenATrade() throws {
+        let model = AppModel.makeDefault(skipFirebase: true)
+        let url = try ShareList.link(kind: .want, items: [ShareList.Item(c: "swsh7-215")]).url
+        let before = model.tradeRouteToken
+
+        model.handleDeepLink(url)
+        XCTAssertEqual(model.tradeRouteToken, before)
+        XCTAssertNil(model.pendingTradeOffer)
+    }
+
+    func testAMalformedListLinkIsIgnoredRatherThanCrashing() {
+        let model = AppModel.makeDefault(skipFirebase: true)
+        let before = model.tradeRouteToken
+        model.handleDeepLink(URL(string: "https://thetinapp.com/l?d=notbase64url%21%21")!)
+        model.handleDeepLink(URL(string: "https://thetinapp.com/l")!)
+        XCTAssertEqual(model.tradeRouteToken, before)
+    }
+
+    /// Card links must keep working — `/l` was added beside `/c`, not in front of it.
+    func testCardLinksStillRoute() {
+        let model = AppModel.makeDefault(skipFirebase: true)
+        model.handleDeepLink(URL(string: "https://thetinapp.com/c/base1-4")!)
+        XCTAssertEqual(model.pendingCardId, "base1-4")
+    }
+}
+
+@MainActor
+final class TradeSeedingTests: XCTestCase {
+    private var store: CatalogStore!
+    override func setUpWithError() throws { store = try FixtureCatalog.make() }
+    override func tearDownWithError() throws { try store?.close() }
+
+    /// Their column arrives PRICED, not as a list of names: the payload carries condition and
+    /// quantity per card, which is the only reason a percentage can be shown at all.
+    func testSeedingCarriesConditionAndQuantity() throws {
+        let s = TradeSession(store: store)
+        s.seedTheirSide(from: ShareList.Payload(k: .trade, i: [
+            ShareList.Item(c: "swsh7-215", q: 2, d: "LP"),
+            ShareList.Item(c: "swsh7-94"),
+        ]))
+        XCTAssertEqual(s.theirs.lines.count, 2)
+        let ray = try XCTUnwrap(s.theirs.lines.first { $0.entry.cardId == "swsh7-215" })
+        XCTAssertEqual(ray.copies, 2)
+        XCTAssertEqual(ray.entry.conditionValue, .lp)
+        // A payload with no condition or quantity is one NM copy, not zero copies.
+        let umbreon = try XCTUnwrap(s.theirs.lines.first { $0.entry.cardId == "swsh7-94" })
+        XCTAssertEqual(umbreon.copies, 1)
+        XCTAssertEqual(umbreon.entry.conditionValue, .nm)
+        XCTAssertGreaterThan(s.theirValue.total, 0)
+    }
+
+    func testSeedingAWantPayloadDoesNothing() {
+        let s = TradeSession(store: store)
+        s.seedTheirSide(from: ShareList.Payload(k: .want, i: [ShareList.Item(c: "swsh7-215")]))
+        XCTAssertTrue(s.theirs.lines.isEmpty)
+    }
+
+    /// Seeding is a REPLACEMENT. Re-opening the same link must not double their column.
+    func testSeedingTwiceDoesNotDoubleTheirSide() {
+        let s = TradeSession(store: store)
+        let payload = ShareList.Payload(k: .trade, i: [ShareList.Item(c: "swsh7-215")])
+        s.seedTheirSide(from: payload)
+        s.seedTheirSide(from: payload)
+        XCTAssertEqual(s.theirs.lines.count, 1)
+    }
+
+    /// Applying a suggestion REPLACES your side. Merging would leave a pile worth roughly double
+    /// the target while still being labelled 95%.
+    func testApplyingASuggestionReplacesYourSide() throws {
+        let s = TradeSession(store: store)
+        let owned = [
+            CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "", qty: 1, condition: "NM",
+                            grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
+                            addedAt: Date(), forTrade: true),
+            CollectionEntry(id: "e2", cardId: "swsh7-94", groupId: "", qty: 1, condition: "NM",
+                            grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
+                            addedAt: Date(), forTrade: true),
+        ]
+        s.offer(owned[0]); s.offer(owned[1])
+        XCTAssertEqual(s.yours.lines.count, 2)
+
+        s.apply(TradeOfferBuilder.Suggestion(percent: 100, entryIds: ["e2"], total: 30.1), from: owned)
+        XCTAssertEqual(s.yours.lines.map(\.id), ["e2"])
+    }
+}
