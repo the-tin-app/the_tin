@@ -60,4 +60,24 @@ describe("catalog schema", () => {
     db.prepare("INSERT OR REPLACE INTO graded_sales VALUES (?,?,?,?,?)").run("c1", "psa10", 15, "high", "2026-07-19");
     expect(db.prepare("SELECT sales_count FROM graded_sales").pluck().get()).toBe(15);
   });
+
+  /// The FX rate has to travel WITH the artifact that used it: a converted Japanese price the app
+  /// can't footnote with its rate and date is a price claiming to be something it isn't. Key/value
+  /// on purpose — a new artifact-level fact must never mean another schema migration on a 230 MB
+  /// file every device re-downloads.
+  it("carries artifact meta, and tolerates having none", () => {
+    const bare = join(tmpdir(), `cat-meta-none-${process.pid}-${Math.round(performance.now())}.sqlite`);
+    buildCatalog(emptyInput(), bare);
+    // An English-only build writes no meta at all, and the app must read that as "no rate", not
+    // as a missing table.
+    expect(new Database(bare).prepare("SELECT count(*) FROM meta").pluck().get()).toBe(0);
+
+    const out = join(tmpdir(), `cat-meta-${process.pid}-${Math.round(performance.now())}.sqlite`);
+    buildCatalog({ ...emptyInput(), meta: { fx_eur_usd: "1.138", fx_as_of: "2026-07-29" } }, out);
+    const rows = new Database(out).prepare("SELECT key, value FROM meta ORDER BY key").all();
+    expect(rows).toEqual([
+      { key: "fx_as_of", value: "2026-07-29" },
+      { key: "fx_eur_usd", value: "1.138" },
+    ]);
+  });
 });

@@ -38,34 +38,9 @@ export function pptPrintingName(tcgdexType: string): string {
 
 interface ThirdPartyRef { type: string; tcgplayer?: number; cardmarket?: number }
 
-export interface FlatSet {
-  id: string;
-  name: string;
-  releaseDate: string | null;
-  serie: string | null; // era (serie english name)
-  official: number | null;
-  printedTotal: number | null;
-}
-export interface FlatCard {
-  id: string; // `${setId}-${localId}`
-  setId: string;
-  serieId: string | null;
-  localId: string;
-  name: string;
-  hp: number | null;
-  types: string[];
-  rarity: string | null;
-  artist: string | null;
-  text: string; // english ability+attack effects joined by \n
-  attacks: { name: string; damage: string | null; cost: string[] }[];
-  // ordered candidate ids (variant-priority) for the price joins
-  tcgplayerIds: number[];
-  // ordered [tcgdexVariantType, tcgPlayerId] pairs (same priority order as tcgplayerIds);
-  // the card-level fallback ref carries type "card"
-  tcgplayerByType: [string, number][];
-  cardmarketIds: number[];
-  dexId: number[];
-}
+export type { FlatSet, FlatCard } from "../src/pipeline/metadata";
+import type { FlatSet, FlatCard } from "../src/pipeline/metadata";
+
 
 function en<T = string>(field: any): T | null {
   if (field == null) return null;

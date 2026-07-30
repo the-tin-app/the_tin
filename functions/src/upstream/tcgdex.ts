@@ -27,7 +27,10 @@ export function pickAttacks(raw: { attacks?: { name?: unknown; damage?: unknown;
   });
 }
 
-const BASE = "https://api.tcgdex.net/v2/en";
+const API_ROOT = "https://api.tcgdex.net/v2";
+
+/** TCGdex serves every language at the same shape; only the path segment changes. */
+export type TcgdexLang = "en" | "ja";
 
 const TCGPLAYER_VARIANT_ORDER = ["normal", "holofoil", "reverse"];
 
@@ -54,10 +57,14 @@ export function buildCardText(raw: {
 }
 
 export class TcgdexClient {
-  constructor(private fetchFn: FetchFn = fetch) {}
+  private readonly base: string;
+
+  constructor(private fetchFn: FetchFn = fetch, lang: TcgdexLang = "en") {
+    this.base = `${API_ROOT}/${lang}`;
+  }
 
   private async getJson(path: string): Promise<any> {
-    const res = await this.fetchFn(`${BASE}${path}`);
+    const res = await this.fetchFn(`${this.base}${path}`);
     if (!res.ok) throw new Error(`TCGdex ${res.status} for ${path}`);
     return res.json();
   }

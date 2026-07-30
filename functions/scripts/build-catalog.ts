@@ -32,6 +32,9 @@ import { resolvePptSetName } from "../src/pipeline/ppt-setmap";
 import { computeFills } from "../src/pipeline/ppt-enrich";
 import type { FlatCard, FlatSet } from "./flatten-cards-db";
 import { pptPrintingName } from "./flatten-cards-db";
+import { fetchEurUsd, type FxRate } from "../src/upstream/fx";
+import { jaRawUsd, collidingIds } from "../src/pipeline/japanese";
+import { readJaMetadata } from "./fetch-ja-metadata";
 import Database from "better-sqlite3";
 import {
   parseCardsExport, parseEbayExport, parseSealedExport, parsePopulationExport, applyExport,
@@ -42,6 +45,10 @@ const outDir = process.argv[3] ?? join(__dirname, "../.seed-output");
 // EXPORT_DIR=<dir> switches raw+graded+sealed+pop prices from tcgcsv → PPT bulk-export CSVs
 // (cards/ebay/sealed/population-latest.csv). EUR (cardmarket) + images (tcgdex) stay as-is.
 const exportDir = process.env.EXPORT_DIR || null;
+// INCLUDE_JA=1 folds the Japanese catalogue in. OFF by default so merging this and rebuilding the
+// NAS image change nothing: the nightly keeps producing exactly today's artifact until the flag is
+// set deliberately, after a timed manual pass. See scripts/fetch-ja-metadata.ts for the cost.
+const includeJa = process.env.INCLUDE_JA === "1";
 const cacheDir = join(__dirname, "../.cache");
 const feedsDir = join(cacheDir, "feeds");
 const tcgcsvDir = join(feedsDir, "tcgcsv");
@@ -164,6 +171,33 @@ async function main() {
   const meta: { sets: FlatSet[]; cards: FlatCard[] } = JSON.parse(readFileSync(metaFile, "utf8"));
   console.log(`[1] loaded metadata: ${meta.cards.length} cards / ${meta.sets.length} sets`);
 
+  // --- Japanese (opt-in) --------------------------------------------------------------------
+  // Folded in HERE, before anything joins prices or images, so the rest of the pipeline treats a
+  // Japanese card as just another card. Everything specific to it rides on the row: `lang`,
+  // `imageBase` and `rawEur`.
+  let fx: FxRate | null = null;
+  if (includeJa) {
+    const ja = readJaMetadata(join(cacheDir, "ja-metadata.json"));
+    if (!ja) throw new Error("INCLUDE_JA=1 but no .cache/ja-metadata.json — run: npx tsx scripts/fetch-ja-metadata.ts");
+    // Never fall back to a hardcoded rate. A missing rate stops the build; a silently wrong one
+    // would misprice 16k cards and nothing downstream would notice.
+    fx = await fetchEurUsd();
+    console.log(`[1a] ECB EUR→USD ${fx.rate} as of ${fx.date}`);
+
+    // The namespacing is the single most dangerous part of this feature — an unnamespaced JA
+    // `neo1` overwrites the ENGLISH Neo Genesis row and flips its printed total 111 → 96, breaking
+    // set completion for every existing user. Assert it here rather than trusting the prefix
+    // helper, because the cost of being wrong lands on shipped data.
+    const setClash = collidingIds(meta.sets.map((s) => s.id), ja.sets.map((s) => s.id));
+    const cardClash = collidingIds(meta.cards.map((c) => c.id), ja.cards.map((c) => c.id));
+    if (setClash.length || cardClash.length) {
+      throw new Error(`JA/EN id collision — refusing to build: sets=[${setClash.slice(0, 5)}] cards=[${cardClash.slice(0, 5)}]`);
+    }
+    meta.sets.push(...ja.sets);
+    meta.cards.push(...ja.cards);
+    console.log(`[1a] +Japanese: ${ja.cards.length} cards / ${ja.sets.length} sets`);
+  }
+
   const pokedex: Record<string, string> = JSON.parse(readFileSync(join(__dirname, "../data/pokedex.json"), "utf8"));
   const pokemonNames = new Map<number, string>(Object.entries(pokedex).map(([k, v]) => [Number(k), v]));
   const dexByCard = new Map<string, number[]>(meta.cards.map((c) => [c.id, c.dexId ?? []]));
@@ -184,10 +218,16 @@ async function main() {
   const cardsBySet = new Map<string, TcgdexCard[]>();
   let withUsd = 0, withEur = 0, withImg = 0;
   for (const c of meta.cards) {
-    const rawUsd = pickPrice(c.tcgplayerIds, usd);
-    const rawEur = pickPrice(c.cardmarketIds, eur);
+    // A card that arrived carrying its own price and image is one the offline cards-database
+    // clone doesn't contain (today: Japanese). Its USD is converted with TONIGHT's ECB rate, never
+    // the rate that was current when its set was last fetched — the JA cache is incremental, so a
+    // set fetched months ago would otherwise keep a months-old rate while its neighbours moved.
+    const rawEur = c.lang === "ja" ? (c.rawEur ?? null) : pickPrice(c.cardmarketIds, eur);
+    const rawUsd = c.lang === "ja" ? (fx ? jaRawUsd(c, fx) : null) : pickPrice(c.tcgplayerIds, usd);
     const imgExists = c.serieId ? Boolean(enImages?.[c.serieId]?.[c.setId]?.[c.localId]) : false;
-    const imageBase = imgExists ? `https://assets.tcgdex.net/en/${c.serieId}/${c.setId}/${c.localId}` : null;
+    const imageBase = c.lang === "ja"
+      ? (c.imageBase ?? null)
+      : (imgExists ? `https://assets.tcgdex.net/en/${c.serieId}/${c.setId}/${c.localId}` : null);
     if (rawUsd != null) withUsd++;
     if (rawEur != null) withEur++;
     if (imageBase) withImg++;
@@ -293,7 +333,10 @@ async function main() {
   // buildCatalog does CREATE TABLE (no IF NOT EXISTS) — clear any prior DB at the predictable
   // export path so a re-run (or the nightly container) starts fresh instead of colliding.
   for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${dbPath}${suffix}`, { force: true });
-  buildCatalog({ sets, cardsBySet, prices: new Map<string, PptPrice>(), scenes, asOf, dexByCard, pokemonNames, twins }, dbPath);
+  // The rate travels WITH the artifact that used it: a converted price the app can't footnote
+  // with its rate and date is a price claiming to be something it isn't.
+  const catalogMeta = fx ? { fx_eur_usd: String(fx.rate), fx_as_of: fx.date } : undefined;
+  buildCatalog({ sets, cardsBySet, prices: new Map<string, PptPrice>(), scenes, asOf, dexByCard, pokemonNames, twins, meta: catalogMeta }, dbPath);
 
   let exportSpot: { rawUsd: number | null; rawEur: number | null } | null = null;
   if (exportDir) {
