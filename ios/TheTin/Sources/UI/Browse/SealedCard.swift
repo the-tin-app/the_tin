@@ -37,12 +37,22 @@ struct SealedCard: View {
     var collection: CollectionModel? = nil
     @State private var adding = false
 
+    /// Boxes of this product already in the tin. Reading `collection.sealed` here is what keeps
+    /// the badge live — `CollectionModel` is `@Observable`, so saving from the sheet updates the
+    /// tile behind it without this view holding any state of its own.
+    private var owned: Int { collection?.sealed.boxCount(productId: product.tcgplayerId) ?? 0 }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             RemoteImage(url: product.imageURL)
                 .aspectRatio(1, contentMode: .fit) // sealed boxes are roughly square, not card-shaped
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                // Same badge the card tiles carry, in the same corner — with the count, because
+                // "do I own this box" and "how many" are one question for sealed.
+                .overlay(alignment: .topTrailing) {
+                    if owned > 0 { CardBadges(owned: true, wanted: false, count: owned) }
+                }
             Text(product.name).font(.caption).lineLimit(2)
             if let market = product.marketUsd {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -85,12 +95,14 @@ struct SealedCard: View {
 
 // The global "Sealed" browse segment was deleted here (2026-07-25). It was a grid of 2,510 real,
 // priced products with no tap, no heart, no add and no navigation — the app's purest dead end,
-// holding a quarter of the width of its only catalog door, permanently. Sealed products are not
-// ownable (`CollectionEntry` is cardId-keyed, and `isSameCopy`, the CSV round-trip, the backup
-// schema, the widget snapshot and the share links all inherit that), and making them ownable is
-// multi-day data-model work nobody has asked for.
+// holding a quarter of the width of its only catalog door, permanently.
 //
-// The data still earns its place on `SetDetailView`, where it reads as context for a set you're
-// already looking at rather than as a promise the app doesn't keep. `CatalogStore.
-// allSealedProducts()` is kept and still tested — it's the query a future owning feature starts
-// from, and deleting it would be the expensive half to rebuild.
+// The reason given at the time was that sealed products were not ownable — `CollectionEntry` is
+// cardId-keyed, and `isSameCopy`, the CSV round-trip, the backup schema and the share links all
+// inherit that. That is no longer true: `SealedEntry` was added rather than bent out of
+// `CollectionEntry`, and this tile is now the door into the tin. The segment stays deleted anyway
+// — the per-set section is the discovery surface a sealed product belongs on, because it reads as
+// context for a set you're already looking at.
+//
+// `CatalogStore.allSealedProducts()` is kept and still tested — it's the query any future global
+// surface starts from, and deleting it would be the expensive half to rebuild.

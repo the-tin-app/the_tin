@@ -139,6 +139,15 @@ extension Array where Element == SealedEntry {
     /// Physical box count = Σ qty, sold boxes excluded — the sealed mirror of `cardCount`.
     var boxCount: Int { lazy.filter { !$0.isSold }.reduce(0) { $0 + $1.qty } }
 
+    /// Boxes of ONE product you own — what the browse tile's badge counts.
+    ///
+    /// Summed across entries rather than read off one: "Add to tin" twice makes two rows for the
+    /// same product (each with its own price paid), so a tile reading "1" while the tin listed two
+    /// would be the browse screen contradicting the tin.
+    func boxCount(productId: Int) -> Int {
+        lazy.filter { !$0.isSold && $0.productId == productId }.reduce(0) { $0 + $1.qty }
+    }
+
     /// What the sealed you still own is worth: `market_usd × qty`, sold boxes excluded.
     ///
     /// A product the catalog no longer prices contributes NOTHING rather than zero — the same rule

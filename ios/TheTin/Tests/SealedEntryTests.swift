@@ -92,6 +92,23 @@ final class SealedEntryTests: XCTestCase {
         XCTAssertEqual(sealed.first { $0.id == "gone" }?.pricePaid, 400)
     }
 
+    /// The browse tile's badge: boxes of ONE product, summed across rows and sold ones excluded.
+    /// Adding the same box twice makes two entries, so reading the count off a single row would
+    /// make the set screen contradict the tin.
+    func testBoxCountForOneProductSumsRowsAndExcludesSold() {
+        let sealed = [
+            SealedEntry(id: "a", productId: 7, qty: 2, addedAt: Date()),
+            SealedEntry(id: "b", productId: 7, qty: 1, addedAt: Date()),
+            SealedEntry(id: "sold", productId: 7, qty: 4, addedAt: Date(), soldAt: Date()),
+            SealedEntry(id: "other", productId: 8, qty: 9, addedAt: Date()),
+        ]
+
+        XCTAssertEqual(sealed.boxCount(productId: 7), 3)
+        XCTAssertEqual(sealed.boxCount(productId: 8), 9)
+        // A product you've never owned reads 0, which is what hides the badge entirely.
+        XCTAssertEqual(sealed.boxCount(productId: 999), 0)
+    }
+
     /// An unpriced product contributes NOTHING rather than zero, and says so through `priced`.
     /// Treating "no data" as $0 would quietly understate a collection instead of admitting a gap.
     func testMarketValueTreatsUnpricedAsUnknownNotZero() {
