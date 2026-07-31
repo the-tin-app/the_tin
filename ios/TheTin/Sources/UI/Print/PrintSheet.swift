@@ -20,17 +20,23 @@ enum PrintSheet {
     static func tradeItems(entries: [CollectionEntry], cards: [String: CardRecord],
                            setNames: [String: String], prices: [String: PriceRecord],
                            variantsByCard: [String: [VariantPrice]],
-                           conditionsByCard: [String: [ConditionPrice]]) -> [PrintItem] {
+                           conditionsByCard: [String: [ConditionPrice]],
+                           matrixByCard: [String: [MatrixPrice]] = [:],
+                           gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]) -> [PrintItem] {
         let sorted = GroupStats.sortedByValueDescending(entries: entries, prices: prices,
                                                         variantsByCard: variantsByCard,
-                                                        conditionsByCard: conditionsByCard)
+                                                        conditionsByCard: conditionsByCard,
+                                                        matrixByCard: matrixByCard,
+                                                        gradedByPrintingByCard: gradedByPrintingByCard)
         return sorted.compactMap { entry in
             guard let card = cards[entry.cardId] else { return nil }
             var one = entry
             one.qty = 1
             let unit = GroupStats.entryValue(one, price: prices[entry.cardId],
                                              variants: variantsByCard[entry.cardId] ?? [],
-                                             conditions: conditionsByCard[entry.cardId] ?? [])
+                                             conditions: conditionsByCard[entry.cardId] ?? [],
+                                             matrix: matrixByCard[entry.cardId] ?? [],
+                                             gradedByPrinting: gradedByPrintingByCard[entry.cardId] ?? [])
             var chips = [entry.variantValue?.label, entry.condition, entry.gradeValue?.label]
                 .compactMap { $0 }
             if entry.qty > 1 { chips.append("×\(entry.qty)") }
@@ -158,16 +164,26 @@ extension PrintSheet {
     @MainActor
     static func tradeRequest(group: CardGroup, model: CollectionModel,
                              store: CatalogStore) -> PrintSheetRequest {
-        let entries = model.entries(in: group.id)
+        tradeRequest(title: "For Trade — \(group.name)", entries: model.entries(in: group.id),
+                     model: model, store: store)
+    }
+
+    /// The same sheet for any set of entries — the trade list isn't a divider, it's a flag that
+    /// cuts across them.
+    @MainActor
+    static func tradeRequest(title: String, entries: [CollectionEntry], model: CollectionModel,
+                             store: CatalogStore) -> PrintSheetRequest {
         let cards = Dictionary(uniqueKeysWithValues:
             ((try? store.cards(ids: entries.map(\.cardId))) ?? []).map { ($0.id, $0) })
         let setNames = Dictionary(uniqueKeysWithValues:
             ((try? store.sets()) ?? []).map { ($0.id, $0.name) })
         return PrintSheetRequest(
-            title: "For Trade — \(group.name)",
+            title: title,
             items: tradeItems(entries: entries, cards: cards, setNames: setNames,
                               prices: model.prices, variantsByCard: model.variantsByCard,
-                              conditionsByCard: model.conditionsByCard),
+                              conditionsByCard: model.conditionsByCard,
+                              matrixByCard: model.matrixByCard,
+                              gradedByPrintingByCard: model.gradedByPrintingByCard),
             asOf: (try? store.priceAsOf()) ?? nil)
     }
 

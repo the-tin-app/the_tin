@@ -28,6 +28,60 @@ final class PriceAlertsService {
         .sorted { abs($0.pct) == abs($1.pct) ? $0.cardId < $1.cardId : abs($0.pct) > abs($1.pct) }
     }
 
+    /// A wishlist card that has just come down to the price you said you'd pay for it.
+    struct Crossing: Equatable {
+        let cardId: String
+        let target: Double
+        let newUsd: Double
+    }
+
+    /// Cards that crossed their target price since the last snapshot.
+    ///
+    /// **Edge-triggered.** It fires on the crossing, not on the state: the old price must have
+    /// been ABOVE the target and the new one at or below it. Reporting "is below target" instead
+    /// would re-notify every single night for as long as the card stayed cheap, which is how a
+    /// useful alert becomes one you swipe away without reading.
+    ///
+    /// A card with no previous price has no crossing — it might have been under target for a
+    /// year before you added it, and announcing that as news would be a lie. Same `floorUsd` as
+    /// `movers`, for the same reason: sub-$1 targets are noise.
+    ///
+    /// `changedBasis` names cards whose `raw_printing` moved between snapshots. Their two prices
+    /// describe different printings, so any "crossing" between them is arithmetic on a basis
+    /// flip rather than a market move — the exact defect PRs #83/#84 fixed in the pipeline, and
+    /// the one thing that would make this feature cry wolf on its very first outing.
+    static func targetCrossings(old: [String: Double], new: [String: Double],
+                                targets: [String: Double],
+                                changedBasis: Set<String> = [],
+                                floorUsd: Double = 1.0) -> [Crossing] {
+        targets.compactMap { id, target -> Crossing? in
+            guard target >= floorUsd,
+                  !changedBasis.contains(id),
+                  let oldUsd = old[id], let newUsd = new[id],
+                  oldUsd > target, newUsd <= target else { return nil }
+            return Crossing(cardId: id, target: target, newUsd: newUsd)
+        }
+        // Cheapest-relative-to-target first: the best deal leads the digest.
+        .sorted { ($0.newUsd / $0.target, $0.cardId) < ($1.newUsd / $1.target, $1.cardId) }
+    }
+
+    /// Target hits get their own notifications, ahead of the percentage movers: you asked for
+    /// this specific card at this specific price, where a mover is something the market did at
+    /// you. Batched on the same rule as `alerts(for:names:)`.
+    static func targetAlerts(for crossings: [Crossing], names: [String: String]) -> [Alert] {
+        guard !crossings.isEmpty else { return [] }
+        func name(_ c: Crossing) -> String { names[c.cardId] ?? c.cardId }
+        if crossings.count <= 3 {
+            return crossings.map { c in
+                Alert(title: "\(name(c)) hit your target — \(usd(c.newUsd))",
+                      body: "You were watching for \(usd(c.target)).")
+            }
+        }
+        let top = crossings.prefix(3).map { "\(name($0)) \(usd($0.newUsd))" }
+        return [Alert(title: "\(crossings.count) wishlist cards hit your target",
+                      body: top.joined(separator: ", ") + ", …")]
+    }
+
     struct Alert: Equatable {
         let title: String
         let body: String
@@ -58,11 +112,21 @@ final class PriceAlertsService {
 
     // MARK: - IO (snapshot + install hook)
 
-    /// Snapshot shape per spec: { catalogVersion, asOf, prices: { cardId: usd } }.
+    /// Snapshot shape per spec: { catalogVersion, asOf, prices: { cardId: usd } }, plus the
+    /// printing each price was quoting.
+    ///
+    /// `printings` is a true `Optional`, NOT a property with a default: a synthesized `Decodable`
+    /// ignores defaults and demands the key, so `var printings: [String: String] = [:]` made
+    /// every pre-existing snapshot fail to decode. That's silent and nasty — `loadSnapshot()`
+    /// returns nil, the baseline is thrown away, and nobody gets an alert the first night after
+    /// updating. Same optional-means-"written before this existed" convention as
+    /// `CollectionEntry.forTrade` and `BackupSnapshot.setGoals`, and for the same reason.
+    /// nil reads as "no basis recorded", which the guard treats as unknown rather than changed.
     struct Snapshot: Codable, Equatable {
         var catalogVersion: Int
         var asOf: String?
         var prices: [String: Double]
+        var printings: [String: String]?
     }
 
     /// userInfo["route"] value stamped on every alert; NotificationRouter matches on it.
@@ -101,30 +165,50 @@ final class PriceAlertsService {
     /// snapshot is written even while alerts are OFF; only the notify step is gated. Opens its
     /// own read connection (GRDB DatabaseQueue, WAL) so it needs no live AppModel store.
     func runAfterInstall(version: Int, dbPath: String) async {
-        // wants.json is the file LocalWantsRepository maintains — read it directly so
-        // background-launched runs need no @MainActor repository.
-        let wanted = (try? Data(contentsOf: wantsURL))
-            .flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } ?? []
+        // wants.json is the file LocalWantsRepository maintains. Reuse its format-aware loader
+        // (current {id: WantEntry} object, legacy id array) so background runs stay correct
+        // without a @MainActor repository.
+        // The whole entries map, not just its keys: `targetUsd` lives on the entry, and reading
+        // only the ids is why a target price could never make this app say anything.
+        let wants = LocalWantsRepository.load(from: wantsURL)
+        let wanted = Array(wants.keys)
         guard let store = try? CatalogStore(path: dbPath) else { return }
         defer { try? store.close() }
 
-        let newPrices = ((try? store.prices(cardIds: Array(wanted))) ?? [:])
-            .compactMapValues(\.rawUsd)
+        let records = (try? store.prices(cardIds: wanted)) ?? [:]
+        let newPrices = records.compactMapValues(\.rawUsd)
+        let newPrintings = records.compactMapValues(\.rawPrinting)
 
         if AppConfig.priceAlertsEnabled, let old = loadSnapshot() {
+            // A card whose raw_usd changed WHICH printing it quotes has two prices that aren't
+            // comparable; drop it from both kinds of alert rather than report the spread between
+            // two printings as a move. Unknown-on-either-side is not a change (`IS`, not `=`).
+            let changedBasis = Set(newPrintings.compactMap { id, printing -> String? in
+                guard let was = old.printings?[id] else { return nil }
+                return was == printing ? nil : id
+            })
+            let targets = wants.compactMapValues(\.targetUsd)
+            let crossings = Self.targetCrossings(old: old.prices, new: newPrices,
+                                                 targets: targets, changedBasis: changedBasis)
             let movers = Self.movers(old: old.prices, new: newPrices,
                                      threshold: Double(AppConfig.priceAlertSensitivityPct) / 100)
-            if !movers.isEmpty {
-                let names = ((try? store.cards(ids: movers.map(\.cardId))) ?? [])
-                    .reduce(into: [String: String]()) { $0[$1.id] = $1.name }
-                for alert in Self.alerts(for: movers, names: names) {
-                    await notifier.post(title: alert.title, body: alert.body,
-                                        userInfo: ["route": Self.wishlistRoute])
-                }
+                .filter { !changedBasis.contains($0.cardId) }
+            // A card that hit its target is not also a generic mover — one card, one alert, and
+            // the target is the more specific thing to say about it.
+            let crossed = Set(crossings.map(\.cardId))
+            let ids = crossings.map(\.cardId) + movers.map(\.cardId)
+            let names = ((try? store.cards(ids: ids)) ?? [])
+                .reduce(into: [String: String]()) { $0[$1.id] = $1.name }
+            let alerts = Self.targetAlerts(for: crossings, names: names)
+                + Self.alerts(for: movers.filter { !crossed.contains($0.cardId) }, names: names)
+            for alert in alerts {
+                await notifier.post(title: alert.title, body: alert.body,
+                                    userInfo: ["route": Self.wishlistRoute])
             }
         }
         save(Snapshot(catalogVersion: version,
                       asOf: (try? store.priceAsOf()) ?? nil,
-                      prices: newPrices))
+                      prices: newPrices,
+                      printings: newPrintings))
     }
 }

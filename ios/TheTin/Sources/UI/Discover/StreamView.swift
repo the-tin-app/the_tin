@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Immersive full-screen "See all" deck for a Discover stream. A horizontal paging `ScrollView`
-/// swipes one big card at a time; a double tap toggles Want, press-and-hold offers "Add to
-/// group…", and the deck prefetches more pages as you near the end. The nav-bar back button is
+/// swipes one big card at a time; a double tap toggles Want, press-and-hold offers "Save to
+/// tin…", and the deck prefetches more pages as you near the end. The nav-bar back button is
 /// automatic (this is a pushed view).
 ///
 /// Uses a paging `ScrollView` + `LazyHStack` rather than `TabView(.page)`: the deck is a dynamic,
@@ -11,14 +11,15 @@ import SwiftUI
 /// lazy, appendable content and doesn't fight the pan. Want is a DOUBLE tap so a single-tap
 /// recognizer can't compete with the swipe either.
 struct StreamView: View {
-    let kind: DiscoverModel.StreamKind
-    let model: DiscoverModel
+    let title: String
+    let stream: CardStream
+    let caption: (CardRecord) -> String?
+    let store: CatalogStore
     var wants: WantsModel?
     var collection: CollectionModel?
 
     @State private var pager: StreamPager?
     @State private var currentIndex: Int?
-    @State private var sheetCard: CardRecord?
     @State private var prefetcher = CardImagePrefetcher()
     @State private var wantBump = 0 // bumped on each double-tap to fire the haptic
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -40,15 +41,19 @@ struct StreamView: View {
                 .scrollPosition(id: $currentIndex)
                 .scrollIndicators(.hidden)
                 .overlay { chevrons } // fixed affordance — never scrolls with a page, never doubles
+            } else if let pager, pager.isEmptyResult {
+                ContentUnavailableView("No cards match",
+                                       systemImage: "line.3.horizontal.decrease.circle",
+                                       description: Text("Loosen your filters to see more."))
             } else {
-                TinLoadingView(label: "Loading \(kind.title)…")
+                TinLoadingView(label: "Loading \(title)…")
             }
         }
-        .navigationTitle(kind.title)
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             if pager == nil {
-                pager = StreamPager(stream: model.makeStream(kind))
+                pager = StreamPager(stream: stream)
                 await pager?.loadNextPage()
                 prefetchAround(0)
             }
@@ -58,16 +63,6 @@ struct StreamView: View {
             prefetchAround(i)
             if i >= pager.cards.count - 3 {
                 Task { await pager.loadNextPage(); prefetchAround(i) }
-            }
-        }
-        .sheet(item: $sheetCard) { card in
-            if let collection {
-                NavigationStack {
-                    EntryFormView(card: card, groups: collection.groups, existing: nil,
-                                  onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
-                        await collection.saveEntry(entry)
-                    }
-                }
             }
         }
     }
@@ -95,20 +90,14 @@ struct StreamView: View {
                     wantBump += 1
                 }
                 .sensoryFeedback(.impact, trigger: wantBump)
-                .contextMenu {
-                    if collection != nil {
-                        Button {
-                            sheetCard = card
-                        } label: {
-                            Label("Save to tin…", systemImage: "plus.square.on.square")
-                        }
-                    }
-                }
+                // Wanted is already the double tap + heart here, so the shared menu is used for
+                // its save sheet only — passing `wants: nil` keeps the long-press to one action.
+                .cardQuickActions(card: card, wants: nil, collection: collection, store: store)
 
             VStack(spacing: 4) {
                 Text(card.name).font(.title3.bold()).multilineTextAlignment(.center)
-                PriceLabel(value: try? model.store.price(cardId: card.id)?.rawUsd)
-                if let why = model.caption(for: card, kind: kind) {
+                PriceLabel(value: try? store.price(cardId: card.id)?.rawUsd)
+                if let why = caption(card) {
                     Text(why).font(.footnote).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }

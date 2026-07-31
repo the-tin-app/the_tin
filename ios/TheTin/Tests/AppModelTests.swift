@@ -1,6 +1,7 @@
 import XCTest
 import CryptoKit
 import Gzip
+import GRDB
 @testable import TheTin
 
 @MainActor
@@ -97,6 +98,83 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.catalogState?.version, 2)
         XCTAssertEqual(try model.store?.cardCount(), 7) // throws "disk I/O error" without the reopen
         XCTAssertFalse(try XCTUnwrap(model.store).sets().isEmpty)
+    }
+
+    /// End-to-end replay of the 2026-07-18 incident with two synthetic artifacts: a transient
+    /// primary failure mid-session must NOT let the casual-only fallback replace the installed
+    /// average catalog (history would vanish) — and when the primary recovers with a newer
+    /// version, the update installs and the in-place-reopened store serves history again.
+    func testPrimaryBlipDoesNotDowngradeAndRecoveryStillUpdates() async throws {
+        let paths = tempPaths()
+
+        // Install v14 "average" — the fixture as-is, which has price_history rows.
+        let seed = AppModel(remote: try stubRemoteWithFixture(version: 14, tier: "average"),
+                            paths: paths,
+                            makeRepository: { _ in InMemoryCollectionRepository() },
+                            skipFirebase: true)
+        await seed.start()
+        XCTAssertEqual(seed.catalogState?.tier, "average")
+        XCTAssertFalse(try XCTUnwrap(seed.store).priceHistory(cardId: "swsh7-215").isEmpty)
+
+        // v14 "casual" — same fixture with price_history emptied, like the Firebase backup.
+        let casualPath = try FixtureCatalog.copyToTemp()
+        try Self.emptyPriceHistory(atPath: casualPath)
+        let casualGz = try Data(contentsOf: URL(fileURLWithPath: casualPath)).gzipped()
+        let casualSha = SHA256.hash(data: casualGz).map { String(format: "%02x", $0) }.joined()
+        let casualManifest = CatalogManifest(version: 14, path: "catalog/catalog-v14c.sqlite.gz",
+                                             sha256: casualSha, sizeBytes: casualGz.count,
+                                             generatedAt: "2026-07-18T07:00:00.000Z", tier: "casual")
+        let casual = StubRemote(manifest: casualManifest)
+        casual.files[casualManifest.path] = casualGz
+
+        // Relaunch with the primary dead: the whole refresh falls back to casual v14.
+        let toggle = ToggleRemote()
+        var nowValue = Date()
+        let model = AppModel(remote: toggle, fallback: casual, paths: paths,
+                             makeRepository: { _ in InMemoryCollectionRepository() },
+                             skipFirebase: true, now: { nowValue })
+        await model.start()
+        XCTAssertEqual(model.phase, .ready)
+        for _ in 0..<200 where model.lastRefreshCheck == nil { // launch refresh is fire-and-forget
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        // The guard held: still average v14, history still served — NOT casual's empty table.
+        XCTAssertEqual(model.catalogState?.version, 14)
+        XCTAssertEqual(model.catalogState?.tier, "average")
+        XCTAssertFalse(try XCTUnwrap(model.store).priceHistory(cardId: "swsh7-215").isEmpty)
+        XCTAssertFalse(model.reducedData)
+
+        // Primary recovers with v15 average: the throttled foreground refresh installs it and
+        // the same store instance serves the new artifact (funneled reopen).
+        toggle.inner = try stubRemoteWithFixture(version: 15, tier: "average")
+        nowValue += 7200
+        let storeBefore = try XCTUnwrap(model.store)
+        await model.refreshIfStale()
+        XCTAssertEqual(model.catalogState?.version, 15)
+        XCTAssertEqual(model.catalogState?.tier, "average")
+        XCTAssertTrue(model.store === storeBefore)
+        XCTAssertFalse(try storeBefore.priceHistory(cardId: "swsh7-215").isEmpty)
+    }
+
+    /// Sync helper so GRDB's synchronous `write` overload is picked (the async test body
+    /// otherwise resolves to the async one).
+    private nonisolated static func emptyPriceHistory(atPath path: String) throws {
+        let db = try DatabaseQueue(path: path)
+        try db.write { try $0.execute(sql: "DELETE FROM price_history") }
+        try db.close()
+    }
+
+    /// Primary remote that plays dead until given an inner remote — models a NAS blip.
+    private final class ToggleRemote: CatalogRemote {
+        var inner: CatalogRemote?
+        func fetchManifest() async throws -> CatalogManifest {
+            guard let inner else { throw CatalogError.httpStatus(500) }
+            return try await inner.fetchManifest()
+        }
+        func fetchData(path: String) async throws -> Data {
+            guard let inner else { throw CatalogError.httpStatus(500) }
+            return try await inner.fetchData(path: path)
+        }
     }
 
     /// Views and models (DiscoverModel, SearchModel, CollectionModel…) capture the CatalogStore

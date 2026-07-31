@@ -11,6 +11,10 @@ struct ScanDraft: Identifiable, Equatable, Codable {
     var qty: Int
     let addedAt: Date
     var priceUsdSnapshot: Double?   // blind at scan time; repriced variant/condition-aware in review
+    /// How these cards were acquired, captured at scan time from the scanner's picker.
+    /// Optional: `ScanDraft` is Codable and persists to disk, so a defaulted non-optional would
+    /// make every staged tray written before this existed fail to decode.
+    var acquiredVia: AcquiredVia? = nil
 }
 
 /// Local, ephemeral holding area for scanned drafts. NOT part of `collection.entries`, so

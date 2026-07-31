@@ -46,4 +46,42 @@ final class CatalogStoreV3Tests: XCTestCase {
         let total = try XCTUnwrap(store.setRawTotals()["s1"])
         XCTAssertEqual(total, 25.0, accuracy: 0.001)
     }
+
+    func testReadsConditionSalesAndLowPrice() throws {
+        let path = NSTemporaryDirectory() + "cat-\(UUID().uuidString).sqlite"
+        let q = try DatabaseQueue(path: path)
+        try q.write { db in
+            try db.execute(sql: """
+            CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL, sellers INTEGER, listings INTEGER, low_usd REAL, as_of TEXT);
+            CREATE TABLE price_by_condition(card_id TEXT, condition TEXT, usd REAL, sales_count INTEGER, as_of TEXT, PRIMARY KEY(card_id, condition));
+            INSERT INTO price_latest VALUES ('c1', 10.0, 9.0, 22, NULL, 7.5, '2026-07-08');
+            INSERT INTO price_by_condition VALUES ('c1','Near Mint',10.0,12,'2026-07-08');
+            INSERT INTO price_by_condition VALUES ('c1','Damaged',1.0,NULL,'2026-07-08');
+            """)
+        }
+        try q.close()
+        let store = try CatalogStore(path: path)
+        XCTAssertEqual(try store.price(cardId: "c1")?.lowUsd, 7.5)
+        let conds = try store.conditionPrices(cardId: "c1")
+        XCTAssertEqual(conds.first { $0.condition == .nearMint }?.salesCount, 12)
+        XCTAssertNil(conds.first { $0.condition == .damaged }?.salesCount)
+    }
+
+    func testToleratesCatalogMissingNewColumns() throws {
+        let path = NSTemporaryDirectory() + "cat-\(UUID().uuidString).sqlite"
+        let q = try DatabaseQueue(path: path)
+        try q.write { db in
+            try db.execute(sql: """
+            CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL, as_of TEXT);
+            CREATE TABLE price_by_condition(card_id TEXT, condition TEXT, usd REAL, as_of TEXT, PRIMARY KEY(card_id, condition));
+            INSERT INTO price_latest VALUES ('c1', 10.0, 9.0, '2026-07-08');
+            INSERT INTO price_by_condition VALUES ('c1','Near Mint',10.0,'2026-07-08');
+            """)
+        }
+        try q.close()
+        let store = try CatalogStore(path: path)
+        XCTAssertNil(try store.price(cardId: "c1")?.lowUsd)                       // absent column → nil, no throw
+        XCTAssertEqual(try store.conditionPrices(cardId: "c1").first?.condition, .nearMint)
+        XCTAssertNil(try store.conditionPrices(cardId: "c1").first?.salesCount)
+    }
 }

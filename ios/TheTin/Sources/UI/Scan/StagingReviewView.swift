@@ -7,15 +7,20 @@ struct StagingReviewView: View {
     @Bindable var staging: ScanStagingStore
     let collection: CollectionModel
     let store: CatalogStore
+    /// Drives the "do I need this?" line on each row. Optional so previews/tests can omit it.
+    var wants: WantsModel? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var routing: ScanDraft?     // draft being routed
     @State private var newGroupName = ""
     @State private var showingNewGroup: ScanDraft?
+    @State private var showingClearConfirm = false
     @State private var commitError = false
     // Batch-fetched once on open (same tables the collection UI uses); drive draft repricing.
     @State private var prices: [String: PriceRecord] = [:]
     @State private var variantsByCard: [String: [VariantPrice]] = [:]
     @State private var conditionsByCard: [String: [ConditionPrice]] = [:]
+    @State private var matrixByCard: [String: [MatrixPrice]] = [:]
+    @State private var gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]
     // Gate: only a load where all three fetches actually succeeded may drive a reprice —
     // an empty-but-successful dict still counts as loaded (see loadPricesAndReprice doc).
     @State private var pricesLoaded = false
@@ -25,6 +30,10 @@ struct StagingReviewView: View {
             Section {
                 ForEach(staging.drafts) { draft in
                     DraftRow(draft: draft, store: store,
+                             knowledge: ScanKnowledge.of(cardId: draft.cardId,
+                                                         entries: collection.entries,
+                                                         wanted: wants?.wanted ?? []),
+                             variantPrices: variantsByCard[draft.cardId] ?? [],
                              onVariant: { staging.updateVariant(id: draft.id, $0); repriceAll() },
                              onCondition: { staging.updateCondition(id: draft.id, $0); repriceAll() },
                              onRemove: { staging.remove(id: draft.id) },
@@ -52,8 +61,17 @@ struct StagingReviewView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Clear all", role: .destructive) { staging.clear() }
+                // Confirm before wiping the whole tray. Anchored on the button, NOT the root view:
+                // a second .confirmationDialog stacked on the root (already carries the routing one
+                // + two alerts) is the case SwiftUI silently drops — the "tap twice, no prompt" bug.
+                Button("Clear all", role: .destructive) { showingClearConfirm = true }
                     .disabled(staging.drafts.isEmpty)
+                    .confirmationDialog("Clear all staged cards?", isPresented: $showingClearConfirm,
+                                        titleVisibility: .visible) {
+                        Button("Clear ^[\(staging.drafts.count) card](inflect: true)",
+                               role: .destructive) { staging.clear() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { Text("This removes every scan from the review list. It can't be undone.") }
             }
         }
         .confirmationDialog("File this card in…", isPresented: routingIsPresented, titleVisibility: .visible) {
@@ -129,6 +147,19 @@ struct StagingReviewView: View {
         prices = p
         variantsByCard = v
         conditionsByCard = c
+        // Old-artifact fallback per store convention (matrix/graded reads throw pre-migration).
+        matrixByCard = (try? store.matrixPrices(cardIds: ids)) ?? [:]
+        gradedByPrintingByCard = (try? store.gradedPrintingPrices(cardIds: ids)) ?? [:]
+        // The scan-time variant is a blind defaultFor(rarity:) guess and can name a finish the
+        // card isn't actually printed in (Tomas, 2026-07-21: Tyranitar δ defaulted to Regular but
+        // only comes in Holo/Reverse Holo). Now that the real printings are loaded, snap any such
+        // draft to the first finish it IS offered in, so the row shows a real finish + real price.
+        for d in staging.drafts {
+            let offered = EntryFormView.offeredVariants(catalog: v[d.cardId] ?? [])
+            if !offered.contains(d.variant), let first = offered.first {
+                staging.updateVariant(id: d.id, first)
+            }
+        }
         pricesLoaded = true
         repriceAll()
     }
@@ -143,7 +174,9 @@ struct StagingReviewView: View {
             GroupStats.unitPrice(condition: d.condition, variant: d.variant,
                                  price: prices[d.cardId],
                                  variants: variantsByCard[d.cardId] ?? [],
-                                 conditions: conditionsByCard[d.cardId] ?? [])
+                                 conditions: conditionsByCard[d.cardId] ?? [],
+                                 matrix: matrixByCard[d.cardId] ?? [],
+                                 gradedByPrinting: gradedByPrintingByCard[d.cardId] ?? [])
         }
     }
 }
@@ -151,6 +184,10 @@ struct StagingReviewView: View {
 private struct DraftRow: View {
     let draft: ScanDraft
     let store: CatalogStore
+    /// Copies already in the tin + wishlist state for this card — "do I need this?" answered
+    /// on the row, so a stack of scans can be triaged without opening each card.
+    let knowledge: ScanKnowledge
+    let variantPrices: [VariantPrice]   // card's real PPT printings — filters the finish picker
     let onVariant: (CardVariant) -> Void
     let onCondition: (CardCondition) -> Void
     let onRemove: () -> Void
@@ -163,6 +200,12 @@ private struct DraftRow: View {
         HStack(alignment: .top, spacing: 12) {
             // Card art = at-a-glance confirmation the scan found the right card.
             CardImageView(card: card, quality: "low").frame(width: 58)
+                .overlay(alignment: .topTrailing) {
+                    if knowledge.isNotable {
+                        CardBadges(owned: knowledge.ownedCount > 0, wanted: knowledge.wanted)
+                            .scaleEffect(0.85)
+                    }
+                }
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text(title).font(.headline)
@@ -171,11 +214,18 @@ private struct DraftRow: View {
                         Text(p, format: .currency(code: "USD")).foregroundStyle(.secondary)
                     } else { Text("—").foregroundStyle(.secondary) }
                 }
+                if let caption = knowledge.caption {
+                    Text(caption)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(knowledge.wanted ? Color.pink : Color.green)
+                }
                 // Plain tinted menus (no borders/icons) so labels never hyphenate on
                 // narrow rows; approved mockup option A, CTA wording "File in…".
                 HStack(spacing: 16) {
                     Menu {
-                        ForEach(CardVariant.allCases) { v in Button(v.label) { onVariant(v) } }
+                        ForEach(EntryFormView.validVariants(catalog: variantPrices, current: draft.variant)) {
+                            v in Button(v.label) { onVariant(v) }
+                        }
                     } label: { menuLabel(draft.variant.label) }
                     Menu {
                         ForEach(CardCondition.allCases) { c in Button(c.rawValue) { onCondition(c) } }

@@ -25,13 +25,13 @@ struct PriceHistoryChart: View {
         }
     }
 
-    // Colors keyed by series name so plot and legend agree.
+    // Colors keyed by series name so plot and legend agree: condition overlays teal, any
+    // "Grade N" overlay orange, primary series accent. (Grade series are named `Grade.label`.)
     private func color(_ name: String) -> Color {
         switch name {
-        case "NM": return .teal
-        case "PSA 10": return .orange
+        case "NM", "LP", "MP", "HP", "DMG": return .teal
         case "Cost basis": return .gray
-        default: return .accentColor
+        default: return name.hasPrefix("Grade") ? .orange : .accentColor
         }
     }
 
@@ -101,8 +101,13 @@ struct PriceHistoryChart: View {
                                 startPoint: .top, endPoint: .bottom))
                     }
                 }
+                // series: is REQUIRED — a static foregroundStyle does NOT partition marks, so
+                // without it Charts joins every series' points into one connected line (visible
+                // as a stray connector between the last point of one series and the first of
+                // the next, all in a single color).
                 ForEach(s.points) { p in
-                    LineMark(x: .value("Date", p.date), y: .value("USD", p.value))
+                    LineMark(x: .value("Date", p.date), y: .value("USD", p.value),
+                             series: .value("Series", s.name))
                         .foregroundStyle(color(s.name))
                         .interpolationMethod(.monotone)
                 }

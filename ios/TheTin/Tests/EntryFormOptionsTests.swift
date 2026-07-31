@@ -22,4 +22,18 @@ final class EntryFormOptionsTests: XCTestCase {
                        [.regular, .firstEdition])
     }
 
+    // offeredVariants is the "genuinely printed in" set — unlike validVariants it does NOT fold in
+    // a current selection, so a caller can tell an impossible default from a real one. This is what
+    // lets the staging review snap Tyranitar δ off its blind Regular default onto Holo/Reverse Holo.
+    func testOfferedVariantsExcludesUnpricedFinishes() {
+        let holos = [VariantPrice(printing: "Holofoil", usd: 40),
+                     VariantPrice(printing: "Reverse Holofoil", usd: 12)]
+        let offered = EntryFormView.offeredVariants(catalog: holos)
+        XCTAssertEqual(offered, [.holo, .reverseHolo])
+        XCTAssertFalse(offered.contains(.regular), "a holo-only card must not offer Regular")
+    }
+
+    func testOfferedVariantsFallsBackToAllWhenNoData() {
+        XCTAssertEqual(EntryFormView.offeredVariants(catalog: []), CardVariant.allCases)
+    }
 }

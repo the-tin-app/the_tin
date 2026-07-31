@@ -10,10 +10,13 @@ final class SetDetailModel {
     private(set) var asOf: String?
     private(set) var sealed: [SealedProduct] = []
     var sort: CardSort = .number
-    var filter: CardFilter = .all
+    var filter: CardFilter
 
-    init(store: CatalogStore, set: SetRecord) {
+    /// `filter` is injectable so arriving from a set goal lands straight on what's left, rather
+    /// than on everything with the gap two taps away.
+    init(store: CatalogStore, set: SetRecord, filter: CardFilter = .all) {
         self.set = set
+        self.filter = filter
         // Local SQLite reads are instant and cannot meaningfully fail after install;
         // an empty screen with the set header is the degraded state.
         cards = (try? store.cards(inSet: set.id)) ?? []
@@ -42,12 +45,32 @@ struct SetDetailView: View {
     var history: PriceHistoryProviding? = nil
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    /// Lets this screen start/stop collecting the set. nil in contexts with no goals model.
+    var goals: SetGoalsModel? = nil
 
-    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
+    // `.top` — shared by the card grid and the sealed-products grid below it, whose names wrap to
+    // one or two lines. See the note in `SetsListView`.
+    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12, alignment: .top)]
     private static let sortOptions: [CardSort] = [.number, .alphabetical, .cheapest, .expensive]
+
+    @State private var confirmingWishlistAdd = false
+    @State private var confirmingWishlistRemove = false
 
     private var owned: Set<String> { Set(entries.map(\.cardId)) }
     private var wanted: Set<String> { wants?.wanted ?? [] }
+
+    /// This set's cards that are on the wishlist — what a bulk add put there, and what the
+    /// undo button takes back off.
+    private func wishlistedInSet(wanted: Set<String>) -> [String] {
+        model.cards.map(\.id).filter { wanted.contains($0) }
+    }
+
+    /// Every card in this set you neither own nor already want — what "add what I'm missing"
+    /// actually means. Deliberately the whole set, not the current page: the sort and the grid
+    /// are for looking, the button is for the goal.
+    private func missingUnwanted(owned: Set<String>, wanted: Set<String>) -> [String] {
+        model.cards.filter { !owned.contains($0.id) && !wanted.contains($0.id) }.map(\.id)
+    }
 
     var body: some View {
         let owned = owned
@@ -64,6 +87,48 @@ struct SetDetailView: View {
                 }
                 .font(.footnote)
 
+                if let goals {
+                    Button {
+                        goals.toggle(model.set.id)
+                    } label: {
+                        Label(goals.isCollecting(model.set.id)
+                              ? "Collecting this set" : "Collect this set",
+                              systemImage: goals.isCollecting(model.set.id)
+                              ? "checkmark.circle.fill" : "circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(goals.isCollecting(model.set.id) ? .green : .accentColor)
+                    .padding(.top, 2)
+                }
+
+                // The completion bar's call to action. Only while you're looking at the gap —
+                // offering "add everything missing" from the All view would be a trap.
+                if model.filter == .missing, wants != nil {
+                    let addable = missingUnwanted(owned: owned, wanted: wanted)
+                    let wishlisted = wishlistedInSet(wanted: wanted)
+                    HStack(spacing: 8) {
+                        if !addable.isEmpty {
+                            Button { confirmingWishlistAdd = true } label: {
+                                Label("Add ^[\(addable.count) card](inflect: true) to wishlist",
+                                      systemImage: "heart")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        // The way back from a bulk add. Without it, undoing "add 120 cards" is
+                        // 120 taps — which is exactly what a mis-tap here cost (2026-07-25).
+                        if !wishlisted.isEmpty {
+                            Button(role: .destructive) { confirmingWishlistRemove = true } label: {
+                                Label("Remove ^[\(wishlisted.count) card](inflect: true)",
+                                      systemImage: "heart.slash")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .controlSize(.small)
+                    .padding(.top, 2)
+                }
+
                 LazyVGrid(columns: columns, spacing: 12) {
                     ForEach(model.displayed(owned: owned, wanted: wanted)) { card in
                         NavigationLink(value: CardID(raw: card.id)) {
@@ -77,7 +142,7 @@ struct SetDetailView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .cardQuickActions(cardId: card.id, wants: wants)
+                        .cardQuickActions(card: card, wants: wants, collection: collection, store: store)
                     }
                 }
 
@@ -123,5 +188,33 @@ struct SetDetailView: View {
                                store: store, collection: collection, wants: wants)
             }
         }
+        // Plain `String` interpolation, so the inflection markup used on the button itself
+        // would render literally here — dialog titles take a String, not a LocalizedStringKey.
+        .confirmationDialog(wishlistAddTitle(count: missingUnwanted(owned: owned, wanted: wanted).count),
+                            isPresented: $confirmingWishlistAdd, titleVisibility: .visible) {
+            let addable = missingUnwanted(owned: owned, wanted: wanted)
+            Button("Add to wishlist") { wants?.addMany(addable) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            // Says plainly that this is the singles list, not a set goal — the confusion that
+            // put 120 unwanted cards on a wishlist (2026-07-25).
+            Text("Adds \(model.set.name)'s missing cards to your wishlist as individual singles. To track the set as a goal instead, use “Collect this set”.")
+        }
+        .confirmationDialog(wishlistRemoveTitle(count: wishlistedInSet(wanted: wanted).count),
+                            isPresented: $confirmingWishlistRemove, titleVisibility: .visible) {
+            let wishlisted = wishlistedInSet(wanted: wanted)
+            Button("Remove from wishlist", role: .destructive) { wants?.removeMany(wishlisted) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Takes \(model.set.name)'s cards off your wishlist. Nothing in your tin is touched.")
+        }
+    }
+
+    private func wishlistRemoveTitle(count: Int) -> String {
+        "Remove \(count) \(count == 1 ? "card" : "cards") from your wishlist?"
+    }
+
+    private func wishlistAddTitle(count: Int) -> String {
+        "Add \(count) \(count == 1 ? "card" : "cards") to your wishlist?"
     }
 }

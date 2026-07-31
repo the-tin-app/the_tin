@@ -27,8 +27,23 @@ struct SearchQuery: Equatable {
     var hp: HPFilter? = nil
     var textPhrase: String? = nil
     var number: CardNumberFilter? = nil
+    /// A bare alphanumeric token containing a digit ("25", "025", "swsh123"), normalized —
+    /// it stays a name token AND additionally matches the card-number column, so promos with
+    /// numerator-only numbers surface without stealing name search. Never set without a
+    /// name token, so it doesn't participate in `isEmpty`.
+    var numberCandidate: String? = nil
 
     var isEmpty: Bool { nameTokens.isEmpty && hp == nil && textPhrase == nil && number == nil }
+
+    /// Mirror of the pipeline's normalizeNumber: numerator only, uppercased, leading zeros
+    /// stripped ("025/198" → "25", "#tg20" → "TG20"). All-zero input normalizes to "" — the
+    /// SQL side (LTRIM) does the same, so the comparison stays consistent.
+    static func normalizeNumber(_ s: String) -> String {
+        var t = s.uppercased()
+        if t.hasPrefix("#") { t.removeFirst() }
+        if let slash = t.firstIndex(of: "/") { t = String(t[..<slash]) }
+        return String(t.drop(while: { $0 == "0" }))
+    }
 
     static func parse(_ raw: String) -> SearchQuery {
         var query = SearchQuery()
@@ -50,26 +65,31 @@ struct SearchQuery: Equatable {
                 query.number = number
             } else {
                 query.nameTokens.append(t)
+                if query.numberCandidate == nil, t.contains(where: \.isNumber),
+                   t.allSatisfy({ $0.isLetter || $0.isNumber }) {
+                    query.numberCandidate = Self.normalizeNumber(t)
+                }
             }
         }
         return query
     }
 
-    /// "58/112" (numerator/denominator, the printed convention) or "#58" (numerator only).
-    /// Bare digits ("58") are left as a name token — too ambiguous with HP or card names.
-    /// `local` keeps the typed digits verbatim (no Int round-trip) so zero-padded numbers
-    /// ("008") still match `card.number` exactly.
+    /// "58/112" (numerator/denominator, the printed convention) or "#58" / "#TG20" (numerator
+    /// only, letters allowed for promo numbers). Bare digits ("58") are left as a name token —
+    /// too ambiguous with HP or card names — but become `numberCandidate` above. `local` is
+    /// stored normalized (uppercase, zero-stripped); the search side normalizes the column the
+    /// same way, so "008", "8", and "#08" all match a card numbered "008".
     private static func parseNumber(_ value: String) -> CardNumberFilter? {
         if value.hasPrefix("#") {
-            let digits = value.dropFirst()
-            guard !digits.isEmpty, digits.allSatisfy(\.isNumber) else { return nil }
-            return CardNumberFilter(local: String(digits), total: nil)
+            let body = value.dropFirst()
+            guard !body.isEmpty, body.allSatisfy({ $0.isLetter || $0.isNumber }) else { return nil }
+            return CardNumberFilter(local: normalizeNumber(String(body)), total: nil)
         }
         guard let slash = value.firstIndex(of: "/") else { return nil }
         let localStr = value[..<slash]
         let totalStr = value[value.index(after: slash)...]
         guard !localStr.isEmpty, localStr.allSatisfy(\.isNumber), let total = Int(totalStr) else { return nil }
-        return CardNumberFilter(local: String(localStr), total: total)
+        return CardNumberFilter(local: normalizeNumber(String(localStr)), total: total)
     }
 
     private static func parseHP(_ value: String) -> HPFilter? {

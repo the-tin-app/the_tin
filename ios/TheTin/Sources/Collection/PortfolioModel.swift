@@ -19,7 +19,9 @@ final class PortfolioModel {
 
     func refresh(entries: [CollectionEntry], prices: [String: PriceRecord],
                  variantsByCard: [String: [VariantPrice]],
-                 conditionsByCard: [String: [ConditionPrice]]) async {
+                 conditionsByCard: [String: [ConditionPrice]],
+                 matrixByCard: [String: [MatrixPrice]] = [:],
+                 gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]) async {
         generation += 1
         guard entries != cachedEntries else { return }
         let gen = generation
@@ -31,7 +33,9 @@ final class PortfolioModel {
             func build(_ list: [CollectionEntry]) -> PortfolioSeries {
                 PortfolioHistory.series(entries: list, histories: histories, prices: prices,
                                         variantsByCard: variantsByCard,
-                                        conditionsByCard: conditionsByCard)
+                                        conditionsByCard: conditionsByCard,
+                                        matrixByCard: matrixByCard,
+                                        gradedByPrintingByCard: gradedByPrintingByCard)
             }
             var perGroup: [String: PortfolioSeries] = [:]
             for gid in Set(entries.map(\.groupId)) {

@@ -79,6 +79,11 @@ struct ImportedRow {
     var acquiredFrom: String? = nil
     var addedAt: Date? = nil
     var note: String? = nil          // merged into acquiredFrom (e.g. "Grade: CGC 9.5")
+    var forTrade: Bool = false       // The Tin only — round-trips the trade-list flag
+    var acquiredVia: String? = nil   // The Tin only — AcquiredVia rawValue, nil if unreadable
+    /// The Tin only — the divider this copy was filed under. Empty string means deliberately
+    /// ungrouped (the tin at large), which is NOT the same as "this format didn't say".
+    var divider: String? = nil
 }
 
 enum MatchResult: Equatable {
@@ -309,8 +314,16 @@ enum CollectionCSVImport {
         let formatName: String
         let experimental: Bool
         let headers: [String]
-        var entries: [CollectionEntry] = []   // groupId "" — caller re-homes into the import divider
+        var entries: [CollectionEntry] = []   // groupId "" — caller files them (see `dividerByEntryId`)
         var skipped: [SkippedRow] = []
+        /// Divider name per entry id, for formats that record one (only ours does). An entry
+        /// present here with an EMPTY name was deliberately ungrouped in the source tin; an entry
+        /// absent from this map came from a format with no divider column at all. The caller
+        /// treats those two very differently, so nil and "" must stay distinguishable.
+        var dividerByEntryId: [String: String] = [:]
+        /// True when the file itself carried a `divider` column — i.e. it's one of our exports.
+        /// Drives whether an import reproduces the source tin or lands in one dated divider.
+        var carriesDividers = false
 
         var summary: String {
             var s = "\(entries.count) cards imported, \(skipped.count) rows skipped."
@@ -351,7 +364,12 @@ enum CollectionCSVImport {
                 case .unmatched(let reason):
                     result.skipped.append(SkippedRow(fields: fields, reason: reason))
                 case .matched(let card):
-                    result.entries.append(entry(row, card: card, now: now))
+                    let made = entry(row, card: card, now: now)
+                    result.entries.append(made)
+                    if let divider = row.divider {
+                        result.carriesDividers = true
+                        result.dividerByEntryId[made.id] = divider
+                    }
                 }
             }
         }
@@ -364,7 +382,9 @@ enum CollectionCSVImport {
                                qty: max(1, row.qty), condition: row.condition, grade: row.grade,
                                pricePaid: row.pricePaid, acquiredAt: row.acquiredAt,
                                acquiredFrom: from.isEmpty ? nil : from,
-                               addedAt: row.addedAt ?? now, variant: row.variant)
+                               addedAt: row.addedAt ?? now, variant: row.variant,
+                               forTrade: row.forTrade ? true : nil,
+                               acquiredVia: row.acquiredVia)
     }
 
     /// skipped-rows.csv: the file's original columns + a trailing skip_reason column.
@@ -393,7 +413,26 @@ enum CollectionCSVImport {
             row.acquiredAt = CSVField.date(h.value("acquired_at", in: f))
             row.acquiredFrom = h.value("acquired_from", in: f)
             row.addedAt = CSVField.date(h.value("added_at", in: f))
-            return .row(row)   // divider/current_value/value_as_of columns intentionally ignored
+            // Absent in files exported before the column existed → false, which is the same as
+            // "not marked". No migration needed.
+            row.forTrade = (h.value("for_trade", in: f)?.lowercased()).map {
+                $0 == "true" || $0 == "yes" || $0 == "1"
+            } ?? false
+            // Validated against the enum, so an unrecognised value becomes "not recorded"
+            // rather than an unreadable string sitting in the model. The ROW still imports —
+            // a provenance label is not worth failing a card over.
+            row.acquiredVia = h.value("acquired_via", in: f)
+                .flatMap(AcquiredVia.init(rawValue:))?.rawValue
+            // The divider IS read back, and empty means ungrouped rather than unknown — an
+            // export→import of our own file has to reproduce the tin, not flatten it into one
+            // "Imported <date>" pile.
+            //
+            // Gated on `h.has`, not on the value: the Tin format is detected by card_id + qty
+            // alone, so a hand-made two-column CSV matches it too. Without this check a missing
+            // column read as an empty divider, and every one of those rows would claim to be a
+            // deliberately-unfiled card instead of one we know nothing about.
+            row.divider = h.has("divider") ? (h.value("divider", in: f) ?? "") : nil
+            return .row(row)   // current_value/value_as_of are derived, intentionally ignored
         })
 
     // MARK: Collectr — verbatim 16-column header, no IDs of any kind. Columns are read BY NAME

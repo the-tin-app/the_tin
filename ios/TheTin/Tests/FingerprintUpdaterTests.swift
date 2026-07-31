@@ -6,12 +6,32 @@ import GRDB
 
 final class StubFPRemote: FingerprintRemote {
     var manifest: FingerprintManifest
+    /// nil ⇒ this host serves no parts manifest (a legacy-only host), which is what
+    /// `FingerprintUpdater` falls back from.
+    var partsManifest: FingerprintPartsManifest?
     var files: [String: Data] = [:]
     var artifactFetches = 0
+    /// Per-path fetch counts, so a resume can assert it re-fetched only what was missing.
+    var fetches: [String: Int] = [:]
+    /// Fail every fetch once this many part payloads have been served — simulates a dropped
+    /// connection partway through a long download.
+    var failAfterParts: Int?
+
     init(manifest: FingerprintManifest) { self.manifest = manifest }
     func fetchManifest() async throws -> FingerprintManifest { manifest }
+    func fetchPartsManifest() async throws -> FingerprintPartsManifest {
+        guard let partsManifest else { throw CatalogError.httpStatus(404) }
+        return partsManifest
+    }
+    var partFetchCount: Int {
+        (partsManifest?.parts ?? []).reduce(0) { $0 + (fetches[$1.path] ?? 0) }
+    }
     func fetchData(path: String) async throws -> Data {
         if path == manifest.path { artifactFetches += 1 }
+        if let limit = failAfterParts, path.contains("/parts/"), partFetchCount >= limit {
+            throw CatalogError.httpStatus(500)
+        }
+        fetches[path, default: 0] += 1
         guard let d = files[path] else { throw CatalogError.httpStatus(404) }
         return d
     }
@@ -57,7 +77,7 @@ final class FingerprintUpdaterTests: XCTestCase {
     func testEnsureLatestReportsProgress() async throws {
         let updater = FingerprintUpdater(remote: remote(manifest(version: 1)), paths: paths)
         var fractions: [Double] = []
-        _ = try await updater.ensureLatest { fractions.append($0) }
+        _ = try await updater.ensureLatest { fractions.append($0.fraction) }
         for _ in 0..<20 where !fractions.contains(1) { await Task.yield() }
         XCTAssertEqual(fractions.first, 0, "progress must start at 0 when a download begins")
         XCTAssertTrue(fractions.contains(1), "progress must reach 1 when the pack finishes: \(fractions)")

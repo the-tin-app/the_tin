@@ -20,6 +20,10 @@ final class StreamPager {
 
     init(stream: CardStream) { self.stream = stream }
 
+    /// True once at least one page has been requested and it (and any it triggered) yielded no
+    /// cards — the signal for a "no matches" empty state rather than an endless spinner.
+    var isEmptyResult: Bool { nextIndex > 0 && cards.isEmpty && !isLoading }
+
     /// Load the next page (off-main), dropping any card already shown this session.
     /// Stops paging after two consecutive empty pages (stream exhausted). Non-reentrant:
     /// overlapping calls (StreamView fires a Task per near-tail swipe) are rejected by the

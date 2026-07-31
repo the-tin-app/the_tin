@@ -39,10 +39,17 @@ final class BackupServiceTests: XCTestCase {
     }
 
     private func makeService(collection: LocalCollectionRepository, wants: LocalWantsRepository,
+                             setGoals: SetGoalsModel? = nil,
                              debounce: Duration = .seconds(5)) -> BackupService {
         BackupService(store: TempDirBackupStore(dir: dir.appendingPathComponent("icloud", isDirectory: true)),
-                      collection: collection, wants: wants, uid: "local",
+                      collection: collection, wants: wants, setGoals: setGoals, uid: "local",
                       debounce: debounce, now: { self.fixedNow })
+    }
+
+    /// A goals model persisting under `<dir>/<sub>/set-goals.json`.
+    private func makeGoals(sub: String) -> SetGoalsModel {
+        SetGoalsModel(paths: SetGoalPaths(fileURL: dir.appendingPathComponent(sub, isDirectory: true)
+            .appendingPathComponent("set-goals.json")))
     }
 
     /// Whole-second dates: ISO-8601 truncates fractional seconds, and these must round-trip.
@@ -64,18 +71,22 @@ final class BackupServiceTests: XCTestCase {
         let gid = try await col.createGroup(name: "Binder")
         let entry = fixtureEntry(id: "e1", groupId: gid)
         try await col.addEntry(entry)
-        try await wants.setWanted(uid: "local", cardId: "sv1-25", wanted: true)
+        try await wants.save(uid: "local", entries: ["sv1-25": WantEntry()])
 
-        let service = makeService(collection: col, wants: wants)
+        let goals = makeGoals(sub: "deviceA")
+        goals.toggle("base1")
+        let service = makeService(collection: col, wants: wants, setGoals: goals)
         await service.backUpNow()
         XCTAssertEqual(service.status, .backedUp(fixedNow))
 
         let snapshot = try await service.loadBackup()
-        XCTAssertEqual(snapshot.schemaVersion, 1)
+        XCTAssertEqual(snapshot.schemaVersion, 3)
+        XCTAssertEqual(snapshot.setGoals, ["base1"])
         XCTAssertEqual(snapshot.exportedAt, fixedNow)
         XCTAssertEqual(snapshot.groups.map(\.id), [gid])
         XCTAssertEqual(snapshot.entries, [entry])   // full Codable round-trip, field by field
         XCTAssertEqual(snapshot.wanted, ["sv1-25"])
+        XCTAssertNotNil(snapshot.wantEntries?["sv1-25"])
 
         // Two-slot rotation: a second write moves the previous snapshot to the .prev slot.
         await service.backUpNow()
@@ -117,7 +128,8 @@ final class BackupServiceTests: XCTestCase {
         let gid = try await colA.createGroup(name: "Binder")
         let entry = fixtureEntry(id: "e1", groupId: gid)
         try await colA.addEntry(entry)
-        try await wantsA.setWanted(uid: "local", cardId: "sv1-25", wanted: true)
+        try await wantsA.save(uid: "local", entries:
+            ["sv1-25": WantEntry(priority: .high, targetUsd: 25, notes: "grail")])
         await makeService(collection: colA, wants: wantsA).backUpNow()
 
         // Empty "device B": the launch check offers the restore.
@@ -132,10 +144,15 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertNil(serviceB.restoreOffer)
         let groups = await firstValue(colB.groupsStream()) ?? []
         let entries = await firstValue(colB.entriesStream()) ?? []
-        let wanted = await firstValue(wantsB.stream(uid: "local")) ?? []
+        let wanted = await firstValue(wantsB.stream(uid: "local")) ?? [:]
         XCTAssertEqual(groups.map(\.id), [gid])
         XCTAssertEqual(entries, [entry])
-        XCTAssertEqual(wanted, ["sv1-25"])
+        XCTAssertEqual(Set(wanted.keys), ["sv1-25"])
+        // Rich fields (priority/target/notes) survive the encode → decode → restore round trip,
+        // not just the id.
+        XCTAssertEqual(wanted["sv1-25"]?.priority, .high)
+        XCTAssertEqual(wanted["sv1-25"]?.targetUsd, 25)
+        XCTAssertEqual(wanted["sv1-25"]?.notes, "grail")
 
         // Non-empty "device C0": never offered.
         let (colC0, wantsC0) = try makeRepos(sub: "deviceC0")
@@ -168,6 +185,92 @@ final class BackupServiceTests: XCTestCase {
         await serviceC.acceptRestore(serviceC.restoreOffer!)
         let replacedC = await firstValue(colC.entriesStream()) ?? []
         XCTAssertEqual(replacedC.map(\.id), ["e1"])   // NOT ["e1", "e2"]
+    }
+
+    /// A v1 backup file predates `wantEntries` — the decoded snapshot has it as nil (the field's
+    /// default). Restoring must still land the ids, with fresh default `WantEntry` values.
+    func testRestoreFallsBackToDefaultsForV1BackupWithoutWantEntries() async throws {
+        let (col, wants) = try makeRepos(sub: "deviceV1")
+        let service = makeService(collection: col, wants: wants)
+        let v1Snapshot = BackupSnapshot(exportedAt: fixedNow, groups: [], entries: [],
+                                        wanted: ["a1", "b2"], wantEntries: nil)
+
+        try await service.performRestore(snapshot: v1Snapshot)
+
+        let wanted = await firstValue(wants.stream(uid: "local")) ?? [:]
+        XCTAssertEqual(Set(wanted.keys), ["a1", "b2"])
+        // WantEntry() stamps `addedAt: Date()` at construction, so compare fields rather than
+        // the whole struct (two independently-constructed defaults never compare equal).
+        for id in ["a1", "b2"] {
+            XCTAssertEqual(wanted[id]?.priority, .normal)
+            XCTAssertNil(wanted[id]?.targetUsd)
+            XCTAssertEqual(wanted[id]?.notes, "")
+        }
+    }
+
+    /// Goals survive device A → backup file → device B, and the restore replaces (not merges)
+    /// whatever the new device happened to be chasing.
+    func testSetGoalsRoundTripThroughBackupAndRestore() async throws {
+        let (colA, wantsA) = try makeRepos(sub: "goalsA")
+        try await colA.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        let goalsA = makeGoals(sub: "goalsA")
+        goalsA.toggle("base1")
+        goalsA.toggle("sv1")
+        await makeService(collection: colA, wants: wantsA, setGoals: goalsA).backUpNow()
+
+        let (colB, wantsB) = try makeRepos(sub: "goalsB")
+        let goalsB = makeGoals(sub: "goalsB")
+        goalsB.toggle("swsh4")
+        let serviceB = makeService(collection: colB, wants: wantsB, setGoals: goalsB)
+        try await serviceB.performRestore(snapshot: serviceB.loadBackup())
+
+        XCTAssertEqual(goalsB.setIds, ["base1", "sv1"])
+        // Persisted, not just in memory — a relaunch must see the restored goals.
+        XCTAssertEqual(SetGoalsModel.load(from: dir.appendingPathComponent("goalsB", isDirectory: true)
+            .appendingPathComponent("set-goals.json")), ["base1", "sv1"])
+    }
+
+    /// A v2 backup file has no `setGoals` key. It must still decode (as nil), and restoring it
+    /// must leave the device's own goals alone rather than wiping them.
+    func testV2BackupDecodesAsV3AndLeavesGoalsUntouched() async throws {
+        let v2JSON = """
+        {"schemaVersion":2,"exportedAt":"2023-11-14T22:13:20Z","groups":[],"entries":[],
+         "wanted":["a1"],
+         "wantEntries":{"a1":{"priority":1,"notes":"","addedAt":"2023-11-14T22:13:20Z"}}}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let snapshot = try decoder.decode(BackupSnapshot.self, from: v2JSON)
+        XCTAssertEqual(snapshot.schemaVersion, 2)
+        XCTAssertNil(snapshot.setGoals)
+
+        let (col, wants) = try makeRepos(sub: "deviceV2")
+        let goals = makeGoals(sub: "deviceV2")
+        goals.toggle("base1")
+        try await makeService(collection: col, wants: wants, setGoals: goals)
+            .performRestore(snapshot: snapshot)
+
+        XCTAssertEqual(goals.setIds, ["base1"])
+        let restoredWants = await firstValue(wants.stream(uid: "local")) ?? [:]
+        XCTAssertEqual(Set(restoredWants.keys), ["a1"])
+    }
+
+    /// Chasing a set is a backup-worthy change on its own — it must arm the debounce even when
+    /// the collection and wishlist never move.
+    func testGoalChangeAloneTriggersBackup() async throws {
+        let (col, wants) = try makeRepos(sub: "goalTrigger")
+        try await col.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        let goals = makeGoals(sub: "goalTrigger")
+        let service = makeService(collection: col, wants: wants, setGoals: goals,
+                                  debounce: .milliseconds(50))
+        service.start()
+
+        goals.toggle("base1")
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertEqual(service.status, .backedUp(fixedNow))
+        let written = try await service.loadBackup()
+        XCTAssertEqual(written.setGoals, ["base1"])
     }
 
     func testAutoBackupDebouncesAndSkipsInitialEmissions() async throws {

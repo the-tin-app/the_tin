@@ -4,11 +4,18 @@ import Observation
 /// One backup file's contents: the whole owned collection + wishlist, reusing the models'
 /// existing Codable conformances verbatim. `schemaVersion` gates future migrations.
 struct BackupSnapshot: Codable, Equatable {
-    var schemaVersion: Int = 1
+    var schemaVersion: Int = 3
     var exportedAt: Date
     var groups: [CardGroup]
     var entries: [CollectionEntry]
     var wanted: [String]
+    /// v2: the full per-card wishlist data. Optional + defaulted so a v1 backup (no such key)
+    /// still decodes, with this nil — `performRestore` falls back to `wanted`-only defaults.
+    var wantEntries: [String: WantEntry]? = nil
+    /// v3: the sets you're collecting. Optional + defaulted for the same reason — a v2 backup
+    /// decodes with this nil, and `performRestore` then leaves local goals alone rather than
+    /// clearing them from a file that never knew about them.
+    var setGoals: [String]? = nil
 }
 
 /// Why a backup read failed. Manual restore surfaces these; auto-restore treats all as absent.
@@ -91,6 +98,9 @@ final class BackupService {
     private let store: BackupStore
     private let collection: CollectionRepository
     private let wants: WantsRepository
+    /// Set goals live in their own model, not a repository (a plain file of ids). Optional so
+    /// tests and any goal-less wiring construct the service unchanged.
+    private let setGoals: SetGoalsModel?
     private let uid: String
     private let debounce: Duration
     private let now: () -> Date
@@ -98,11 +108,13 @@ final class BackupService {
     private var streamTasks: [Task<Void, Never>] = []
 
     init(store: BackupStore = ICloudBackupStore(),
-         collection: CollectionRepository, wants: WantsRepository, uid: String,
+         collection: CollectionRepository, wants: WantsRepository,
+         setGoals: SetGoalsModel? = nil, uid: String,
          debounce: Duration = .seconds(5), now: @escaping () -> Date = { Date() }) {
         self.store = store
         self.collection = collection
         self.wants = wants
+        self.setGoals = setGoals
         self.uid = uid
         self.debounce = debounce
         self.now = now
@@ -116,6 +128,9 @@ final class BackupService {
     /// snapshot before the restore prompt runs. Idempotent.
     func start() {
         guard streamTasks.isEmpty else { return }
+        // Goals have no stream (one small file, written whole), so the model calls back instead.
+        // Without this, chasing a set would sit unbacked-up until some other edit happened to fire.
+        setGoals?.onChange = { [weak self] in self?.scheduleWrite() }
         streamTasks.append(Task { [weak self] in
             guard let stream = self?.collection.groupsStream() else { return }
             var first = true
@@ -189,12 +204,13 @@ final class BackupService {
     private func currentSnapshot() async -> BackupSnapshot {
         var groups: [CardGroup] = []
         var entries: [CollectionEntry] = []
-        var wanted: Set<String> = []
+        var wantMap: [String: WantEntry] = [:]
         for await v in collection.groupsStream() { groups = v; break }
         for await v in collection.entriesStream() { entries = v; break }
-        for await v in wants.stream(uid: uid) { wanted = v; break }
+        for await v in wants.stream(uid: uid) { wantMap = v; break }
         return BackupSnapshot(exportedAt: now(), groups: groups, entries: entries,
-                              wanted: wanted.sorted())
+                              wanted: wantMap.keys.sorted(), wantEntries: wantMap,
+                              setGoals: setGoals?.setIds.sorted())
     }
 
     // MARK: Reading
@@ -266,7 +282,11 @@ final class BackupService {
     /// Throws BackupError so the manual Settings path can surface what went wrong.
     func performRestore(snapshot: BackupSnapshot) async throws {
         try await collection.replaceAll(groups: snapshot.groups, entries: snapshot.entries)
-        try await wants.replaceAll(uid: uid, wanted: Set(snapshot.wanted))
+        let restoredWants = snapshot.wantEntries
+            ?? Dictionary(uniqueKeysWithValues: snapshot.wanted.map { ($0, WantEntry()) })
+        try await wants.save(uid: uid, entries: restoredWants)
+        // nil = a pre-v3 backup, which says nothing about goals; keep whatever is on the device.
+        if let ids = snapshot.setGoals { setGoals?.replaceAll(Set(ids)) }
     }
 
     private func currentCounts() async -> (entries: Int, wants: Int) {

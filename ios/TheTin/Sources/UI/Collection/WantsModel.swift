@@ -3,28 +3,82 @@ import Observation
 
 @MainActor @Observable
 final class WantsModel {
-    private(set) var wanted: Set<String> = []
+    private(set) var entries: [String: WantEntry] = [:]
+    /// Derived id set — the API every existing consumer (heart, Discover, badges, CSV/print) reads.
+    var wanted: Set<String> { Set(entries.keys) }
     private let repo: WantsRepository
     private let uid: String
-    /// Routes write failures into the same alert sink as collection writes
-    /// (CollectionModel.writeError, presented by RootView). Set by AppModel.
+    /// Routes write failures into the same alert sink as collection writes. Set by AppModel.
     var onWriteError: ((String) -> Void)?
 
     init(repo: WantsRepository, uid: String) {
         self.repo = repo; self.uid = uid
-        Task { for await set in repo.stream(uid: uid) { self.wanted = set } }
+        Task { for await e in repo.stream(uid: uid) { self.entries = e } }
     }
-    func isWanted(_ cardId: String) -> Bool { wanted.contains(cardId) }
+
+    func isWanted(_ cardId: String) -> Bool { entries.keys.contains(cardId) }
+    func entry(_ cardId: String) -> WantEntry? { entries[cardId] }
+
+    /// Heart on/off. New wishes start at default priority/no-target/no-notes.
     func toggle(_ cardId: String) {
-        let next = !wanted.contains(cardId)
-        if next { wanted.insert(cardId) } else { wanted.remove(cardId) }   // optimistic
-        Task {
-            do { try await repo.setWanted(uid: uid, cardId: cardId, wanted: next) }
+        let previous = entries
+        if entries[cardId] == nil { entries[cardId] = WantEntry() } else { entries[cardId] = nil }
+        persist(rollbackTo: previous)
+    }
+
+    /// Heart many cards in one write. "Add everything I'm missing from this set" is otherwise 60
+    /// taps — and 60 `toggle` calls would be 60 whole-map saves queued through the FIFO write
+    /// chain. Cards already wanted keep the priority/target/notes they carry; this only adds.
+    func addMany(_ cardIds: [String]) {
+        let previous = entries
+        var added = false
+        for id in cardIds where entries[id] == nil {
+            entries[id] = WantEntry()
+            added = true
+        }
+        guard added else { return }
+        persist(rollbackTo: previous)
+    }
+
+    /// Un-heart many cards in one write — the counterpart of `addMany`, and the way back from a
+  /// bulk add you didn't mean. Without it, undoing "add 120 cards" is 120 taps.
+    func removeMany(_ cardIds: [String]) {
+        let previous = entries
+        var removed = false
+        for id in cardIds where entries[id] != nil {
+            entries[id] = nil
+            removed = true
+        }
+        guard removed else { return }
+        persist(rollbackTo: previous)
+    }
+
+    /// Edit an existing entry's priority/target/notes. No-op if the card isn't wanted.
+    func update(_ cardId: String, _ mutate: (inout WantEntry) -> Void) {
+        guard var e = entries[cardId] else { return }
+        let previous = entries
+        mutate(&e); entries[cardId] = e
+        persist(rollbackTo: previous)
+    }
+
+    /// Serializes writes. Each `persist` saves the WHOLE map, so two in flight at once is a
+    /// last-writer-wins race — and unstructured `Task`s carry no ordering guarantee, so the
+    /// older snapshot can land last and silently discard the newer edit. Hearting a card and
+    /// immediately setting its target could lose the target.
+    private var writeChain: Task<Void, Never>?
+
+    /// Optimistic save of the whole map; snap back to the last-saved state on write failure so
+    /// the UI never shows a change that wasn't persisted.
+    private func persist(rollbackTo previous: [String: WantEntry]) {
+        let snapshot = entries
+        let prior = writeChain
+        writeChain = Task { [weak self] in
+            await prior?.value            // FIFO — never let an older snapshot overwrite a newer one
+            guard let self else { return }
+            do { try await self.repo.save(uid: self.uid, entries: snapshot) }
             catch {
-                // Write failed — snap the heart back so the UI never shows a wish that
-                // wasn't saved. (The stream would eventually correct it; this is immediate.)
-                if next { wanted.remove(cardId) } else { wanted.insert(cardId) }
-                onWriteError?("Couldn't update the wishlist — nothing was changed. Check free storage and try again.")
+                self.entries = previous
+                self.onWriteError?("Couldn't update the wishlist — nothing was changed. Check free storage and try again.")
             }
         }
     }

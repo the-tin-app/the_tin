@@ -6,8 +6,11 @@ import UniformTypeIdentifiers
 /// existing Support / Data / Storage sections.
 struct SettingsView: View {
     @Bindable var app: AppModel
+    let pack: ScannerPackModel
     @State private var model = SettingsModel()
     @State private var confirmingClear = false
+    @State private var confirmingPackDelete = false
+    @State private var confirmingPackCellular = false
     @State private var restoreCandidate: BackupSnapshot?
     @State private var confirmingRestore = false
     @State private var restoreError: String?
@@ -22,17 +25,25 @@ struct SettingsView: View {
 
     private var funding: FundingDisplay { app.funding }
 
+    /// Split out of `body`: with the scanner-pack section added, one ten-section `List` literal
+    /// tipped the type-checker into "unable to type-check this expression in reasonable time".
+    @ViewBuilder private var sections: some View {
+        appSection
+        connectionSection
+        tierSection
+        scannerPackSection
+        activitySection
+        alertsSection
+        supportSection
+        dataSection
+        printoutSection
+        storageSection
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                appSection
-                connectionSection
-                tierSection
-                alertsSection
-                supportSection
-                dataSection
-                printoutSection
-                storageSection
+                sections
             }
             .navigationTitle("Settings")
             .toolbar {
@@ -51,6 +62,22 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Images will re-download as you view cards.")
+            }
+            .confirmationDialog("Delete the scanner pack?", isPresented: $confirmingPackDelete,
+                                titleVisibility: .visible) {
+                Button("Delete", role: .destructive) { pack.deletePack() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                // Naming what is NOT lost matters more than naming what is: people assume
+                // deleting anything in a collection app deletes their collection.
+                Text("Camera scanning stops working until you download it again. Your collection isn't affected.")
+            }
+            .confirmationDialog("Download over cellular?", isPresented: $confirmingPackCellular,
+                                titleVisibility: .visible) {
+                Button("Download now") { pack.startDownload(allowingExpensive: true) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You're not on Wi-Fi. This may count against your data plan — you can pause and resume anytime.")
             }
             .confirmationDialog(manualRestoreTitle, isPresented: $confirmingRestore,
                                 titleVisibility: .visible) {
@@ -79,6 +106,14 @@ struct SettingsView: View {
             .fileImporter(isPresented: $importing,
                           allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
                 Task { await runImport(result) }
+            }
+            // A CSV opened in The Tin from Files / AirDrop lands here rather than in the picker:
+            // RootView presents Settings on the route token, and this runs the same import the
+            // button does, so the result sheet and skipped-rows export behave identically.
+            .task(id: app.importRouteToken) {
+                guard let url = app.pendingImportURL else { return }
+                app.pendingImportURL = nil
+                await runImport(.success(url))
             }
             .sheet(item: $importSummary) { ImportResultSheet(summary: $0) }
             .alert("Import failed", isPresented: Binding(get: { importError != nil },
@@ -227,6 +262,101 @@ struct SettingsView: View {
         return " Currently installed: \(CatalogTier(rawValue: installed)?.title ?? installed)."
     }
 
+    // MARK: Scanner pack
+
+    /// The scanner pack's own section: start it here instead of only from the Scan tab, watch a
+    /// transfer that was started anywhere, and — the part that had no home at all — give the disk
+    /// space back once you've finished cataloguing.
+    private var scannerPackSection: some View {
+        Section {
+            switch pack.phase {
+            case .checking:
+                HStack(spacing: 6) { ProgressView(); Text("Checking…") }
+            case .notInstalled:
+                LabeledContent("Camera scanning", value: "Not set up")
+                Button("Download scanner pack") {
+                    if app.network.isExpensive { confirmingPackCellular = true } else { pack.startDownload() }
+                }
+            case .downloading(let p):
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: p.fraction)
+                    Text(p.byteSummary).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                Button("Pause") { pack.pause() }
+            case .paused(let p, let reason):
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: p.fraction)
+                    Text("Paused — \(p.byteSummary)")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                Button(reason == .cellular ? "Resume anyway" : "Resume") {
+                    pack.startDownload(allowingExpensive: reason == .cellular)
+                }
+                Button("Discard partial download", role: .destructive) { pack.discardPartialDownload() }
+            case .ready:
+                LabeledContent("Scanner pack", value: installedPackText)
+                if pack.updateAvailable {
+                    Button("Update scanner pack") {
+                        if app.network.isExpensive { confirmingPackCellular = true } else { pack.startDownload() }
+                    }
+                }
+                Button("Delete scanner pack", role: .destructive) { confirmingPackDelete = true }
+            case .unavailable(let msg):
+                LabeledContent("Camera scanning", value: "Unavailable")
+                Text(msg).font(.caption).foregroundStyle(.secondary)
+            }
+            LabeledContent("Connection", value: app.network.connectionDescription)
+        } header: {
+            Text("Camera scanning")
+        } footer: {
+            scannerPackFooter
+        }
+    }
+
+    @ViewBuilder private var scannerPackFooter: some View {
+        switch pack.phase {
+        case .ready where pack.updateAvailable:
+            Text("A newer scanner pack is available. The one you have keeps working until you update.")
+        case .ready:
+            Text("Used to identify cards from the camera. Deleting it frees the space and leaves your collection untouched.")
+        case .paused(_, .cellular):
+            Text("Paused automatically because you're not on Wi-Fi. Your progress is saved either way.")
+        default:
+            Text("Lets The Tin identify a card from your camera, offline. One-time download; you can pause and resume it.")
+        }
+    }
+
+    private var installedPackText: String {
+        let version = pack.installedVersion.map { "v\($0)" }
+        let size = pack.installedBytes.map {
+            ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+        }
+        return [version, size].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    // MARK: Catalog activity
+
+    /// Breadcrumb trail of recent catalog operations (source, outcome, failures) — the on-device
+    /// answer to "why does my data look wrong", collapsed behind a DisclosureGroup.
+    private var activitySection: some View {
+        Section {
+            DisclosureGroup("Catalog activity") {
+                let lines = CatalogActivity.read()
+                if lines.isEmpty {
+                    Text("No catalog updates recorded yet.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(lines.prefix(20), id: \.self) { line in
+                        Text(line)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(line.contains("failed") || line.contains("FAILED")
+                                             ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: Wishlist price alerts
 
     private var alertsSection: some View {
@@ -249,7 +379,10 @@ struct SettingsView: View {
             if model.alertsDenied {
                 Text("Notifications are off for The Tin. Enable them in iOS Settings to get price alerts.")
             } else {
-                Text("Get notified when a wishlist card's price moves. Alerts arrive when new prices download — not real-time.")
+                // Target hits are named explicitly: they don't obey the sensitivity picker above
+                // it, and a target you set months ago is the one alert here you're actually
+                // waiting for.
+                Text("Get notified when a wishlist card drops to the target price you set, or when its price moves by the amount above. Alerts arrive when new prices download — not real-time.")
             }
         }
     }
@@ -260,11 +393,15 @@ struct SettingsView: View {
     /// mirrors `runImport`, so a 20k-entry export can't freeze the UI either.
     private func makeExportDocument() async -> CSVDocument? {
         guard let collection = app.collection, let store = app.store else { return nil }
-        let entries = collection.entries
+        // `allEntries`: an export is the whole file. Using the owned-only list would drop every
+        // sold copy — the one place a silent omission looks exactly like a successful backup.
+        let entries = collection.allEntries
         let groups = collection.groups
         let prices = collection.prices
         let variantsByCard = collection.variantsByCard
         let conditionsByCard = collection.conditionsByCard
+        let matrixByCard = collection.matrixByCard
+        let gradedByPrintingByCard = collection.gradedByPrintingByCard
         return await Task.detached {
             let ids = Array(Set(entries.map(\.cardId)))
             let cards = Dictionary(uniqueKeysWithValues: ((try? store.cards(ids: ids)) ?? []).map { ($0.id, $0) })
@@ -272,8 +409,52 @@ struct SettingsView: View {
             return CSVDocument(data: CollectionCSV.export(
                 entries: entries, groups: groups, cards: cards, sets: sets,
                 prices: prices, variantsByCard: variantsByCard,
-                conditionsByCard: conditionsByCard))
+                conditionsByCard: conditionsByCard,
+                matrixByCard: matrixByCard,
+                gradedByPrintingByCard: gradedByPrintingByCard))
         }.value
+    }
+
+    /// Decide which divider each imported row lands in.
+    ///
+    /// Two different jobs wear the same button. Importing SOMEONE ELSE's CSV is an append: it
+    /// knows nothing about your dividers, so everything lands in one dated pile you re-file from.
+    /// Importing OUR OWN export is a restore — moving your tin to another device — and it has to
+    /// come back looking like the tin you exported, which is the whole point of the `divider`
+    /// column we've always written and never read (fixed 2026-07-27).
+    ///
+    /// Groups are matched by name, case-insensitively, and reused before being created, so a
+    /// re-import doesn't spawn "Binder" beside "binder". An empty divider on one of our rows means
+    /// it was deliberately ungrouped, and it stays that way — `groupId ""` is the tin at large.
+    private func fileImportedEntries(_ result: CollectionCSVImport.Result,
+                                     into collection: CollectionModel) async -> [CollectionEntry] {
+        guard result.carriesDividers else {
+            // Append-only: everything lands in a fresh divider ("Imported Jul 14"); the user
+            // re-files from there. A re-import just makes a second divider.
+            let name = "Imported \(Date().formatted(.dateTime.month(.abbreviated).day()))"
+            let groupId = await collection.createGroup(name: name)
+            return result.entries.map { var e = $0; e.groupId = groupId; return e }
+        }
+        var idByName: [String: String] = [:]
+        for group in collection.groups { idByName[group.name.lowercased()] = group.id }
+        var out: [CollectionEntry] = []
+        for var entry in result.entries {
+            let name = result.dividerByEntryId[entry.id] ?? ""
+            let key = name.lowercased()
+            if name.isEmpty {
+                entry.groupId = ""
+            } else if let existing = idByName[key] {
+                entry.groupId = existing
+            } else {
+                let created = await collection.createGroup(name: name)
+                // A failed create returns "", which is the tin at large — better than dropping
+                // the card, and it stays visible rather than vanishing into a group that isn't there.
+                idByName[key] = created
+                entry.groupId = created
+            }
+            out.append(entry)
+        }
+        return out
     }
 
     private func runImport(_ picked: Result<URL, Error>) async {
@@ -293,15 +474,7 @@ struct SettingsView: View {
                 return try CollectionCSVImport.importCSV(text, matcher: CardMatcher(store: store))
             }.value
             if !result.entries.isEmpty {
-                // Append-only: everything lands in a fresh divider ("Imported Jul 14");
-                // the user re-files from there. A re-import just makes a second divider.
-                let divider = "Imported \(Date().formatted(.dateTime.month(.abbreviated).day()))"
-                let groupId = await collection.createGroup(name: divider)
-                let entries = result.entries.map { entry -> CollectionEntry in
-                    var entry = entry
-                    entry.groupId = groupId
-                    return entry
-                }
+                let entries = await fileImportedEntries(result, into: collection)
                 await collection.addEntries(entries)
             }
             var skippedURL: URL?
@@ -326,19 +499,33 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("The Tin is free and works offline. Chip in to help cover the price-data and hosting costs — nothing is locked either way.")
                     .font(.footnote).foregroundStyle(.secondary)
-                FundedMeter(fundedPct: funding.fundedPct)
-                Text("\(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents)) per month")
-                    .font(.caption).foregroundStyle(.secondary)
+                if FundingModel.isLive {
+                    FundedMeter(fundedPct: funding.fundedPct)
+                    Text("\(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents)) per month")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Community funding is almost ready — coming soon!")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .padding(.vertical, 2)
-            Link("Support on Open Collective", destination: AppConfig.supportURL)
+            if FundingModel.isLive {
+                // Label and destination must always name the same platform — a button naming one
+                // and opening another reads as a scam. Both live in this one commit for that reason.
+                Link("Sponsor The Tin on GitHub", destination: AppConfig.supportURL)
+            }
+            // Shown once the served list has names, or once funding is live. Data-driven on
+            // purpose: the first listed sponsor makes this appear with no app update, and until
+            // then nobody is sent to a guaranteed-empty screen.
+            if !app.supporters.isEmpty || FundingModel.isLive {
+                NavigationLink("Supporters") { SupportersView(supporters: app.supporters) }
+            }
         }
     }
 
     private var dataSection: some View {
         Section("Data") {
             LabeledContent("Card catalog", value: model.catalogText)
-            LabeledContent("Scanner pack", value: model.fingerprintText)
             Button("Collection report (PDF)") { showingReport = true }
                 .disabled(app.collection?.entries.isEmpty ?? true)
             Button {

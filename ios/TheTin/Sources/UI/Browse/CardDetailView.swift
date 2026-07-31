@@ -17,10 +17,27 @@ final class CardDetailModel {
     private(set) var price: PriceRecord?
     private(set) var conditions: [ConditionPrice] = []
     private(set) var variants: [VariantPrice] = []
+    private(set) var matrix: [MatrixPrice] = []
+    private(set) var gradedByPrinting: [GradedPrintingPrice] = []
+    let gradedSales: [GradedSale]
     private(set) var population: [PopulationRow] = []
+    /// Population grouped by grading company (PSA/CGC/Beckett/SGC) for the picker-driven section.
+    /// `population` above stays PSA-only — it backs the price-based "Grade it?" ROI, which has no
+    /// non-PSA equivalent (no non-PSA graded prices exist in the catalog).
+    private(set) var populationGroups: [GraderPopulation] = []
+    private(set) var deltas: [DeltaRecord] = []
     private(set) var historyState: HistoryState = .loading
     /// The active catalog tier — drives how much price history the chart shows and its empty copy.
     let tier: CatalogTier
+    /// Expert-tier chart overlays: which condition / PSA grade to chart alongside raw. `nil` = off.
+    /// The view re-runs `loadHistory()` when either changes (`.task(id:)`). Menus offer ONLY
+    /// dimensions this card has history rows for — a menu of options that plot nothing reads
+    /// as broken (2026-07-18 report). Graded history is empty in production until PPT ships
+    /// dated series, so the PSA menu is currently hidden for every card.
+    private(set) var availableConditions: [Condition] = []
+    private(set) var availableGrades: [Grade] = []
+    var overlayCondition: Condition?
+    var overlayGrade: Grade?
     private let store: CatalogStore
     private let history: PriceHistoryProviding
 
@@ -32,11 +49,31 @@ final class CardDetailModel {
         price = try? store.price(cardId: card.id)
         conditions = (try? store.conditionPrices(cardId: card.id)) ?? []
         variants = (try? store.variantPrices(cardId: card.id)) ?? []
+        matrix = (try? store.matrixPrices(cardId: card.id)) ?? []
+        gradedByPrinting = (try? store.gradedPrintingPrices(cardId: card.id)) ?? []
+        gradedSales = (try? store.gradedSales(cardId: card.id)) ?? []
         population = (try? store.population(cardId: card.id)) ?? []
+        populationGroups = (try? store.populationByGrader(cardId: card.id)) ?? []
+        deltas = (try? store.deltas(cardId: card.id)) ?? []
+        if tier == .expert {
+            availableConditions = (try? store.availableConditions(cardId: card.id)) ?? []
+            availableGrades = (try? store.availableGrades(cardId: card.id)) ?? []
+        }
+        overlayCondition = availableConditions.contains(.nearMint) ? .nearMint : nil
+        overlayGrade = availableGrades.first   // highest available grade, or nil
         if let set = try? store.set(id: card.setId) {
             setName = set.name
             if let date = set.releaseDate, date.count >= 4 { year = String(date.prefix(4)) }
         }
+    }
+
+    func delta(_ kind: DeltaRecord.Kind, _ key: String = "") -> DeltaRecord? {
+        deltas.first { $0.kind == kind && $0.key == key }
+    }
+
+    /// Sales count backing a PSA grade's price — nil when the catalog has no graded_sales row.
+    func salesCount(_ grade: Grade) -> Int? {
+        gradedSales.first { $0.grade == grade.rawValue }?.salesCount
     }
 
     func loadHistory() async {
@@ -44,14 +81,16 @@ final class CardDetailModel {
             let raw = try await history.rawHistory(cardId: card.id)
             guard !raw.isEmpty else { historyState = .empty; return }
             var series = [PriceSeries(name: "Raw", points: raw)]
-            // Expert tier only: overlay NM-condition and PSA 10 history. Those tables are dropped
-            // below expert, so the queries only run here — never on casual/average.
+            // Expert tier only: overlay the selected condition / PSA grade history. Those tables
+            // are dropped below expert, so the queries only run here — never on casual/average.
             if tier == .expert {
-                if let nm = try? store.conditionHistory(cardId: card.id, condition: .nearMint), !nm.isEmpty {
-                    series.append(PriceSeries(name: "NM", points: nm))
+                if let cond = overlayCondition,
+                   let pts = try? store.conditionHistory(cardId: card.id, condition: cond), !pts.isEmpty {
+                    series.append(PriceSeries(name: cond.label, points: pts))
                 }
-                if let psa10 = try? store.gradedHistory(cardId: card.id, grade: "10"), !psa10.isEmpty {
-                    series.append(PriceSeries(name: "PSA 10", points: psa10))
+                if let grade = overlayGrade,
+                   let pts = try? store.gradedHistory(cardId: card.id, grade: String(grade.numeric)), !pts.isEmpty {
+                    series.append(PriceSeries(name: grade.label, points: pts))
                 }
             }
             historyState = .loaded(series)
@@ -62,14 +101,25 @@ final class CardDetailModel {
 }
 
 struct CardDetailView: View {
-    let model: CardDetailModel
+    @Bindable var model: CardDetailModel
     let store: CatalogStore
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
     @State private var showingAddSheet = false
+    @State private var editingEntry: CollectionEntry?
+    @State private var editingWishlist = false
     @State private var selectedPrinting: String?
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
     @FocusState private var gradingFeeFocused: Bool
+    @State private var marketplaceURL: MarketplaceURL?
+    /// Selected grading company in the population section; nil resolves to the first group (PSA).
+    @State private var selectedGrader: String?
+
+    /// Identifiable wrapper so `.sheet(item:)` can present a plain URL.
+    private struct MarketplaceURL: Identifiable {
+        let url: URL
+        var id: String { url.absoluteString }
+    }
 
     private static let priceColumns = [GridItem(.adaptive(minimum: 88), spacing: 8)]
 
@@ -88,6 +138,10 @@ struct CardDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 CardImageView(card: model.card, quality: "high")
+                    // Cap, then re-centre. Uncapped, iPad renders the card ~820pt wide and
+                    // pushes every price a full screen below the fold. 420 never binds on
+                    // iPhone — the widest content width we ship is ~408pt (17 Pro Max).
+                    .frame(maxWidth: 420)
                     .frame(maxWidth: .infinity)
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -100,6 +154,8 @@ struct CardDetailView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                     if let hp = model.card.hp { Text("HP \(hp)").font(.subheadline).foregroundStyle(.secondary) }
                 }
+
+                ownedSection
 
                 if let price = model.price {
                     VStack(alignment: .leading, spacing: 10) {
@@ -139,11 +195,13 @@ struct CardDetailView: View {
                                     .font(.system(.title, design: .rounded).weight(.bold))
                                     .monospacedDigit()
                                 Text("\(printing.printing) · market").font(.caption).foregroundStyle(.secondary)
+                                DeltaBadge(record: model.delta(.printing, printing.printing))
                             } else if let raw = price.rawUsd {
                                 Text(raw, format: .currency(code: "USD"))
                                     .font(.system(.title, design: .rounded).weight(.bold))
                                     .monospacedDigit()
                                 Text("raw market").font(.caption).foregroundStyle(.secondary)
+                                DeltaBadge(record: model.delta(.raw))
                             } else if let nm = model.conditions.first(where: { $0.condition == .nearMint })?.usd {
                                 Text(nm, format: .currency(code: "USD"))
                                     .font(.system(.title, design: .rounded).weight(.bold))
@@ -154,29 +212,91 @@ struct CardDetailView: View {
                                 Text("raw market").font(.caption).foregroundStyle(.secondary)
                             }
                         }
-                        // Graded (PSA) prices — only grades with data appear.
+                        if let low = price.lowUsd {
+                            Text("low \(low, format: .currency(code: "USD"))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        cardmarketLine(price)
+                        // Liquidity: how many sellers/listings back the market price right now.
+                        // PPT sometimes reports a literal 0 for a count it doesn't really have
+                        // (e.g. "22 sellers · 0 listings" — 22 sellers implies listings > 0), so
+                        // treat 0 as no-data and drop that half; hide the line if both drop out.
+                        let liquidity = [price.sellers.flatMap { $0 > 0 ? "\($0) sellers" : nil },
+                                         price.listings.flatMap { $0 > 0 ? "\($0) listings" : nil }]
+                            .compactMap { $0 }
+                        if !liquidity.isEmpty {
+                            Text(liquidity.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        // App-wide period selector for the change badges (headline, graded tiles,
+                        // condition tiles). Shown only when the card has delta data at all.
+                        if model.deltas.contains(where: { $0.hasData }) {
+                            HStack(spacing: 8) {
+                                Text("Change vs").font(.caption2).foregroundStyle(.secondary)
+                                DeltaPeriodPicker().fixedSize()
+                            }
+                        }
+                        // Printing-scoped slices — empty when the card has one printing, or when
+                        // the selected printing has no matrix/graded rows (PPT gap-fill varies).
+                        let printingMatrix = currentPrinting.map { p in model.matrix.filter { $0.printing == p.printing } } ?? []
+                        // Bridge the two printing vocabularies: currentPrinting is a PPT
+                        // price_by_variant key ("1st Edition Holofoil"), graded_by_printing labels
+                        // come from TCGdex types via pptPrintingName ("1st Edition") — exact
+                        // equality never meets, CardVariant.matches does (mirrors GroupStats).
+                        // e.g. "Unlimited Holofoil"→.holo→matches "Holofoil"; "1st Edition
+                        // Holofoil"→.firstEdition→matches "1st Edition"; "Unlimited"→.regular→
+                        // matches "Normal".
+                        let printingVariant = currentPrinting.flatMap { p in CardVariant.allCases.first { $0.matches(printing: p.printing) } }
+                        let printingGraded = printingVariant.map { v in model.gradedByPrinting.filter { v.matches(printing: $0.printing) } } ?? []
+                        // Graded (PSA) prices — only grades with data appear. When the selected
+                        // printing has its own graded row for a grade, that value replaces the
+                        // card-level one; otherwise the card-level value is shown as a fallback.
+                        // Gating on the card-level psaN column is safe even for printing-only
+                        // rows: applyExport writes both the card-level psaN column and the
+                        // graded_by_printing row from the same ebay sale, so a grade with a
+                        // per-printing row always also has a card-level column set.
                         let graded = Grade.allCases.filter { price.gradedOnly($0) != nil }
                         if !graded.isEmpty {
-                            Text("Graded (PSA)").font(.subheadline.bold())
+                            Text("Graded").font(.subheadline.bold())
                             LazyVGrid(columns: Self.priceColumns, spacing: 8) {
                                 ForEach(graded) { grade in
-                                    PriceTile(label: grade.label, value: price.gradedOnly(grade))
+                                    let perPrinting = printingGraded.first { $0.grade == grade.rawValue }?.usd
+                                    PriceTile(label: grade.label, value: perPrinting ?? price.gradedOnly(grade),
+                                              delta: model.delta(.psa, String(grade.numeric)),
+                                              footnote: model.salesCount(grade).map { "\($0) sale\($0 == 1 ? "" : "s")" })
                                 }
                             }
+                            if let p = currentPrinting, printingGraded.isEmpty {
+                                Text("Shown for the card overall — no \(p.printing)-specific graded sales.")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            }
                         }
-                        // Ungraded per-condition prices (NM/LP/MP/HP/DMG).
-                        if !model.conditions.isEmpty {
+                        // Ungraded per-condition prices (NM/LP/MP/HP/DMG). When the selected
+                        // printing has matrix rows, tiles show that printing's own condition
+                        // prices (with matrix deltas); otherwise fall back to card-level tiles.
+                        if !model.conditions.isEmpty || !printingMatrix.isEmpty {
                             Text("By condition").font(.subheadline.bold())
-                            LazyVGrid(columns: Self.priceColumns, spacing: 8) {
-                                ForEach(model.conditions) { cp in
-                                    PriceTile(label: cp.condition.label, value: cp.usd)
+                            if let p = currentPrinting, !printingMatrix.isEmpty {
+                                LazyVGrid(columns: Self.priceColumns, spacing: 8) {
+                                    ForEach(Condition.allCases.compactMap { c in printingMatrix.first { $0.condition == c } }) { cell in
+                                        PriceTile(label: cell.condition.label, value: cell.usd,
+                                                  delta: model.delta(.matrix, "\(p.printing)|\(cell.condition.rawValue)")
+                                                      ?? model.delta(.condition, cell.condition.rawValue))
+                                    }
+                                }
+                            } else {
+                                LazyVGrid(columns: Self.priceColumns, spacing: 8) {
+                                    ForEach(model.conditions) { cp in
+                                        PriceTile(label: cp.condition.label, value: cp.usd,
+                                                  delta: model.delta(.condition, cp.condition.rawValue),
+                                                  footnote: cp.salesCount.map { "\($0) sale\($0 == 1 ? "" : "s")" })
+                                    }
+                                }
+                                if let p = currentPrinting, !model.conditions.isEmpty {
+                                    Text("Shown for the card overall — no \(p.printing)-specific condition prices.")
+                                        .font(.caption2).foregroundStyle(.tertiary)
                                 }
                             }
-                        }
-                        // Honest data note: PSA/condition feeds carry no printing dimension.
-                        if currentPrinting != nil, !graded.isEmpty || !model.conditions.isEmpty {
-                            Text("Graded and condition prices are for the card overall — they don't distinguish printings.")
-                                .font(.caption2).foregroundStyle(.tertiary)
                         }
                     }
                 } else {
@@ -191,24 +311,42 @@ struct CardDetailView: View {
                     gradeItSection(roi)
                 }
 
-                // PSA population — collapsed by default at the bottom; most people don't dig into
-                // grade distributions. The "N graded · X% gem" summary stays on the collapsed row.
-                if !model.population.isEmpty {
+                // Graded population by company — collapsed by default at the bottom; most people
+                // don't dig into grade distributions. PSA/CGC/Beckett/SGC share one section via a
+                // company picker. The collapsed "N graded · X% gem" summary tracks the selection.
+                if !model.populationGroups.isEmpty {
+                    let selected = model.populationGroups.first { $0.grader == selectedGrader }
+                        ?? model.populationGroups[0]
                     DisclosureGroup {
-                        let maxCount = max(model.population.map(\.count).max() ?? 1, 1)
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(model.population) { row in
-                                PopulationBar(grade: row.displayGrade, count: row.count, maxCount: maxCount)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if model.populationGroups.count > 1 {
+                                Picker("Grader", selection: Binding(get: { selected.grader },
+                                                                    set: { selectedGrader = $0 })) {
+                                    ForEach(model.populationGroups) { g in
+                                        Text(Self.companyLabel(g.grader)).tag(g.grader)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                            }
+                            let maxCount = max(selected.rows.map(\.count).max() ?? 1, 1)
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(selected.rows) { row in
+                                    PopulationBar(grade: row.displayGrade, count: row.count, maxCount: maxCount)
+                                }
+                                if currentPrinting != nil {
+                                    Text("Population counts are for the card overall — graders don't split printings here.")
+                                        .font(.caption2).foregroundStyle(.tertiary)
+                                }
                             }
                         }
                         .padding(.top, 6)
                     } label: {
                         HStack(spacing: 8) {
-                            Text("PSA Population").font(.headline)
-                            if let total = model.population.first?.totalPopulation {
+                            Text("Population").font(.headline)
+                            if let total = selected.totalPopulation {
                                 Text("\(total) graded").font(.caption).foregroundStyle(.secondary)
                             }
-                            if let gem = model.population.first?.gemRate {
+                            if let gem = selected.gemRate {
                                 Text("· \(gem, format: .percent.precision(.fractionLength(0))) gem")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
@@ -216,23 +354,43 @@ struct CardDetailView: View {
                     }
                     .tint(.secondary)
                 }
+
+                marketplaceSection
             }
             .padding()
         }
         .navigationTitle(model.card.name)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.loadHistory() }
+        .task(id: "\(model.overlayCondition?.rawValue ?? "-")|\(model.overlayGrade?.rawValue ?? "-")") {
+            await model.loadHistory()
+        }
         .toolbar { detailToolbar }
+        .sheet(item: $marketplaceURL) { SafariSheet(url: $0.url) }
         .sheet(isPresented: $showingAddSheet) {
             if let collection {
                 NavigationStack {
                     EntryFormView(card: model.card, groups: collection.groups, existing: nil,
                                   variants: model.variants, conditions: model.conditions,
+                                  matrix: collection.matrixByCard[model.card.id] ?? [],
                                   onCreateGroup: { await collection.createGroup(name: $0) }) { entry in
                         await collection.saveEntry(entry)
                     }
                 }
             }
+        }
+        .sheet(isPresented: $editingWishlist) {
+            wishlistEditSheet
+        }
+    }
+
+    // Split out of the `.sheet` modifier for the same reason as `detailToolbar` below — keeps
+    // the surrounding modifier chain's expression small enough for the type checker.
+    @ViewBuilder private var wishlistEditSheet: some View {
+        if let wants {
+            WishlistEditSheet(
+                card: model.card,
+                price: (try? store.prices(cardIds: [model.card.id]))?[model.card.id]?.rawUsd,
+                wants: wants)
         }
     }
 
@@ -247,6 +405,14 @@ struct CardDetailView: View {
                 .accessibilityLabel(wants.isWanted(model.card.id)
                                     ? "Remove from wishlist" : "Add to wishlist")
             }
+            if wants.isWanted(model.card.id) {
+                ToolbarItem {
+                    Button { editingWishlist = true } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .accessibilityLabel("Edit wishlist details")
+                }
+            }
         }
         if collection != nil {
             ToolbarItem {
@@ -254,10 +420,166 @@ struct CardDetailView: View {
                     .accessibilityLabel("Save to collection")
             }
         }
+        ToolbarItem {
+            ShareLink(
+                item: CardShareLink.url(card: model.card, setName: model.setName),
+                subject: Text(model.card.name),
+                message: Text("Check out this card on The Tin"),
+                preview: SharePreview(
+                    model.setName.map { "\(model.card.name) · \($0)" } ?? model.card.name,
+                    image: Image(systemName: "rectangle.portrait.on.rectangle.portrait")
+                )
+            ) {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .accessibilityLabel("Share card")
+        }
         ToolbarItemGroup(placement: .keyboard) {
             Spacer()
             Button("Done") { gradingFeeFocused = false }
         }
+    }
+
+    /// Every copy of this card already in the tin, newest first. Empty when the screen has no
+    /// collection (Discover-only contexts) or the card isn't owned.
+    private var ownedEntries: [CollectionEntry] {
+        (collection?.entries ?? [])
+            .filter { $0.cardId == model.card.id }
+            .sorted { $0.addedAt > $1.addedAt }
+    }
+
+    /// "In your tin" — the card-shop answer to *do I already own this?*. Without it the only
+    /// ownership signal lived on the grids you tapped through, never on the card itself, so the
+    /// question could only be answered by leaving the screen and searching the tin. Each copy
+    /// says what it is and where it's filed, and taps through to its edit sheet.
+    @ViewBuilder private var ownedSection: some View {
+        let entries = ownedEntries
+        if !entries.isEmpty {
+            let copies = entries.cardCount
+            VStack(alignment: .leading, spacing: 6) {
+                Label("In your tin — ^[\(copies) copy](inflect: true)", systemImage: "checkmark.seal.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.tint)
+                ForEach(entries) { entry in
+                    Button { editingEntry = entry } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(sleeveText(entry)).font(.caption)
+                                Text("·").font(.caption).foregroundStyle(.tertiary)
+                                Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                            }
+                            paidLine(entry)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Edit this copy")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+            // Anchored here, not on the root: the root already stacks three presentations
+            // (marketplace, add, wishlist) and stacked presentations on one view are exactly
+            // what SwiftUI silently drops (see StagingReviewView's "tap twice, no prompt").
+            .sheet(item: $editingEntry) { entry in
+                if let collection {
+                    NavigationStack {
+                        EntryFormView(card: model.card, groups: collection.groups, existing: entry,
+                                      variants: model.variants, conditions: model.conditions,
+                                      matrix: model.matrix) { updated in
+                            await collection.saveEntry(updated)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The Cardmarket price in euros, beside the dollar one. Two real markets, never a conversion.
+    ///
+    /// This is deliberately NOT an app-wide currency setting, and the reason is in the schema:
+    /// `raw_eur` is the ONLY euro column the catalog has. `price_by_variant`,
+    /// `price_by_condition`, `price_matrix`, `graded_by_printing`, `psa1..psa10`, `price_history`
+    /// and `sealed_product` are all USD-only. A "Currency: EUR" toggle would therefore convert
+    /// the headline and a few grid tiles while the tin total, the portfolio, Movers, every
+    /// condition and graded tile and the whole history chart silently stayed in dollars — most of
+    /// the numbers in the app, unmarked. One honest line beats a setting that misreports the rest
+    /// of the screen. (Real currency support is a pipeline job: Cardmarket does publish condition
+    /// and printing prices, they just aren't in the artifact.)
+    ///
+    /// Cardmarket and TCGplayer are genuinely different markets with different prices, which is
+    /// exactly why the euro figure is worth showing and a converted dollar figure would not be.
+    ///
+    /// Coverage is good — 19,437 of 20,933 rows on the served catalog, slightly better than
+    /// `raw_usd` — and 1,082 cards carry a euro price with no dollar one at all. Those used to
+    /// show no price whatsoever; now they show the price that exists.
+    ///
+    /// `raw_eur` is a card-level raw price with no per-printing counterpart, so on a
+    /// multi-printing card it says so rather than appearing to describe the selected printing —
+    /// same caveat the graded, condition and history sections already carry.
+    @ViewBuilder private func cardmarketLine(_ price: PriceRecord) -> some View {
+        if let eur = price.rawEur {
+            HStack(spacing: 4) {
+                Text(eur, format: .currency(code: "EUR")).monospacedDigit()
+                Text(currentPrinting == nil ? "Cardmarket" : "Cardmarket · card overall")
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Cardmarket price \(eur.formatted(.currency(code: "EUR")))"
+                                + (currentPrinting == nil ? "" : ", for the card overall"))
+        }
+    }
+
+    /// "paid $360 → $520 · +44%" — how this copy has done since you bought it.
+    ///
+    /// The card screen renders a graded price ladder, a condition matrix, a population histogram
+    /// and a whole expected-value grading model, and until now said nothing at all about the one
+    /// number on it that is actually yours. You typed the price in; it reached a portfolio chart
+    /// line and two PDFs and never came back to the card.
+    ///
+    /// Both sides are ROW totals, deliberately: `pricePaid` is spec-locked as the total for the
+    /// entry and `entryValue` already multiplies by qty, so a ×4 row compares four copies against
+    /// what four copies cost. Dividing to a per-copy figure would be the same percentage with an
+    /// extra chance to be wrong. Shown only when `entryValue` is non-nil — that's the
+    /// exactly-priced gate, so a copy whose condition has no price of its own says nothing rather
+    /// than comparing your money against a fallback estimate.
+    @ViewBuilder private func paidLine(_ entry: CollectionEntry) -> some View {
+        if let paid = entry.pricePaid, paid > 0, let now = collection?.entryValue(entry) {
+            let change = now - paid
+            HStack(spacing: 4) {
+                Text("paid \(paid, format: .currency(code: "USD"))")
+                Image(systemName: "arrow.right").font(.system(size: 8))
+                Text(now, format: .currency(code: "USD"))
+                Text("· \(change >= 0 ? "+" : "−")\(abs(change) / paid, format: .percent.precision(.fractionLength(0)))")
+                    .foregroundStyle(change >= 0 ? .green : .red)
+            }
+            .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Paid \(paid.formatted(.currency(code: "USD"))), now worth \(now.formatted(.currency(code: "USD"))), \(change >= 0 ? "up" : "down") \((abs(change) / paid).formatted(.percent.precision(.fractionLength(0))))")
+        }
+    }
+
+    /// "×2 · Reverse Holo · NM · Pulled" — what the user recorded about this copy. Deliberately
+    /// diverges from `CollectionEntryRow`'s row string (`GroupDetailView.swift`), which stops at
+    /// condition/grade and never appends the source — a scope call for the list row, not a bug.
+    /// The source is appended only when recorded; nil adds nothing rather than saying "unknown".
+    private func sleeveText(_ entry: CollectionEntry) -> String {
+        var parts = ["×\(entry.qty)"]
+        if let v = entry.variantValue { parts.append(v.label) }
+        if let g = entry.gradeValue { parts.append(g.label) }
+        else if let c = entry.condition { parts.append(c) }
+        if let via = entry.acquiredViaValue { parts.append(via.shortLabel) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func dividerName(_ entry: CollectionEntry) -> String {
+        entry.groupId.isEmpty ? "No divider"
+            : (collection?.groups.first { $0.id == entry.groupId }?.name ?? "No divider")
     }
 
     /// Price-history area of the detail screen. Loaded → interactive chart. Empty on the casual
@@ -270,8 +592,17 @@ struct CardDetailView: View {
             ProgressView("Loading price history…")
         case .loaded(let series):
             VStack(alignment: .leading, spacing: 8) {
-                Text("Price history").font(.headline)
+                HStack {
+                    Text("Price history").font(.headline)
+                    Spacer()
+                    if model.tier == .expert { overlayPickers }
+                }
+                Text("Weekly market price").font(.caption).foregroundStyle(.secondary)
                 PriceHistoryChart(series: series)
+                if currentPrinting != nil {
+                    Text("History is for the card overall — PPT has no per-printing history.")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
             }
         case .empty where model.tier == .casual:
             VStack(alignment: .leading, spacing: 6) {
@@ -292,6 +623,48 @@ struct CardDetailView: View {
         }
     }
 
+    /// Expert-tier overlay selectors: one condition + one PSA grade (each can be off). Chips
+    /// mirror the printing menu; dot color matches the chart line for that overlay. Each menu
+    /// only appears when this card actually has history for that dimension, and only offers
+    /// the values with rows — an option that plots nothing reads as broken.
+    @ViewBuilder private var overlayPickers: some View {
+        HStack(spacing: 6) {
+            if !model.availableConditions.isEmpty {
+                Menu {
+                    Picker("Condition", selection: $model.overlayCondition) {
+                        Text("Off").tag(Condition?.none)
+                        ForEach(model.availableConditions) { Text($0.label).tag(Condition?.some($0)) }
+                    }
+                } label: {
+                    overlayChip(model.overlayCondition?.label ?? "Condition",
+                                dot: model.overlayCondition != nil ? .teal : nil)
+                }
+            }
+            if !model.availableGrades.isEmpty {
+                Menu {
+                    Picker("Grade", selection: $model.overlayGrade) {
+                        Text("Off").tag(Grade?.none)
+                        ForEach(model.availableGrades) { Text($0.label).tag(Grade?.some($0)) }
+                    }
+                } label: {
+                    overlayChip(model.overlayGrade?.label ?? "Grade",
+                                dot: model.overlayGrade != nil ? .orange : nil)
+                }
+            }
+        }
+        .tint(.primary)
+    }
+
+    private func overlayChip(_ title: String, dot: Color?) -> some View {
+        HStack(spacing: 4) {
+            if let dot { Circle().fill(dot).frame(width: 6, height: 6) }
+            Text(title).font(.caption.weight(.semibold))
+            Image(systemName: "chevron.up.chevron.down").font(.caption2)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(.quaternary.opacity(0.4), in: Capsule())
+    }
+
     /// The user's first raw (ungraded) copy of this card. Its condition drives the baseline and
     /// the played-cards warning; graded copies are skipped — they're already graded.
     private var ownedRawEntry: CollectionEntry? {
@@ -307,12 +680,93 @@ struct CardDetailView: View {
             var one = entry
             one.qty = 1
             baseline = GroupStats.entryValue(one, price: price, variants: model.variants,
-                                             conditions: model.conditions)
+                                             conditions: model.conditions,
+                                             matrix: model.matrix,
+                                             gradedByPrinting: model.gradedByPrinting)
         } else {
             baseline = model.conditions.first(where: { $0.condition == .nearMint })?.usd ?? price.rawUsd
         }
         return GradingROI.compute(population: model.population, price: price, baseline: baseline,
                                   fee: gradingFee, ownedCondition: ownedRawEntry?.conditionValue)
+    }
+
+    /// One display row of the Grade It math. Grades ≤5 collapse into a single "PSA ≤5" row
+    /// (their combined odds are usually tiny); `price` for the tail is the mass-weighted mean
+    /// so probability × price still equals the summed EV contribution.
+    private struct GradeRow: Identifiable {
+        let label: String
+        let probability: Double
+        let price: Double
+        let value: Double
+        let isEstimate: Bool
+        var id: String { label }
+    }
+
+    /// Display name for a grading company. The catalog stores "BECKETT" upper-cased; the rest
+    /// (PSA/CGC/SGC) are acronyms that already read correctly.
+    private static func companyLabel(_ grader: String) -> String {
+        grader == "BECKETT" ? "Beckett" : grader
+    }
+
+    private static func gradeRows(_ roi: GradingROI) -> [GradeRow] {
+        func row(_ b: GradingROI.Bucket) -> GradeRow {
+            GradeRow(label: b.grade.label, probability: b.probability, price: b.price,
+                     value: b.probability * b.price, isEstimate: b.isEstimate)
+        }
+        let head = roi.buckets.filter { $0.grade.numeric > 5 }
+        let tail = roi.buckets.filter { $0.grade.numeric <= 5 }
+        guard tail.count >= 2 else { return (head + tail).map(row) }
+        let p = tail.reduce(0) { $0 + $1.probability }
+        let v = tail.reduce(0) { $0 + $1.probability * $1.price }
+        return head.map(row) + [GradeRow(label: "Grade ≤5", probability: p, price: p > 0 ? v / p : 0,
+                                         value: v, isEstimate: tail.contains(where: \.isEstimate))]
+    }
+
+    /// Marketplace links (approved mockup variant A): disclosure rows below PSA Population,
+    /// each opening an in-app Safari sheet. Plain URLs — no affiliate params.
+    private var marketplaceSection: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 0) {
+                marketplaceRow("eBay — current listings", systemImage: "cart",
+                               url: MarketplaceLinks.ebayCurrent(name: model.card.name,
+                                                                setName: model.setName,
+                                                                number: model.card.number))
+                Divider()
+                marketplaceRow("eBay — sold listings", systemImage: "checkmark.seal",
+                               url: MarketplaceLinks.ebaySold(name: model.card.name,
+                                                             setName: model.setName,
+                                                             number: model.card.number))
+                Divider()
+                marketplaceRow("TCGPlayer — card page", systemImage: "tag",
+                               url: MarketplaceLinks.tcgplayer(tcgplayerId: model.card.tcgplayerId,
+                                                              name: model.card.name,
+                                                              number: model.card.number))
+                Text("Opens in-app. Searches use card name, set, and number.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .padding(.top, 6)
+            }
+            .padding(.top, 6)
+        } label: {
+            Text("Shop & sold prices").font(.headline)
+        }
+        .tint(.secondary)
+    }
+
+    private func marketplaceRow(_ title: String, systemImage: String, url: URL) -> some View {
+        Button { marketplaceURL = MarketplaceURL(url: url) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.subheadline)
+                    .frame(width: 26, height: 26)
+                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 7))
+                Text(title).font(.subheadline)
+                Spacer()
+                Image(systemName: "arrow.up.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func verdictHeadline(_ roi: GradingROI) -> String {
@@ -332,24 +786,31 @@ struct CardDetailView: View {
                     .foregroundStyle(roi.verdict == .grade ? AnyShapeStyle(.green)
                                                            : AnyShapeStyle(.primary))
                     .padding(.top, 6)
-                // Expected-value math: per-grade odds × PSA price.
-                ForEach(roi.buckets) { b in
+                // Expected-value math: per-grade odds × PSA price. "≈" marks interpolated
+                // prices (mockup variant A: tilde + single amber footnote; grades ≤5 collapse
+                // into one tail row so thin low-grade pop doesn't become six noise rows).
+                ForEach(Self.gradeRows(roi)) { row in
                     HStack {
-                        Text(b.grade.label)
+                        Text(row.label)
                             .font(.subheadline.monospacedDigit())
                             .frame(width: 68, alignment: .leading)
-                        Text("\(b.probability, format: .percent.precision(.fractionLength(0))) × \(b.price, format: .currency(code: "USD"))")
+                        Text("\(row.probability, format: .percent.precision(.fractionLength(0))) × \(row.isEstimate ? "≈" : "")\(row.price, format: .currency(code: "USD"))")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         Spacer()
-                        Text(b.probability * b.price, format: .currency(code: "USD"))
+                        Text("\(row.isEstimate ? "≈" : "")\(row.value, format: .currency(code: "USD"))")
                             .font(.caption.monospacedDigit())
+                            .foregroundStyle(row.isEstimate ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
                     }
                 }
                 HStack {
                     Text("Expected graded value").font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Text(roi.ev, format: .currency(code: "USD"))
+                    Text("\(roi.hasEstimates ? "≈" : "")\(roi.ev, format: .currency(code: "USD"))")
                         .font(.caption.weight(.semibold)).monospacedDigit()
+                }
+                if roi.hasEstimates {
+                    Text("≈ estimated from nearby grades — no recorded sales at that grade.")
+                        .font(.caption2).foregroundStyle(.orange)
                 }
                 if let gem = roi.gemRate {
                     HStack {
@@ -384,7 +845,7 @@ struct CardDetailView: View {
                 }
                 Text("Estimate only — not what this specific copy will cost. Once you grade it, record the actual fee on the entry for accurate cost-basis and insurance reports.")
                     .font(.caption2).foregroundStyle(.tertiary)
-                Text("Population reflects copies people chose to grade — your card's odds depend on its condition.")
+                Text("Odds use the full graded population (\(roi.totalPopulation) graded) — copies people chose to grade; your card's odds depend on its condition.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         } label: {
@@ -411,7 +872,7 @@ private struct PopulationBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text("PSA \(grade)")
+            Text("Grade \(grade)")
                 .font(.subheadline.monospacedDigit())
                 .frame(width: 68, alignment: .leading)
             GeometryReader { geo in
@@ -431,6 +892,8 @@ private struct PopulationBar: View {
 private struct PriceTile: View {
     let label: String
     let value: Double?
+    var delta: DeltaRecord? = nil
+    var footnote: String? = nil
 
     var body: some View {
         VStack(spacing: 2) {
@@ -440,6 +903,10 @@ private struct PriceTile: View {
                     .font(.subheadline.weight(.semibold)).monospacedDigit()
             } else {
                 Text("—").font(.subheadline).foregroundStyle(.secondary)
+            }
+            DeltaBadge(record: delta)
+            if let footnote {
+                Text(footnote).font(.caption2).foregroundStyle(.tertiary)
             }
         }
         .frame(maxWidth: .infinity)

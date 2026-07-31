@@ -51,35 +51,70 @@ final class ScanSession {
     private var missStreak = 0   // consecutive no-card frames (grace against transient dropouts)
     private var presentFrames = 0   // heavy frames since acquisition (drives the chooser deadline)
     private var suppressed: Set<String> = []
+    private var chooserPending = false   // a chooser is on screen — freeze all frames until resolved
 
     init(config: LockConfig = LockConfig()) { self.config = config }
 
-    func reject(cardId: String) { suppressed.insert(cardId); resetAccumulation() }
+    /// How many consecutive heavy frames the current leader has held, and how many it needs.
+    ///
+    /// The lock gate's own progress, surfaced because the viewfinder had no way to show it: three
+    /// confirming frames all rendered as one unchanging "Hold steady", so a scanner that was
+    /// working through a real streak looked like a scanner stuck in a loop. On an A10 that streak
+    /// is seconds long, which is precisely when the user needs to see it advancing.
+    var confirmations: Int {
+        if locked { return config.stabilityK }
+        guard leader != nil else { return 0 }
+        return min(leaderStreak, config.stabilityK)
+    }
+    var confirmationsNeeded: Int { config.stabilityK }
+
+    func reject(cardId: String) { resetAccumulation(); suppressed.insert(cardId) }
 
     /// Latch as if a lock occurred — used when the user manually resolves an `.ambiguous`
     /// chooser, so the same physical card cannot auto-lock again until it leaves the frame
     /// or a different card takes its place (swap release).
-    func acknowledge(cardId: String) { locked = true; lockedCardId = cardId }
+    func acknowledge(cardId: String) { locked = true; lockedCardId = cardId; chooserPending = false }
 
-    /// "None of these — keep scanning": drop the frozen chooser and start over on whatever is
-    /// under the camera. Deliberately does NOT suppress the shown options — a shown option may
-    /// be the truth of a LATER card (binder duplicates), and the user may simply have mis-aimed.
-    func dismissChooser() { resetAccumulation() }
+    /// "None of these — keep scanning": drop the frozen chooser and suppress the tiles that were
+    /// shown, so re-scanning the SAME card surfaces fresh candidates instead of the rejected four
+    /// (Tomas, 2026-07-23 — collector already told us it's none of these). Suppression is scoped to
+    /// the current card: resetAccumulation clears it, so once the card leaves the frame or a
+    /// different card takes over, a genuine later binder duplicate — or a re-aim at a mis-framed
+    /// card — can still lock.
+    // ponytail: an immediately-adjacent binder duplicate of a just-rejected card (no no-card gap,
+    // no other card locking in between) stays suppressed until such a gap; per-card suppression is
+    // the simple win. Track shown ids per-card with an explicit "card generation" id if that ever bites.
+    func dismissChooser() {
+        let shown = accum.sorted { $0.value > $1.value }.prefix(4).map(\.key)
+        resetAccumulation()            // clears the old suppression along with the votes…
+        suppressed.formUnion(shown)    // …then re-suppresses just the tiles the user rejected
+    }
+
+    /// Manual "Reset" from the scan screen: wipe the recognition state to a clean slate — votes,
+    /// lock, frozen chooser, AND suppression — so the scanner looks again with no memory. Unlike
+    /// dismissChooser it suppresses nothing; it's the user's escape hatch when scanning gets stuck.
+    func reset() { resetAccumulation() }
 
     private func resetAccumulation() {
         accum.removeAll(); leader = nil; leaderStreak = 0
         locked = false; lockedCardId = nil; swapStreak = 0; presentFrames = 0
+        chooserPending = false
+        suppressed.removeAll()   // card-scoped: a new card (swap/removal) starts with nothing suppressed
     }
 
     /// Surface a frozen chooser: options must not reshuffle while the user decides, so every
     /// chooser latches like a lock (Tomas, 2026-07-15). The swap-release path frees the latch
     /// when the user moves on to a different card without picking.
     private func chooser(_ ranked: [(key: String, value: Int)]) -> ScanEvent {
-        locked = true; lockedCardId = ranked.first?.key
+        locked = true; lockedCardId = ranked.first?.key; chooserPending = true
         return .ambiguous(ranked.prefix(4).map { $0.key })
     }
 
     func ingest(_ obs: FrameObservation) -> ScanEvent {
+        // A chooser is modal (Tomas, 2026-07-21): once shown it must stay until the user picks a
+        // tile (acknowledge) or "None of these" (dismissChooser). Ignore every frame meanwhile so
+        // no swap-release / .guide / card-removal can dismiss it out from under the decision.
+        if chooserPending { return .idle }
         if !obs.cardPresent {
             // Tolerate brief detector dropouts: a hand-held card at live frame rate flickers
             // out of Vision's rectangle detector for the odd frame, and resetting on every

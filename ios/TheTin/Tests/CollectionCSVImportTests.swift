@@ -176,7 +176,7 @@ final class CSVImportCoreTests: XCTestCase {
                                        acquiredAt: Date(timeIntervalSince1970: 1_700_000_000),
                                        acquiredFrom: "trade, local show",
                                        addedAt: Date(timeIntervalSince1970: 1_750_000_000),
-                                       variant: "reverseHolo")
+                                       variant: "reverseHolo", forTrade: true)
         let store = try FixtureCatalog.make()
         let cards = Dictionary(uniqueKeysWithValues: try store.cards(ids: ["swsh7-215"]).map { ($0.id, $0) })
         let sets = Dictionary(uniqueKeysWithValues: try store.sets().map { ($0.id, $0) })
@@ -199,7 +199,18 @@ final class CSVImportCoreTests: XCTestCase {
         XCTAssertEqual(e.acquiredAt, original.acquiredAt)
         XCTAssertEqual(e.acquiredFrom, original.acquiredFrom)
         XCTAssertEqual(e.addedAt, original.addedAt)
+        XCTAssertEqual(e.isForTrade, true, "the trade flag must survive a round trip")
         XCTAssertEqual(e.groupId, "")   // caller re-homes into the "Imported …" divider
+    }
+
+    /// Files exported before `for_trade` existed have no such column. They must import exactly as
+    /// they always did — unflagged, not rejected.
+    func testTinImportWithoutForTradeColumnDefaultsToUnflagged() throws {
+        let csv = "card_id,name,number,set_name,qty\nswsh7-215,,,,1\n"
+        let result = try CollectionCSVImport.importCSV(csv, matcher: matcher)
+        XCTAssertEqual(result.formatName, "The Tin")
+        XCTAssertEqual(result.entries.first?.forTrade, nil)
+        XCTAssertEqual(result.entries.first?.isForTrade, false)
     }
 
     func testUnknownCardIdAndMalformedRowSkippedWithReasons() throws {
@@ -218,6 +229,81 @@ final class CSVImportCoreTests: XCTestCase {
                          as: UTF8.self).components(separatedBy: "\r\n")
         XCTAssertEqual(out[0], "card_id,qty,skip_reason")
         XCTAssertTrue(out[1].hasPrefix("bogus-9,1,"))
+    }
+
+    /// The source survives export → import, like every other recorded fact about a copy.
+    func testAcquisitionSourceRoundTrips() throws {
+        let original = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "", qty: 1,
+                                       condition: "NM", grade: nil, pricePaid: nil,
+                                       acquiredAt: nil, acquiredFrom: nil,
+                                       addedAt: Date(timeIntervalSince1970: 1_750_000_000),
+                                       variant: "regular",
+                                       acquiredVia: AcquiredVia.pulled.rawValue)
+        let store = try FixtureCatalog.make()
+        let cards = Dictionary(uniqueKeysWithValues: try store.cards(ids: ["swsh7-215"]).map { ($0.id, $0) })
+        let sets = Dictionary(uniqueKeysWithValues: try store.sets().map { ($0.id, $0) })
+        let csv = CollectionCSV.export(entries: [original], groups: [],
+                                       cards: cards, sets: sets, prices: [:])
+        let result = try CollectionCSVImport.importCSV(String(decoding: csv, as: UTF8.self),
+                                                       matcher: matcher)
+        let e = try XCTUnwrap(result.entries.first)
+        XCTAssertEqual(e.acquiredViaValue, .pulled)
+    }
+
+    /// An unrecognised value reads as "not recorded" and the row is KEPT. A provenance label is
+    /// not worth failing an import over — the card is the point.
+    func testUnknownAcquisitionSourceKeepsTheRow() throws {
+        let csv = "card_id,qty,condition,acquired_via\r\nswsh7-215,1,NM,inherited-from-an-uncle\r\n"
+        let result = try CollectionCSVImport.importCSV(csv, matcher: matcher)
+        XCTAssertEqual(result.entries.count, 1, "the card must survive an unreadable source")
+        XCTAssertNil(try XCTUnwrap(result.entries.first).acquiredVia)
+        XCTAssertTrue(result.skipped.isEmpty)
+    }
+
+    /// A file exported before the column existed imports unchanged.
+
+    /// Our own export must come back as the SAME tin, dividers and all — that is what makes an
+    /// export/import a device migration rather than a card dump. The `divider` column has always
+    /// been written and was never read (fixed 2026-07-27, after a phone→iPad move landed every
+    /// card in one "Imported" pile).
+    func testTinExportRoundTripsDividerNames() throws {
+        let inBinder = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "g1", qty: 1,
+                                       condition: "NM", grade: nil, pricePaid: nil, acquiredAt: nil,
+                                       acquiredFrom: nil, addedAt: Date(timeIntervalSince1970: 1_750_000_000),
+                                       variant: "regular")
+        let loose = CollectionEntry(id: "e2", cardId: "swsh7-215", groupId: "", qty: 1,
+                                    condition: "LP", grade: nil, pricePaid: nil, acquiredAt: nil,
+                                    acquiredFrom: nil, addedAt: Date(timeIntervalSince1970: 1_750_000_000),
+                                    variant: "regular")
+        let store = try FixtureCatalog.make()
+        let cards = Dictionary(uniqueKeysWithValues: try store.cards(ids: ["swsh7-215"]).map { ($0.id, $0) })
+        let sets = Dictionary(uniqueKeysWithValues: try store.sets().map { ($0.id, $0) })
+        let group = CardGroup(id: "g1", name: "Binder", sortOrder: 0, createdAt: Date())
+        let csv = CollectionCSV.export(entries: [inBinder, loose], groups: [group],
+                                       cards: cards, sets: sets, prices: [:])
+
+        let result = try CollectionCSVImport.importCSV(String(decoding: csv, as: UTF8.self),
+                                                       matcher: matcher)
+        XCTAssertTrue(result.carriesDividers, "our own format records dividers")
+        XCTAssertEqual(result.entries.count, 2)
+        let names = result.entries.map { result.dividerByEntryId[$0.id] }
+        XCTAssertEqual(Set(names.compactMap { $0 }), ["Binder", ""],
+                       "a filed card keeps its divider; an unfiled one stays unfiled")
+    }
+
+    /// A third-party CSV has no divider column, and must NOT be mistaken for one of ours — those
+    /// still land in a single dated divider for the user to re-file.
+    func testForeignCSVCarriesNoDividers() throws {
+        let csv = "card_id,qty,condition\r\nswsh7-215,1,NM\r\n"
+        let result = try CollectionCSVImport.importCSV(csv, matcher: matcher)
+        XCTAssertFalse(result.carriesDividers, "no divider column means no divider information")
+        XCTAssertTrue(result.dividerByEntryId.isEmpty)
+    }
+
+    func testImportWithoutTheAcquisitionSourceColumn() throws {
+        let csv = "card_id,qty,condition\r\nswsh7-215,1,NM\r\n"
+        let result = try CollectionCSVImport.importCSV(csv, matcher: matcher)
+        XCTAssertNil(try XCTUnwrap(result.entries.first).acquiredVia)
     }
 }
 

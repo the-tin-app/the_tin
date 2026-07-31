@@ -32,4 +32,13 @@ enum DiscoverConstants {
     /// Card-number prefixes that mark a curated gallery subset (Trainer / Galarian Gallery).
     /// Verified: TG=120, GG=70 present in production catalog v3.
     static let galleryNumberPrefixes: [String] = ["TG", "GG"]
+
+    /// A card counts as a "deal" when its raw price fell more than this over 7 days (percent).
+    static let dealsMaxPct7d: Double = -5.0
+
+    /// The fixed Pokémon TCG energy types, for the Browse type filter (not a catalog query).
+    static let energyTypes: [String] = [
+        "Grass", "Fire", "Water", "Lightning", "Psychic",
+        "Fighting", "Darkness", "Metal", "Dragon", "Colorless",
+    ]
 }

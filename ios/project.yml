@@ -8,7 +8,12 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     CODE_SIGN_STYLE: Automatic
-    TARGETED_DEVICE_FAMILY: "1"
+    # iPhone + iPad. The App Store listing has carried 12.9" iPad screenshots since 1.0 while the
+    # binary was iPhone-only — a store page promising something the build didn't have, on an app
+    # Apple has already rejected once. Deliberately NO NavigationSplitView adaptation: a
+    # stretched-but-native iPhone layout is a respectable thing to ship, and a second layout is a
+    # maintenance cost forever.
+    TARGETED_DEVICE_FAMILY: "1,2"
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
 packages:
@@ -42,6 +47,17 @@ targets:
           if [ -f "$PLIST" ]; then
             cp "$PLIST" "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/"
           fi
+      # Uploads dSYMs so Crashlytics reports arrive symbolicated. Without this a review-device
+      # crash lands as raw addresses — useless, which is the whole reason Crashlytics is here.
+      # No-ops when the SDK isn't checked out yet (fresh clone, first resolve).
+      - name: Upload Crashlytics dSYMs
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - ${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}
+          - $(BUILT_PRODUCTS_DIR)/$(INFOPLIST_PATH)
+        script: |
+          RUN="${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
+          if [ -f "$RUN" ]; then "$RUN"; fi
     dependencies:
       - package: GRDB
         product: GRDB
@@ -53,6 +69,8 @@ targets:
         product: FirebaseAppCheck
       - package: Firebase
         product: FirebaseStorage
+      - package: Firebase
+        product: FirebaseCrashlytics
       - package: OpenCV
         product: OpenCV
       - target: TheTinWidgets
@@ -64,6 +82,30 @@ targets:
         # per-run CURRENT_PROJECT_VERSION=<n> override actually reaches the bundle.
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        # Lets a .csv be sent to The Tin from Files, AirDrop or a share sheet. Without this the
+        # app declares no document types at all, so a exported collection showed "no apps
+        # available" on the receiving device (2026-07-27). Viewer/Alternate: we read a CSV and
+        # import it, we don't own or edit the file, so we must not outrank a spreadsheet app.
+        # Handled in AppModel.handleDeepLink — declaring a type without handling the URL would
+        # make "Open in The Tin" launch the app and do nothing, which is worse than not appearing.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Comma-Separated Values
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.comma-separated-values-text]
+        # REQUIRED once CFBundleDocumentTypes exists — App Store Connect rejected build 24's
+        # delivery report with ITMS-90737 without it. The rule is about DECLARING document types,
+        # not about editing them: an app that only reads a file still has to say which model it
+        # uses. (Build 24 still shipped; ITMS-90737 is a warning, not a failed upload.)
+        #
+        # `true`, the recommended value, and the one that matches the code: we're handed the
+        # original file's security-scoped URL, which `SettingsView.runImport` already wraps in
+        # start/stopAccessingSecurityScopedResource. `false` would have iOS copy every opened CSV
+        # into Documents/Inbox, and nothing in the app ever cleans that up.
+        #
+        # This does NOT expose the app's Documents folder in Files — that's UIFileSharingEnabled,
+        # which stays off.
+        LSSupportsOpeningDocumentsInPlace: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         AppIdentifierPrefix: $(AppIdentifierPrefix)
@@ -97,6 +139,9 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
           PROVISIONING_PROFILE_SPECIFIER: "The Tin App Store"
+          # Explicit, not inherited: Crashlytics can only symbolicate what the dSYM upload
+          # phase above finds, and that phase finds nothing without dSYMs.
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
   TheTinTests:
     type: bundle.unit-test
     platform: iOS
