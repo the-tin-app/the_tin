@@ -67,6 +67,11 @@ struct StreamView: View {
         }
     }
 
+    /// Set name for the share link's `?set=` (the web preview renders it under the card name).
+    private func setName(of card: CardRecord) -> String? {
+        (try? store.set(id: card.setId))?.name
+    }
+
     /// Warm the next several cards' high-res art so it's cached before the swipe reaches them.
     private func prefetchAround(_ index: Int) {
         guard let pager else { return }
@@ -103,6 +108,26 @@ struct StreamView: View {
                 }
             }
             .padding(.horizontal)
+
+            // Real buttons, not gestures: the deck's taps are already spoken for (single tap is
+            // left to the pan, double tap is Want), and these are the only VoiceOver-reachable
+            // way off this card. `CardID` resolves on whichever stack pushed the deck — Discover
+            // registers the destination for both entry points (See all, and Browse's All Cards).
+            HStack(spacing: 12) {
+                NavigationLink(value: CardID(raw: card.id)) {
+                    Label("Card details", systemImage: "info.circle")
+                }
+                ShareLink(item: CardShareLink.url(card: card, setName: setName(of: card)),
+                          subject: Text(card.name),
+                          message: Text("Check out this card on The Tin")) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .accessibilityLabel("Share card")
+            }
+            .font(.subheadline)
+            .buttonStyle(.bordered)
+            .padding(.top, 4)
+
             Spacer(minLength: 0)
         }
     }

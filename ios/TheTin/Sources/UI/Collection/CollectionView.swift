@@ -1089,7 +1089,7 @@ struct CollectionView: View {
                     Label("Flip through cards", systemImage: "rectangle.stack")
                 }
                 Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
-                    label: { Label("Print sheet…", systemImage: "printer") }
+                    label: { Label("Trade sheet…", systemImage: "printer") }
                     .disabled(model.entries(in: group.id).isEmpty)
                 Button(role: .destructive) { deletingGroup = group }
                     label: { Label("Delete divider", systemImage: "trash") }
@@ -1113,7 +1113,7 @@ struct CollectionView: View {
                 renameGroupName = group.name; renamingGroupId = group.id
             }
             .accessibilityAction(named: "Flip through cards") { openPager?(group.id) }
-            .accessibilityAction(named: "Print sheet") {
+            .accessibilityAction(named: "Trade sheet") {
                 if !entries.isEmpty {
                     printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store)
                 }

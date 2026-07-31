@@ -616,7 +616,14 @@ final class CatalogStore {
     /// axes. Joins `set_info` only for an era filter, `price_latest` for a price band/sort
     /// (which also drops null-priced cards), `price_delta` for deals/biggest-drop. `LIMIT/OFFSET`
     /// pages in SQL; `ORDER BY … , c.id` keeps paging deterministic.
-    func browse(criteria: BrowseCriteria, ownedIds: [String], offset: Int, limit: Int) throws -> [CardRecord] {
+    ///
+    /// `seed` only affects the `.relevance` sort, which was plain `c.id` — so every session, and
+    /// every filter change (the deck restarts at the top when criteria change), opened on the same
+    /// handful of cards. A non-zero seed replaces it with a multiplicative hash of the rowid: still
+    /// a total order, so `LIMIT/OFFSET` paging stays coherent for as long as the seed holds, but a
+    /// different one per session/filter. `seed == 0` keeps the old id order.
+    func browse(criteria: BrowseCriteria, ownedIds: [String], offset: Int, limit: Int,
+                seed: Int = 0) throws -> [CardRecord] {
         var joins = ""
         var wheres: [String] = []
         var args: [(any DatabaseValueConvertible)?] = []
@@ -660,9 +667,19 @@ final class CatalogStore {
             args.append(contentsOf: ownedIds.map { $0 })
         }
 
+        // Two ways this silently degrades to plain rowid order, both hit while building it:
+        // an ADDED seed (`rowid * k + seed`) shifts every key equally and changes nothing, and a
+        // multiplier too small to wrap the modulus (`m * maxRowid < p`) is monotonic in rowid.
+        // So: multiply, and keep m ≥ p/2 so every row past the first wraps. `p` is prime, so the
+        // map is injective over the catalog's rowids; `c.id` breaks the rare tie either way.
+        let modulus = 1_000_003
+        let scramble = seed == 0 ? 0 : modulus / 2 + abs(seed % (modulus / 2))
         let orderBy: String
         switch criteria.sort {
-        case .relevance:   orderBy = "c.id"
+        case .relevance:
+            // Literal, not a bound parameter: `scramble` is an Int we derived ourselves, and the
+            // ORDER BY clause is assembled before the WHERE args are bound.
+            orderBy = scramble == 0 ? "c.id" : "(c.rowid * \(scramble)) % \(modulus), c.id"
         case .priceAsc:    orderBy = "p.raw_usd ASC, c.id"
         case .priceDesc:   orderBy = "p.raw_usd DESC, c.id"
         case .biggestDrop: orderBy = "d.pct_7d ASC, c.id"
