@@ -68,6 +68,20 @@ final class PriceDeltaTests: XCTestCase {
         XCTAssertNil(row.psa10)
     }
 
+    // A row with data for *some* window keeps hasData==true even when the selected window is nil.
+    // hasData gates the DeltaPeriodPicker (so the control is present to switch back to a populated
+    // window) and DeltaBadge's muted "no data this window" dash — the badge no longer carries the
+    // period control, so an empty window can never leave the user with no way to change it.
+    func testDeltaRecordHasDataAcrossPartialWindows() {
+        let only1d = DeltaRecord(kind: .psa, key: "10", pct1d: 0.12, pct7d: nil, pct30d: nil)
+        XCTAssertTrue(only1d.hasData)
+        XCTAssertNil(only1d.pct(for: .d30))          // selectable window with no data — must not hide the picker
+        XCTAssertEqual(only1d.pct(for: .d1), 0.12)
+
+        let empty = DeltaRecord(kind: .raw, key: "", pct1d: nil, pct7d: nil, pct30d: nil)
+        XCTAssertFalse(empty.hasData)                // truly no data → badge stays absent
+    }
+
     func testRefreshSkipsDatesAlreadyApplied() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let paths = CatalogPaths(directory: dir)

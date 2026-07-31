@@ -1,8 +1,8 @@
 import Foundation
 
 /// Frozen backend contract (handoff §3.1): manifest at `catalog/manifest.json`, artifact at
-/// `catalog/catalog-vN.sqlite.gz`. The optional `funding` block mirrors the community-funding
-/// health snapshot; it refreshes far more often than `version` does (see `CatalogUpdater`).
+/// `catalog/catalog-vN.sqlite.gz`. The optional `funding` and `supporters` blocks are refreshed
+/// nightly, far more often than `version` is (see `CatalogUpdater`).
 struct CatalogManifest: Codable, Equatable {
     let version: Int
     let path: String
@@ -10,25 +10,29 @@ struct CatalogManifest: Codable, Equatable {
     let sizeBytes: Int
     let generatedAt: String
     let funding: FundingSnapshot?
+    /// Sponsors who asked to be listed. Served, never compiled in, so a name can be added or
+    /// removed without an App Store review cycle. Absent in legacy JSON and while nobody is listed.
+    let supporters: [Supporter]?
     /// Which tier these bytes are. Self-host stamps its configured tier; Firebase (casual-only
     /// backup) stamps "casual". Part of the installed-catalog identity so switching tiers at the
     /// same version still re-downloads (see `CatalogUpdater.ensureLatest`). Absent in legacy JSON.
     let tier: String?
 
     init(version: Int, path: String, sha256: String, sizeBytes: Int, generatedAt: String,
-         funding: FundingSnapshot? = nil, tier: String? = nil) {
+         funding: FundingSnapshot? = nil, supporters: [Supporter]? = nil, tier: String? = nil) {
         self.version = version
         self.path = path
         self.sha256 = sha256
         self.sizeBytes = sizeBytes
         self.generatedAt = generatedAt
         self.funding = funding
+        self.supporters = supporters
         self.tier = tier
     }
 
     func withTier(_ tier: String) -> CatalogManifest {
         CatalogManifest(version: version, path: path, sha256: sha256, sizeBytes: sizeBytes,
-                        generatedAt: generatedAt, funding: funding, tier: tier)
+                        generatedAt: generatedAt, funding: funding, supporters: supporters, tier: tier)
     }
 }
 
@@ -61,11 +65,11 @@ enum AppConfig {
     /// endpoint rather than a raw bucket URL — see `HTTPCatalogRemote.downloadURL`.
     static let catalogBaseURL = URL(string: "https://firebasestorage.googleapis.com/v0/b/hobby-tcg.firebasestorage.app/o")!
 
-    /// External donation page (Open Collective, slug matches the backend `fundingCheck` source).
-    /// Opened in Safari — donations are NEVER processed in-app, and nothing is unlocked by them,
-    /// which is what keeps the "Support" affordance App Store-compliant.
-    // TODO: confirm the slug once the Open Collective account is approved.
-    static let supportURL = URL(string: "https://opencollective.com/the-tin")!
+    /// External sponsorship page. Opened in Safari — donations are NEVER processed in-app, and
+    /// nothing is unlocked by them, which is what keeps the "Support" affordance App Store-
+    /// compliant. Whatever links here must be *named* correctly wherever it's linked from: a
+    /// button naming one platform that opens another reads as a scam.
+    static let supportURL = URL(string: "https://github.com/sponsors/the-tin-app")!
 
     /// Self-hosted `catalog-server` (Cloudflare Tunnel hostname). Non-nil ⇒ the failover composite
     /// tries the NAS first and falls back to Firebase; a wrong/undeployed host just fast-fails to
@@ -113,9 +117,33 @@ enum AppConfig {
 
     /// Wishlist price alerts master switch (Settings toggle). Default OFF per spec — the
     /// snapshot is still maintained while off so re-enabling works instantly.
+    /// Set once the user dismisses the Discover invitation to set up the scanner. The offer stays
+    /// available from Settings and the Scan tab — dismissing silences the nudge, not the feature.
+    static let scannerPromptDismissedKey = "scannerPromptDismissed"
+
     static var priceAlertsEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "priceAlertsEnabled") }
         set { UserDefaults.standard.set(newValue, forKey: "priceAlertsEnabled") }
+    }
+
+    /// Scanner mode: false = stage each lock as a draft for the tin (default), true = just show
+    /// the card and stage nothing. Persisted because which one you want is a property of how
+    /// you're using the app today — cataloguing a box at home vs. asking "what is this?" in a
+    /// shop — not of this launch.
+    static var scanLookUpMode: Bool {
+        get { UserDefaults.standard.bool(forKey: "scanLookUpMode") }
+        set { UserDefaults.standard.set(newValue, forKey: "scanLookUpMode") }
+    }
+
+    /// The condition every scanned card is staged at. Defaults to NM — but it used to BE NM,
+    /// unconditionally and invisibly, so a shoebox of played 1999 commons was valued as if it
+    /// were mint and the tin total quietly inherited the lie. Sticky like `scanLookUpMode`: the
+    /// condition of the stack in your hands holds for the stack, not for one card, and asking
+    /// per card is exactly the per-scan tap the review screen exists to defer.
+    /// An unrecognised stored value reads as NM rather than crashing an old install.
+    static var scanCondition: CardCondition {
+        get { CardCondition(rawValue: UserDefaults.standard.string(forKey: "scanCondition") ?? "") ?? .nm }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "scanCondition") }
     }
 
     /// Alert sensitivity in whole percent — 5, 10, or 20; anything else reads as the default 10.

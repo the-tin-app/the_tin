@@ -5,9 +5,9 @@ import Observation
 @MainActor @Observable
 final class SettingsModel {
     private(set) var sizeText: String = "…"
-    /// Installed version of each Firebase Storage artifact, read from its on-disk state file.
+    /// Installed catalog version, read from its on-disk state file. (The scanner pack has its own
+    /// Settings section, driven live by `ScannerPackModel` — it needs actions, not just a label.)
     private(set) var catalogText: String = "…"
-    private(set) var fingerprintText: String = "…"
     /// Live connection snapshot for the Connection section (nil until the first probe returns).
     private(set) var connection: ConnectionStatus?
     private(set) var probing = false
@@ -40,9 +40,6 @@ final class SettingsModel {
 
         catalogText = Self.artifactSummary(url: CatalogPaths.default().stateURL) {
             (try? JSONDecoder().decode(CatalogState.self, from: $0)).map { "v\($0.version)" }
-        }
-        fingerprintText = Self.artifactSummary(url: FingerprintPaths.default().stateURL) {
-            (try? JSONDecoder().decode(FingerprintState.self, from: $0)).map { "v\($0.version)" }
         }
         if alertsEnabled { alertsDenied = await notifier.isAuthorizationDenied() }
     }

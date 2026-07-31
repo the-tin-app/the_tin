@@ -15,7 +15,8 @@ struct PokedexListView: View {
     @State private var sort: PokemonSort = .dex
     @State private var query = ""
 
-    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
+    // `.top`, matching every other card grid — see the note in `SetsListView`.
+    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12, alignment: .top)]
 
     init(store: CatalogStore, entries: [CollectionEntry] = [], collection: CollectionModel? = nil, wants: WantsModel? = nil) {
         self.store = store
@@ -74,9 +75,9 @@ struct PokedexListView: View {
             }
             .padding()
         }
-        .navigationTitle("Pokédex")
+        .navigationTitle("Dex")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, prompt: "Search Pokémon")
+        .searchable(text: $query, prompt: "Search cards")
         .toolbar {
             Menu {
                 Picker("Sort", selection: $sort) {

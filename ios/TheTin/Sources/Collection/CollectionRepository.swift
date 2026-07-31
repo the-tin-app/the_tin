@@ -14,6 +14,10 @@ protocol CollectionRepository {
     /// O(n) full-file rewrite + re-diff per row at the 20k-row cap).
     func addEntries(_ entries: [CollectionEntry]) async throws
     func updateEntry(_ entry: CollectionEntry) async throws
+    /// Apply many entry edits in one write + one stream notification: `updated` written back by
+    /// id, `deletedIds` removed. Bulk refiling — looping `updateEntry` would rewrite the whole
+    /// file once per card (same reason `addEntries` exists).
+    func applyEntryEdits(updated: [CollectionEntry], deletedIds: [String]) async throws
     func deleteEntry(id: String) async throws
     /// Replace the entire collection in one shot (iCloud backup restore — preserves ids,
     /// which createGroup/addEntry cannot).
@@ -104,6 +108,16 @@ final class InMemoryCollectionRepository: CollectionRepository {
     func updateEntry(_ entry: CollectionEntry) async throws {
         guard let i = entries.firstIndex(where: { $0.id == entry.id }) else { return }
         entries[i] = entry
+        notify()
+    }
+
+    func applyEntryEdits(updated: [CollectionEntry], deletedIds: [String]) async throws {
+        let deleted = Set(deletedIds)
+        entries.removeAll { deleted.contains($0.id) }
+        for entry in updated {
+            if let i = entries.firstIndex(where: { $0.id == entry.id }) { entries[i] = entry }
+            else { entries.append(entry) }
+        }
         notify()
     }
 

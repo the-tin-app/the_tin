@@ -2,9 +2,14 @@ import Foundation
 
 /// RFC 4180 CSV writer + the two export surfaces (collection, wishlist). Pure — no I/O, no UI.
 enum CollectionCSV {
+    /// `for_trade` is appended last on purpose: `CollectionCSVImport` looks columns up BY NAME,
+    /// so a new trailing column can't shift anything a third-party format reads positionally.
+    // `sold_at`/`sold_for` are appended, never inserted: importers (ours and other people's)
+    // read this by position as often as by name. `acquired_via` follows the same rule.
     static let header = ["card_id", "name", "set_id", "set_name", "number", "rarity", "qty",
                          "variant", "condition", "grade", "price_paid", "acquired_at",
-                         "acquired_from", "added_at", "divider", "current_value", "value_as_of"]
+                         "acquired_from", "added_at", "divider", "current_value", "value_as_of",
+                         "for_trade", "sold_at", "sold_for", "acquired_via"]
 
     /// ISO 8601 with time, UTC — every exported date column uses this.
     static let iso: ISO8601DateFormatter = {
@@ -29,11 +34,19 @@ enum CollectionCSV {
     }
 
     /// "the-tin-collection" → "the-tin-collection-2026-07-14" (UTC date — deterministic).
+    /// Includes the `.csv` extension explicitly.
+    ///
+    /// `fileExporter(contentType: .commaSeparatedText, defaultFilename:)` is documented as
+    /// appending the type's extension and does not — verified on device 2026-07-27, where the
+    /// exported file arrived as `the-tin-collection-2026-07-27` with no extension. iOS then types
+    /// it as `public.data` ("Kind: Data"), which means nothing will open it AND our own
+    /// `fileImporter` greys it out, since `public.data` doesn't conform to
+    /// `.commaSeparatedText`. The export was unusable without renaming it by hand.
     static func filename(_ base: String, on date: Date = Date()) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.timeZone = TimeZone(identifier: "UTC")
-        return "\(base)-\(f.string(from: date))"
+        return "\(base)-\(f.string(from: date)).csv"
     }
 
     private static func money(_ v: Double?) -> String { v.map { String(format: "%.2f", $0) } ?? "" }
@@ -46,7 +59,9 @@ enum CollectionCSV {
                        cards: [String: CardRecord], sets: [String: SetRecord],
                        prices: [String: PriceRecord],
                        variantsByCard: [String: [VariantPrice]] = [:],
-                       conditionsByCard: [String: [ConditionPrice]] = [:]) -> Data {
+                       conditionsByCard: [String: [ConditionPrice]] = [:],
+                       matrixByCard: [String: [MatrixPrice]] = [:],
+                       gradedByPrintingByCard: [String: [GradedPrintingPrice]] = [:]) -> Data {
         let groupName = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.name) })
         let rows = entries.map { e -> [String] in
             let card = cards[e.cardId]
@@ -54,27 +69,34 @@ enum CollectionCSV {
             let price = prices[e.cardId]
             let value = GroupStats.entryValue(e, price: price,
                                               variants: variantsByCard[e.cardId] ?? [],
-                                              conditions: conditionsByCard[e.cardId] ?? [])
+                                              conditions: conditionsByCard[e.cardId] ?? [],
+                                              matrix: matrixByCard[e.cardId] ?? [],
+                                              gradedByPrinting: gradedByPrintingByCard[e.cardId] ?? [])
             return [e.cardId, card?.name ?? "", card?.setId ?? "", set?.name ?? "",
                     card?.number ?? "", card?.rarity ?? "", String(e.qty),
                     e.variant ?? "", e.condition ?? "", e.grade ?? "",
                     money(e.pricePaid), date(e.acquiredAt), e.acquiredFrom ?? "", date(e.addedAt),
                     groupName[e.groupId] ?? "", money(value),
-                    value == nil ? "" : (price?.asOf ?? "")]
+                    value == nil ? "" : (price?.asOf ?? ""),
+                    e.isForTrade ? "true" : "",
+                    date(e.soldAt), money(e.soldFor), e.acquiredVia ?? ""]
         }
         return data([header] + rows)
     }
 
     static let wishlistHeader = ["card_id", "name", "set_id", "set_name", "number",
-                                 "market_usd", "as_of"]
+                                 "market_usd", "as_of", "priority", "target_usd", "notes"]
 
-    /// Wishlist export: one row per wanted card, raw (ungraded) market price.
+    /// Wishlist export: one row per wanted card, raw (ungraded) market price + wishlist metadata.
     static func exportWishlist(cards: [CardRecord], sets: [String: SetRecord],
-                               prices: [String: PriceRecord]) -> Data {
+                               prices: [String: PriceRecord],
+                               entries: [String: WantEntry] = [:]) -> Data {
         let rows = cards.map { c -> [String] in
             let p = prices[c.id]
+            let e = entries[c.id]
             return [c.id, c.name, c.setId, sets[c.setId]?.name ?? "", c.number,
-                    money(p?.rawUsd), p?.rawUsd == nil ? "" : (p?.asOf ?? "")]
+                    money(p?.rawUsd), p?.rawUsd == nil ? "" : (p?.asOf ?? ""),
+                    e.map { $0.priority.label } ?? "", money(e?.targetUsd), e?.notes ?? ""]
         }
         return data([wishlistHeader] + rows)
     }

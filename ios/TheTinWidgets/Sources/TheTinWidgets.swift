@@ -18,13 +18,9 @@ struct SnapshotProvider: TimelineProvider {
         sparkline: [4390, 4420, 4380, 4510, 4560, 4530, 4610, 4640, 4700, 4680, 4750, 4806],
         asOf: "2026-07-12", updatedAt: .now)
 
-    static func loadSnapshot() -> WidgetSnapshot? {
-        guard let container = FileManager.default
-                .containerURL(forSecurityApplicationGroupIdentifier: WidgetShared.appGroupId),
-              let data = try? Data(contentsOf: WidgetShared.snapshotURL(container: container))
-        else { return nil }
-        return try? WidgetShared.decoder().decode(WidgetSnapshot.self, from: data)
-    }
+    /// Shared with the app's "tin value" App Intent — one reader, so Siri and the widget can
+    /// never disagree about what the collection is worth.
+    static func loadSnapshot() -> WidgetSnapshot? { WidgetShared.loadSnapshot() }
 
     func placeholder(in context: Context) -> SnapshotEntry {
         SnapshotEntry(date: .now, snapshot: Self.placeholderSnapshot)

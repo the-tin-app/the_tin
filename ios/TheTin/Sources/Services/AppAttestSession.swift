@@ -43,8 +43,15 @@ final class AppAttestSessionProvider: SessionProvider {
     private func mint() async throws -> String {
         guard attestor.isSupported else { throw CatalogError.badResponse }
         let token: String
-        if keys.get(keyIdKey) != nil {
-            do { token = try await assert() }
+        // Carry the key id through to assert() instead of re-reading the Keychain there: the
+        // `await` below is a suspension point, and a second provider instance (the scanner's —
+        // same Keychain keys) can hit the stale-device `delete` while we're parked on it.
+        // Re-reading after that returned nil to a force-unwrap and crashed the app.
+        // ponytail: two instances can still both attest concurrently and mint two keys — wasteful,
+        // not fatal (last write wins, next launch asserts fine). Make the provider an actor if it
+        // ever shows up as duplicate attestations server-side.
+        if let keyId = keys.get(keyIdKey) {
+            do { token = try await assert(keyId) }
             catch { keys.delete(keyIdKey); token = try await attest() }   // stale device → re-attest
         } else {
             token = try await attest()
@@ -67,8 +74,7 @@ final class AppAttestSessionProvider: SessionProvider {
         ])
     }
 
-    private func assert() async throws -> String {
-        let appleKeyId = keys.get(keyIdKey)!
+    private func assert(_ appleKeyId: String) async throws -> String {
         let nonce = try await challenge()
         let hash = clientDataHash(nonce)
         let assertion = try await attestor.generateAssertion(appleKeyId, clientDataHash: hash)

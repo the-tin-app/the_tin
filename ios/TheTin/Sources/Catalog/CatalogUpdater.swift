@@ -18,6 +18,9 @@ struct CatalogState: Codable, Equatable {
     var priceAsOf: String?
     /// Community-funding snapshot, refreshed independently of `version` (see `ensureLatest`).
     var funding: FundingSnapshot? = nil
+    /// Listed sponsors, refreshed on the same independent cadence as `funding`. Cached here so the
+    /// Supporters screen still renders the last-known list offline.
+    var supporters: [Supporter]? = nil
     /// Which tier is installed. Part of the install identity so a same-version tier switch still
     /// re-downloads. Nil for catalogs installed before tiering (compares equal to a nil manifest tier).
     var tier: String? = nil
@@ -55,19 +58,29 @@ final class CatalogUpdater {
     /// Reports 0 as the download starts, then byte-accurate fractions against the manifest's
     /// published `sizeBytes`. Late main-actor hops can arrive out of order; the consumer keeps
     /// the value monotonic.
-    func ensureLatest(onProgress: (@MainActor @Sendable (Double) -> Void)? = nil) async throws -> CatalogUpdateOutcome {
+    ///
+    /// `desiredTier` is the tier the user chose in Settings. A manifest tier that matches
+    /// NEITHER the installed tier NOR the desired one can only be the casual-only Firebase
+    /// fallback reached on a transient primary failure — installing it would silently downgrade
+    /// a richer catalog (empty price history, missing grade columns), so it's ignored while a
+    /// healthy catalog is on disk. 2026-07-18: a NAS timeout during the nightly publish window
+    /// let a background refresh replace average-v14 with casual-v14 exactly this way.
+    func ensureLatest(desiredTier: String = AppConfig.catalogTier,
+                      onProgress: (@MainActor @Sendable (Double) -> Void)? = nil) async throws -> CatalogUpdateOutcome {
         let manifest = try await remote.fetchManifest()
-        if let state = installedState(), state.version >= manifest.version,
-           state.tier == manifest.tier,
-           fm.fileExists(atPath: paths.databaseURL.path) {
-            // Funding refreshes far more often than the catalog version does, so refresh it here
-            // even though no download is needed — preserving version/priceAsOf.
-            if let manifestFunding = manifest.funding, state.funding != manifestFunding {
+        if let state = installedState(), fm.fileExists(atPath: paths.databaseURL.path) {
+            let current = state.version >= manifest.version && state.tier == manifest.tier
+            let unwantedTier = manifest.tier != state.tier && manifest.tier != desiredTier
+            if current || unwantedTier {
+                // Funding and the supporters list refresh far more often than the catalog version
+                // does, so refresh them here even though no download is needed — preserving
+                // version/priceAsOf.
                 var updated = state
-                updated.funding = manifestFunding
-                try saveState(updated)
+                if let manifestFunding = manifest.funding { updated.funding = manifestFunding }
+                if let manifestSupporters = manifest.supporters { updated.supporters = manifestSupporters }
+                if updated != state { try saveState(updated) }
+                return .alreadyCurrent(version: state.version)
             }
-            return .alreadyCurrent(version: state.version)
         }
 
         await onProgress?(0)
@@ -113,6 +126,7 @@ final class CatalogUpdater {
 
         try saveState(CatalogState(version: manifest.version, priceAsOf: nil,
                                    funding: manifest.funding ?? installedState()?.funding,
+                                   supporters: manifest.supporters ?? installedState()?.supporters,
                                    tier: manifest.tier))
         return .installed(version: manifest.version)
     }

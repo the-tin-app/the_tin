@@ -151,10 +151,43 @@ final class CatalogUpdaterTests: XCTestCase {
 
         r.manifest = CatalogManifest(version: 8, path: r.manifest.path, sha256: sha,
                                      sizeBytes: gz.count, generatedAt: r.manifest.generatedAt, tier: "expert")
-        let outcome = try await updater.ensureLatest()
+        let outcome = try await updater.ensureLatest(desiredTier: "expert")
         XCTAssertEqual(outcome, .installed(version: 8))
         XCTAssertEqual(updater.installedState()?.tier, "expert")
         XCTAssertEqual(r.artifactFetches, 2)
+    }
+
+    /// The casual-only Firebase fallback must never replace an installed richer tier the user
+    /// didn't ask for — a transient primary failure would otherwise silently drop price history
+    /// and grade columns (2026-07-18 incident: average-v14 downgraded to casual-v14 overnight).
+    func testFallbackTierIsNotInstalledOverRicherCatalog() async throws {
+        let r = remote(version: 8)
+        r.manifest = CatalogManifest(version: 8, path: r.manifest.path, sha256: sha,
+                                     sizeBytes: gz.count, generatedAt: r.manifest.generatedAt, tier: "average")
+        let updater = CatalogUpdater(remote: r, paths: paths)
+        _ = try await updater.ensureLatest(desiredTier: "average")
+
+        // Same version, unwanted tier: blocked.
+        r.manifest = CatalogManifest(version: 8, path: r.manifest.path, sha256: sha,
+                                     sizeBytes: gz.count, generatedAt: r.manifest.generatedAt, tier: "casual")
+        var outcome = try await updater.ensureLatest(desiredTier: "average")
+        XCTAssertEqual(outcome, .alreadyCurrent(version: 8))
+
+        // Even a NEWER version in an unwanted tier is blocked — stale-but-rich beats fresh-but-gutted.
+        r.manifest = CatalogManifest(version: 9, path: "catalog/catalog-v9.sqlite.gz", sha256: sha,
+                                     sizeBytes: gz.count, generatedAt: r.manifest.generatedAt, tier: "casual")
+        r.files[r.manifest.path] = gz
+        outcome = try await updater.ensureLatest(desiredTier: "average")
+        XCTAssertEqual(outcome, .alreadyCurrent(version: 8))
+        XCTAssertEqual(updater.installedState()?.tier, "average")
+        XCTAssertEqual(r.artifactFetches, 1)
+
+        // But with NO catalog on disk the fallback tier is still a valid bootstrap.
+        try FileManager.default.removeItem(at: paths.databaseURL)
+        try FileManager.default.removeItem(at: paths.stateURL)
+        outcome = try await updater.ensureLatest(desiredTier: "average")
+        XCTAssertEqual(outcome, .installed(version: 9))
+        XCTAssertEqual(updater.installedState()?.tier, "casual")
     }
 
     /// Same version AND same tier skips the download (no spurious re-fetch on every launch).

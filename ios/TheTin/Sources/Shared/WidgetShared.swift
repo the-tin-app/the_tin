@@ -23,6 +23,19 @@ enum WidgetShared {
         return d
     }
 
+    /// Read the last snapshot the app published. nil when the app has never written one, the
+    /// App Group is unavailable, or the file is unreadable — every caller must show a "open the
+    /// app once" state rather than a zero. Used by the widget timeline AND the "what's my tin
+    /// worth" App Intent, which answers from this file so Siri never has to open the app or
+    /// touch SQLite.
+    static func loadSnapshot() -> WidgetSnapshot? {
+        guard let container = FileManager.default
+                .containerURL(forSecurityApplicationGroupIdentifier: appGroupId),
+              let data = try? Data(contentsOf: snapshotURL(container: container))
+        else { return nil }
+        return try? decoder().decode(WidgetSnapshot.self, from: data)
+    }
+
     /// The tin-total currency style the Collection header uses: cents under $1000, whole dollars
     /// at/above. Extracted here so the widget renders the exact same string as the app.
     static func tinCurrency(_ value: Double) -> FloatingPointFormatStyle<Double>.Currency {

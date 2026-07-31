@@ -69,7 +69,7 @@ final class InsuranceReportTests: XCTestCase {
                                         variantsByCard: [:], conditionsByCard: [:])
         XCTAssertEqual(rows.map(\.id), ["big", "cheap", "ghost"])   // value desc, unpriced last
         XCTAssertEqual(rows[0].currentValue, 1010)                  // entry TOTAL (2 × psa10 505)
-        XCTAssertEqual(rows[0].detail, "Holo · NM · PSA 10")        // only what's set
+        XCTAssertEqual(rows[0].detail, "Holo · NM · Grade 10")      // only what's set
         XCTAssertEqual(rows[0].setLine, "Evolving Skies · #215")
         XCTAssertEqual(rows[0].pricePaid, 400)
         XCTAssertEqual(rows[0].acquiredFrom, "Card show")

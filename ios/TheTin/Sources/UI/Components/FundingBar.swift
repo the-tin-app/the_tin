@@ -19,6 +19,10 @@ struct FundingBar: View {
 
     private var fundedPctText: String { "\(Int((min(max(funding.fundedPct, 0), 1) * 100).rounded()))% funded" }
 
+    private var collapsedText: String {
+        FundingModel.isLive ? "Support the project — \(fundedPctText)" : "Support the project — coming soon!"
+    }
+
     var body: some View {
         Group {
             if collapsed { collapsedStrip } else { expanded }
@@ -30,7 +34,7 @@ struct FundingBar: View {
         Button { setCollapsed(false) } label: {
             HStack(spacing: 8) {
                 Image(systemName: "heart.fill").foregroundStyle(.pink).font(.caption)
-                Text("Support the project — \(fundedPctText)")
+                Text(collapsedText)
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
@@ -43,17 +47,24 @@ struct FundingBar: View {
 
     private var expanded: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Support the project — \(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents))/mo")
+            if FundingModel.isLive {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Support the project — \(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents))/mo")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    FundedMeter(fundedPct: funding.fundedPct)
+                }
+                Spacer(minLength: 8)
+                Button("Support") { openURL(AppConfig.supportURL) }
+                    .font(.caption.bold())
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            } else {
+                Text("Community funding is almost ready. The Tin is free and nothing will ever be locked.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                FundedMeter(fundedPct: funding.fundedPct)
+                Spacer(minLength: 8)
             }
-            Spacer(minLength: 8)
-            Button("Support") { openURL(AppConfig.supportURL) }
-                .font(.caption.bold())
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             Button { setCollapsed(true) } label: {
                 Image(systemName: "chevron.up")
                     .frame(minWidth: 44, minHeight: 44)

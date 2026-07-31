@@ -8,6 +8,7 @@ struct EntryFormView: View {
     var existing: CollectionEntry?
     var variants: [VariantPrice] = []   // per-printing prices, for the inline picker labels
     var conditions: [ConditionPrice] = []   // per-condition prices, for the inline picker labels
+    var matrix: [MatrixPrice] = []      // printing×condition cells, for printing-aware labels
     var onCreateGroup: ((String) async -> String)? = nil
     /// Returns whether the entry was actually persisted; the form only dismisses on true, so a
     /// failed write never silently discards what the user typed.
@@ -26,6 +27,8 @@ struct EntryFormView: View {
     @State private var hasAcquiredDate = false
     @State private var acquiredAt = Date()
     @State private var acquiredFrom = ""
+    @State private var acquiredVia: AcquiredVia? = nil
+    @State private var forTrade = false
     /// Snapshot of the fields as populated, so Cancel/swipe-down can tell typed-then-abandoned
     /// from untouched (only dirty forms earn a discard confirmation).
     @State private var baseline: [String] = []
@@ -34,7 +37,8 @@ struct EntryFormView: View {
     private var snapshot: [String] {
         [groupId, newGroupName, String(qty), condition.rawValue, variant.rawValue,
          grade.map(String.init(describing:)) ?? "", pricePaidText, gradingFeeText,
-         hasAcquiredDate ? acquiredAt.description : "", acquiredFrom]
+         hasAcquiredDate ? acquiredAt.description : "", acquiredFrom, String(forTrade),
+         acquiredVia?.rawValue ?? ""]
     }
     private var isDirty: Bool { snapshot != baseline }
 
@@ -72,6 +76,13 @@ struct EntryFormView: View {
                 }
             }
             Section("Acquisition") {
+                // How the copy arrived. "Not recorded" is a real choice and the default: the
+                // form used to assume you bought it, and nil must stay distinguishable from
+                // an actual answer.
+                Picker("Source", selection: $acquiredVia) {
+                    Text("Not recorded").tag(AcquiredVia?.none)
+                    ForEach(AcquiredVia.allCases) { Text($0.label).tag(AcquiredVia?.some($0)) }
+                }
                 TextField("Price paid — total (USD)", text: $pricePaidText)
                     .keyboardType(.decimalPad)
                     .focused($amountFieldFocused)
@@ -85,6 +96,11 @@ struct EntryFormView: View {
                     DatePicker("Date", selection: $acquiredAt, displayedComponents: .date)
                 }
                 TextField("Acquired from (shop, show, trade…)", text: $acquiredFrom)
+            }
+            Section {
+                Toggle("Available to trade", isOn: $forTrade)
+            } footer: {
+                Text("Collects this copy in your trade list, which you can share as a link or print as a sheet.")
             }
         }
         .navigationTitle(existing == nil ? "Save to tin" : "Edit entry")
@@ -111,14 +127,22 @@ struct EntryFormView: View {
         .onAppear(perform: populate)
     }
 
-    /// Printings the picker offers: only the finishes the catalog's `price_by_variant` actually
-    /// names for this card — a card never sold as 1st Edition shouldn't offer it. The saved
-    /// entry's finish is always kept so editing never silently rewrites what the user recorded.
-    /// No variant rows at all ⇒ the full list (no data ≠ doesn't exist; minimal tiers).
-    static func validVariants(catalog: [VariantPrice], current: CardVariant?) -> [CardVariant] {
+    /// The finishes the catalog's `price_by_variant` actually names for this card — a card never
+    /// sold as 1st Edition shouldn't offer it. No variant rows at all ⇒ the full list (no data ≠
+    /// doesn't exist; minimal tiers). Unlike `validVariants` this does NOT fold in a current
+    /// selection, so callers can tell whether a given finish is genuinely offered.
+    static func offeredVariants(catalog: [VariantPrice]) -> [CardVariant] {
         let backed = CardVariant.allCases.filter { v in catalog.contains { v.matches(printing: $0.printing) } }
-        guard !backed.isEmpty else { return CardVariant.allCases }
-        return CardVariant.allCases.filter { backed.contains($0) || $0 == current }
+        return backed.isEmpty ? CardVariant.allCases : backed
+    }
+
+    /// Printings the picker offers: the offered finishes plus the saved/selected finish, so
+    /// editing never silently rewrites what the user recorded even if the catalog no longer
+    /// names it.
+    static func validVariants(catalog: [VariantPrice], current: CardVariant?) -> [CardVariant] {
+        let offered = offeredVariants(catalog: catalog)
+        guard let current else { return offered }
+        return CardVariant.allCases.filter { offered.contains($0) || $0 == current }
     }
 
     /// "Reverse Holo · $140" when that printing is priced, else just the finish name.
@@ -129,11 +153,12 @@ struct EntryFormView: View {
         return v.label
     }
 
-    /// "DMG · $12" when that condition is priced, else just the condition name.
+    /// "DMG · $12" when that condition is priced — preferring the SELECTED printing's matrix
+    /// cell over the card-level condition price — else just the condition name.
     private func conditionLabel(_ c: CardCondition) -> String {
-        if let usd = conditions.first(where: { $0.condition == c.catalog })?.usd {
-            return "\(c.rawValue) · " + usd.formatted(.currency(code: "USD"))
-        }
+        let usd = matrix.first { $0.condition == c.catalog && variant.matches(printing: $0.printing) }?.usd
+            ?? conditions.first { $0.condition == c.catalog }?.usd
+        if let usd { return "\(c.rawValue) · " + usd.formatted(.currency(code: "USD")) }
         return c.rawValue
     }
 
@@ -149,6 +174,8 @@ struct EntryFormView: View {
             hasAcquiredDate = existing.acquiredAt != nil
             acquiredAt = existing.acquiredAt ?? Date()
             acquiredFrom = existing.acquiredFrom ?? ""
+            forTrade = existing.isForTrade
+            acquiredVia = existing.acquiredViaValue
         } else {
             // New entries default to the tin itself, matching the scanner — filing behind a
             // divider is a choice, never a requirement.
@@ -184,7 +211,21 @@ struct EntryFormView: View {
                 acquiredAt: hasAcquiredDate ? acquiredAt : nil,
                 acquiredFrom: acquiredFrom.isEmpty ? nil : acquiredFrom,
                 addedAt: existing?.addedAt ?? Date(),
-                variant: variant.rawValue)
+                variant: variant.rawValue,
+                // nil rather than false when off, so an entry that was never marked stays
+                // byte-identical to what it was before this field existed.
+                forTrade: forTrade ? true : nil,
+                // Carried, not rebuilt. This form constructs a FRESH entry from its own state, so
+                // any field it doesn't own defaults away — and `CollectionModel.saveEntry` routes
+                // a known id to `updateEntry`, a full overwrite. Drop these two and a sold copy
+                // silently un-sells itself: the sale record is gone and the card reappears in the
+                // tin's totals. Unreachable today (the Gone section offers only "Bring back" and
+                // "Delete"), but `saveEntry`'s own comment says "a sold row edited from the Gone
+                // section", so the next person to add that affordance would trip a live data-loss
+                // bug with a comment reassuring them it was handled.
+                soldAt: existing?.soldAt,
+                soldFor: existing?.soldFor,
+                acquiredVia: acquiredVia?.rawValue)
             if await onSave(entry) { dismiss() }
         }
     }

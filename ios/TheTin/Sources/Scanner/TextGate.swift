@@ -94,7 +94,23 @@ final class TextGate {
 
     private static func ocr(_ cg: CGImage, roi: CGRect) -> String? {
         let req = VNRecognizeTextRequest()
+        // `.accurate` is NOT negotiable — measured, not assumed. `.fast` was tried against the
+        // 64-photo gate on 2026-07-27 and collapsed it: 21/64 auto-locks (from 51) AND a confident
+        // WRONG lock, the one failure LabeledPhotoAccuracyTests calls the only one that matters.
+        // Small stylized text (the collector number) is exactly what the fast path is worst at.
         req.recognitionLevel = .accurate
+        // Language correction OFF: worth ~400ms of a ~2,800ms OCR on an A10, with the 64-photo
+        // gate byte-identical either way (51/64, zero wrong-locks). It also stopped Vision
+        // rendering HP as Cyrillic "нр"/"из".
+        //
+        // It is NOT the reason the OCR is slow, and the residual "BASIS"/"BASIG" for BASIC are raw
+        // recognition errors that survive with correction off — do not re-blame the correction
+        // pass for those. `.accurate` full-plate recognition is simply ~2,400ms on an A10, and
+        // Vision runs optimized regardless of our build config, so no Release build recovers it.
+        req.usesLanguageCorrection = false
+        // Pin the language rather than inherit whatever the default list is — the Cyrillic in the
+        // dump suggests it was considering more than en-US.
+        req.recognitionLanguages = ["en-US"]
         req.regionOfInterest = roi
         try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
         return req.results?.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")

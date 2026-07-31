@@ -27,8 +27,11 @@ private final class InMemoryKV: KeyValueStore {
 private final class FakeHTTP: HTTPClient {
     var responses: [String: (Int, Data)] = [:]   // path -> (status, body)
     private(set) var sent: [URLRequest] = []
+    /// Hook to mutate shared state mid-request (simulates a concurrent provider instance).
+    var onSend: ((URLRequest) -> Void)?
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         sent.append(request)
+        onSend?(request)
         let path = request.url!.path
         guard let (status, data) = responses[path] else { throw CatalogError.httpStatus(599) }
         return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
@@ -108,6 +111,31 @@ final class AppAttestSessionTests: XCTestCase {
         let token = try await sp.refreshedToken()
         XCTAssertEqual(token, "tok-3")
         XCTAssertFalse(attestor.attestHashes.isEmpty)    // re-attested
+    }
+
+    /// The scanner's provider shares these Keychain keys with the catalog's, so the key id can
+    /// vanish mid-flight. assert() must use the id observed at check time rather than re-reading
+    /// the store — it used to re-read and force-unwrap, which crashed the app.
+    /// Note: this pins the invariant, it does not reproduce the original interleaving (a race
+    /// with no deterministic hook between the check and the unwrap).
+    func testKeyIdDeletedMidFlightStillAssertsWithObservedId() async throws {
+        let attestor = FakeAttestor()
+        let keys = InMemoryKV()
+        keys.set("selfhost.appattest.keyId", "QUJD")
+        let http = FakeHTTP()
+        let nonce = Base64URL.encode(Data([5]))
+        http.responses["/challenge"] = (200, try JSONSerialization.data(withJSONObject: ["nonce": nonce]))
+        http.responses["/assert"] = (200, try JSONSerialization.data(withJSONObject: ["sessionToken": "tok-4"]))
+        // Another provider instance clears the key while we're parked on /challenge.
+        http.onSend = { if $0.url!.path == "/challenge" { keys.delete("selfhost.appattest.keyId") } }
+
+        let sp = AppAttestSessionProvider(baseURL: base, attestor: attestor, http: http, keys: keys)
+        let token = try await sp.refreshedToken()
+
+        XCTAssertEqual(token, "tok-4")
+        let assertReq = http.sent.first { $0.url!.path == "/assert" }!
+        XCTAssertEqual(http.body(assertReq)["keyId"], Base64URL.encode(Data("ABC".utf8)))
+        XCTAssertTrue(attestor.attestHashes.isEmpty)     // no spurious re-attest
     }
 
     func testUnsupportedDeviceThrows() async {

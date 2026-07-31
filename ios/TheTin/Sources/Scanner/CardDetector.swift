@@ -193,20 +193,44 @@ enum OrientationNormalizer {
     /// Picks the best-scoring of the 2 plausible upright rotations for `corrected` (a
     /// perspective-corrected, natural-aspect card image whose orientation is not yet
     /// resolved) and scales it to the canonical `kFPCanonW × kFPCanonH` plate size.
-    static func orientUpright(_ corrected: CIImage, context: CIContext,
-                              canonW: Int = Int(kFPCanonW), canonH: Int = Int(kFPCanonH)) -> CIImage? {
+    /// `preferred` skips the scoring entirely when the caller already knows which way up this card
+    /// is.
+    ///
+    /// The scoring is expensive and was paid on EVERY heavy frame: two full-resolution
+    /// `createCGImage` renders plus two `.fast` Vision text passes, to answer a question whose
+    /// answer cannot change while one card is held in front of the camera. `detect` measured
+    /// ~1,150ms of a ~1,500ms confirming frame on an A10 (2026-07-27) and this is the bulk of it.
+    ///
+    /// A wrong hint cannot survive: the plate comes out upside down, ORB inliers collapse, and
+    /// `ScanPipeline` drops the hint along with the text cache — costing one frame, then re-reading.
+    static func orientUpright(_ corrected: CIImage, context: CIContext, preferred: Int?,
+                              canonW: Int = Int(kFPCanonW), canonH: Int = Int(kFPCanonH))
+        -> (image: CIImage, degrees: Int)? {
         // Landscape correction → the 2 candidate uprights are 90/270; portrait → 0/180.
         let candidates = corrected.extent.width > corrected.extent.height ? [90, 270] : [0, 180]
-        var best: (Double, CIImage)?
+        func scaled(_ img: CIImage) -> CIImage {
+            img.transformed(by: CGAffineTransform(scaleX: CGFloat(canonW) / img.extent.width,
+                                                  y: CGFloat(canonH) / img.extent.height))
+        }
+        if let preferred, candidates.contains(preferred) {
+            return (scaled(rotate(corrected, degrees: preferred)), preferred)
+        }
+        var best: (score: Double, image: CIImage, degrees: Int)?
         for d in candidates {
             let r = rotate(corrected, degrees: d)
             guard let cg = context.createCGImage(r, from: r.extent) else { continue }
             let s = uprightScore(cg)
-            if best == nil || s > best!.0 { best = (s, r) }
+            if best == nil || s > best!.score { best = (s, r, d) }
         }
-        guard let chosen = best?.1 else { return nil }
-        return chosen.transformed(by: CGAffineTransform(
-            scaleX: CGFloat(canonW) / chosen.extent.width, y: CGFloat(canonH) / chosen.extent.height))
+        guard let chosen = best else { return nil }
+        return (scaled(chosen.image), chosen.degrees)
+    }
+
+    /// Unhinted form — always scores both rotations. Used by tests and any caller with no notion
+    /// of "the card currently in frame".
+    static func orientUpright(_ corrected: CIImage, context: CIContext,
+                              canonW: Int = Int(kFPCanonW), canonH: Int = Int(kFPCanonH)) -> CIImage? {
+        orientUpright(corrected, context: context, preferred: nil, canonW: canonW, canonH: canonH)?.image
     }
 }
 
@@ -214,6 +238,19 @@ final class CardDetector {
     private let context: CIContext
 
     init(context: CIContext = CIContext()) { self.context = context }
+
+    /// Which way up the card currently in frame is. Held so the orientation scoring — two renders
+    /// and two Vision text passes — runs once per card instead of once per frame.
+    private var orientationHint: Int?
+
+    /// Forget which way up the current card is. Called wherever `ScanPipeline` drops its text
+    /// cache: both describe "the card in front of the camera right now", so they expire together.
+    func forgetOrientation() { orientationHint = nil }
+
+    /// Sub-stage breakdown of the last `detect`. The pipeline's `StageTimer` sees `detect` as one
+    /// line, but it is four distinct pieces of work, and on an A10 it is the largest remaining
+    /// cost. Surfaced into ScanDiag so the next round of tuning is measured rather than guessed.
+    private(set) var lastDetectSummary = ""
 
     /// Detects a card, perspective-corrects and orientation-normalizes it, and returns the
     /// canonical BGRA plate.
@@ -241,25 +278,39 @@ final class CardDetector {
     /// on every real, non-canonical-sized frame).
     func detect(pixelBuffer: CVPixelBuffer) -> CanonicalFrame? {
         if let passthrough = Self.canonicalPassthrough(pixelBuffer) { return passthrough }
+        var t = StageTimer()
         let ci = CIImage(cvPixelBuffer: pixelBuffer)
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
-        guard let rectified = CardRectifier.rectify(ci: ci, handler: handler) else { return nil }
-        guard let oriented = OrientationNormalizer.orientUpright(rectified.corrected, context: context)
-        else { return nil }
+        guard let rectified = t.measure("rectify", { CardRectifier.rectify(ci: ci, handler: handler) })
+        else { lastDetectSummary = t.summary; return nil }
+        // `orient` is near-free once the hint is set — that is the point of the hint.
+        guard let oriented = t.measure("orient", {
+            OrientationNormalizer.orientUpright(rectified.corrected, context: context,
+                                                preferred: orientationHint) })
+        else { lastDetectSummary = t.summary; return nil }
+        orientationHint = oriented.degrees
 
         let w = Int(kFPCanonW), h = Int(kFPCanonH)
         let stride = w * 4
         var buf = [UInt8](repeating: 0, count: stride * h)
-        buf.withUnsafeMutableBytes { raw in
-            context.render(oriented, toBitmap: raw.baseAddress!, rowBytes: stride,
-                           bounds: CGRect(x: 0, y: 0, width: w, height: h),
-                           format: .BGRA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        t.measure("render") {
+            buf.withUnsafeMutableBytes { raw in
+                context.render(oriented.image, toBitmap: raw.baseAddress!, rowBytes: stride,
+                               bounds: CGRect(x: 0, y: 0, width: w, height: h),
+                               format: .BGRA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+            }
         }
         let plate = Data(buf)
+        // Two full passes over a 2.4 MB plate in plain Swift — the one stage a Release build
+        // genuinely does speed up, unlike the Vision work around it.
+        let quality = t.measure("quality") {
+            (focus: ImageQuality.focus(bgra: plate, width: w, height: h, bytesPerRow: stride),
+             glare: ImageQuality.glareCoverage(bgra: plate, width: w, height: h, bytesPerRow: stride))
+        }
+        lastDetectSummary = t.summary
         return CanonicalFrame(
             pixels: plate, width: w, height: h, bytesPerRow: stride,
-            focus: ImageQuality.focus(bgra: plate, width: w, height: h, bytesPerRow: stride),
-            glareCoverage: ImageQuality.glareCoverage(bgra: plate, width: w, height: h, bytesPerRow: stride),
+            focus: quality.focus, glareCoverage: quality.glare,
             quadConfidence: rectified.confidence)
     }
 

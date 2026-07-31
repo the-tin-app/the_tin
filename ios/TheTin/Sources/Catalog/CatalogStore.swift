@@ -6,14 +6,19 @@ import GRDB
 final class CatalogStore {
     private let path: String
     private let lock = NSLock()
-    private var queue: DatabaseQueue
+    // DatabasePool, not DatabaseQueue: the artifact is WAL, so a pool lets main-thread reads (a set
+    // tap's synchronous SetDetailModel.init reads, list bodies) run CONCURRENTLY with a detached
+    // DiscoverModel.assemble read or a background price-delta write, instead of serializing behind
+    // them. A serial DatabaseQueue on a WAL file made a long background query block the main thread
+    // → multi-second UI freeze on tapping a set (fix 2026-07-21). Readers never block on the writer.
+    private var queue: DatabasePool
     /// Lock-guarded: `reopen` swaps the handle on the main actor while detached readers
     /// (DiscoverModel.assemble, widget snapshots) fetch it concurrently.
-    var dbQueue: DatabaseQueue { lock.withLock { queue } }
+    var dbQueue: DatabasePool { lock.withLock { queue } }
 
     init(path: String) throws {
         self.path = path
-        queue = try DatabaseQueue(path: path)
+        queue = try DatabasePool(path: path)
     }
 
     func close() throws { try dbQueue.close() }
@@ -23,7 +28,7 @@ final class CatalogStore {
     /// never rebuilt mid-session, so a replacement instance leaves them querying a closed handle
     /// (the dead Discover tab after a daily update).
     func reopen() throws {
-        let fresh = try DatabaseQueue(path: path)
+        let fresh = try DatabasePool(path: path)
         let stale = lock.withLock {
             let old = queue
             queue = fresh
@@ -135,6 +140,25 @@ final class CatalogStore {
         }
     }
 
+    /// Graded population grouped by grading company. PSA is pinned first (it's the price-backed
+    /// grader and what most collectors reach for); the rest follow by total population desc.
+    /// Zero-count grades are dropped so a company's half-grade and specialty rows it never
+    /// actually graded don't render as a wall of empty bars. Highest grade first within a company.
+    /// Throws (→ `[]` via `try?`) on a catalog with no `population` table.
+    func populationByGrader(cardId: String) throws -> [GraderPopulation] {
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM population WHERE card_id = ? AND count > 0
+                ORDER BY CAST(REPLACE(grade, 'g', '') AS REAL) DESC
+                """, arguments: [cardId]).map(Self.populationRow)
+        }
+        let byGrader = Dictionary(grouping: rows, by: \.grader)  // preserves grade-desc order per key
+        return byGrader.keys.sorted { a, b in
+            if a == "PSA" || b == "PSA" { return a == "PSA" }
+            return (byGrader[a]?.first?.totalPopulation ?? 0) > (byGrader[b]?.first?.totalPopulation ?? 0)
+        }.map { GraderPopulation(grader: $0, rows: byGrader[$0] ?? []) }
+    }
+
     private static func populationRow(_ row: Row) -> PopulationRow {
         PopulationRow(grader: row["grader"], grade: row["grade"], count: row["count"] ?? 0,
                       gemRate: row["gem_rate"], totalPopulation: row["total_population"])
@@ -149,16 +173,18 @@ final class CatalogStore {
     /// Ungraded per-condition market prices for a card, returned in canonical NM→DMG order.
     /// Empty when the card has no `price_by_condition` rows (only ~20k cards are covered).
     func conditionPrices(cardId: String) throws -> [ConditionPrice] {
-        let byCond: [Condition: Double] = try dbQueue.read { db in
-            let rows = try Row.fetchAll(db, sql: "SELECT condition, usd FROM price_by_condition WHERE card_id = ?",
+        let byCond: [Condition: (Double, Int?)] = try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT * FROM price_by_condition WHERE card_id = ?",
                                         arguments: [cardId])
-            return Dictionary(uniqueKeysWithValues: rows.compactMap { row -> (Condition, Double)? in
+            return Dictionary(uniqueKeysWithValues: rows.compactMap { row -> (Condition, (Double, Int?))? in
                 guard let c = Condition(rawValue: row["condition"]) else { return nil }
                 let usd: Double = row["usd"]
-                return (c, usd)
+                return (c, (usd, row["sales_count"]))
             })
         }
-        return Condition.allCases.compactMap { c in byCond[c].map { ConditionPrice(condition: c, usd: $0) } }
+        return Condition.allCases.compactMap { c in
+            byCond[c].map { ConditionPrice(condition: c, usd: $0.0, salesCount: $0.1) }
+        }
     }
 
     /// Batch of `conditionPrices(cardId:)` keyed by card id, canonical NM→DMG order. Throws on a
@@ -167,16 +193,16 @@ final class CatalogStore {
         guard !cardIds.isEmpty else { return [:] }
         let marks = databaseQuestionMarks(count: cardIds.count)
         let rows = try dbQueue.read { db in
-            try Row.fetchAll(db, sql: "SELECT card_id, condition, usd FROM price_by_condition WHERE card_id IN (\(marks))",
+            try Row.fetchAll(db, sql: "SELECT * FROM price_by_condition WHERE card_id IN (\(marks))",
                              arguments: StatementArguments(cardIds))
         }
-        var byCard: [String: [Condition: Double]] = [:]
+        var byCard: [String: [Condition: (Double, Int?)]] = [:]
         for r in rows {
             guard let c = Condition(rawValue: r["condition"]) else { continue }
-            byCard[r["card_id"], default: [:]][c] = r["usd"]
+            byCard[r["card_id"], default: [:]][c] = (r["usd"], r["sales_count"])
         }
         return byCard.mapValues { byCond in
-            Condition.allCases.compactMap { c in byCond[c].map { ConditionPrice(condition: c, usd: $0) } }
+            Condition.allCases.compactMap { c in byCond[c].map { ConditionPrice(condition: c, usd: $0.0, salesCount: $0.1) } }
         }
     }
 
@@ -201,6 +227,68 @@ final class CatalogStore {
         }
         var out: [String: [VariantPrice]] = [:]
         for r in rows { out[r["card_id"], default: []].append(VariantPrice(printing: r["printing"], usd: r["usd"])) }
+        return out
+    }
+
+    /// Full printing×condition latest prices (`price_matrix`). Empty when the card is uncovered
+    /// or the catalog predates the table (`try?` → `[]`).
+    func matrixPrices(cardId: String) throws -> [MatrixPrice] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT printing, condition, usd FROM price_matrix WHERE card_id = ? ORDER BY printing, condition",
+                             arguments: [cardId])
+                .compactMap { r in
+                    Condition(rawValue: r["condition"]).map { MatrixPrice(printing: r["printing"], condition: $0, usd: r["usd"]) }
+                }
+        }
+    }
+
+    /// Batch of `matrixPrices(cardId:)` keyed by card id. Throws on a catalog without the
+    /// table (→ `[:]` via `try?`).
+    func matrixPrices(cardIds: [String]) throws -> [String: [MatrixPrice]] {
+        guard !cardIds.isEmpty else { return [:] }
+        let marks = databaseQuestionMarks(count: cardIds.count)
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT card_id, printing, condition, usd FROM price_matrix WHERE card_id IN (\(marks)) ORDER BY printing, condition",
+                             arguments: StatementArguments(cardIds))
+        }
+        var out: [String: [MatrixPrice]] = [:]
+        for r in rows {
+            guard let c = Condition(rawValue: r["condition"]) else { continue }
+            out[r["card_id"], default: []].append(MatrixPrice(printing: r["printing"], condition: c, usd: r["usd"]))
+        }
+        return out
+    }
+
+    /// Per-printing graded prices (`graded_by_printing`) — only distinct-product printings
+    /// (e.g. 1st Edition vs Unlimited) ever have rows. Empty on old artifacts (`try?` → `[]`).
+    func gradedPrintingPrices(cardId: String) throws -> [GradedPrintingPrice] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT printing, grade, usd FROM graded_by_printing WHERE card_id = ?",
+                             arguments: [cardId])
+                .map { GradedPrintingPrice(printing: $0["printing"], grade: $0["grade"], usd: $0["usd"]) }
+        }
+    }
+
+    /// eBay sales counts backing graded prices (all graders, keys verbatim). Throws (→ `[]`
+    /// via `try?`) when the installed catalog predates the `graded_sales` table.
+    func gradedSales(cardId: String) throws -> [GradedSale] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT grade, sales_count, confidence FROM graded_sales WHERE card_id = ?",
+                             arguments: [cardId])
+                .map { GradedSale(grade: $0["grade"], salesCount: $0["sales_count"] ?? 0, confidence: $0["confidence"]) }
+        }
+    }
+
+    /// Batch of `gradedPrintingPrices(cardId:)` keyed by card id (→ `[:]` via `try?` on old artifacts).
+    func gradedPrintingPrices(cardIds: [String]) throws -> [String: [GradedPrintingPrice]] {
+        guard !cardIds.isEmpty else { return [:] }
+        let marks = databaseQuestionMarks(count: cardIds.count)
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT card_id, printing, grade, usd FROM graded_by_printing WHERE card_id IN (\(marks))",
+                             arguments: StatementArguments(cardIds))
+        }
+        var out: [String: [GradedPrintingPrice]] = [:]
+        for r in rows { out[r["card_id"], default: []].append(GradedPrintingPrice(printing: r["printing"], grade: r["grade"], usd: r["usd"])) }
         return out
     }
 
@@ -311,14 +399,75 @@ final class CatalogStore {
     }
 
     /// Graded (PSA) price history (`graded_history`) for one grade — expert-tier overlay.
-    /// Same tier gate as `conditionHistory`. `grade` matches with any leading "g" tolerated.
+    /// Same tier gate as `conditionHistory`. The `grade` column stores PPT's key verbatim
+    /// ("psa10"); `grade` here is the bare number ("10"), matched case-insensitively.
     func gradedHistory(cardId: String, grade: String) throws -> [PricePoint] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(db, sql:
-                "SELECT date, usd FROM graded_history WHERE card_id = ? AND REPLACE(grade, 'g', '') = ? ORDER BY date",
+                "SELECT date, usd FROM graded_history WHERE card_id = ? AND LOWER(grade) = 'psa' || ? ORDER BY date",
                 arguments: [cardId, grade])
             return Self.pricePoints(rows, valueColumn: "usd")
         }
+    }
+
+    /// All price-change rows for one card (`price_delta`). Empty on the casual tier (table kept,
+    /// zero rows); throws when the installed catalog predates the table — callers use `try?`.
+    func deltas(cardId: String) throws -> [DeltaRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql:
+                "SELECT kind, key, pct_1d, pct_7d, pct_30d FROM price_delta WHERE card_id = ?",
+                arguments: [cardId]).compactMap(Self.deltaRecord)
+        }
+    }
+
+    /// Batch of `deltas(cardId:)` keyed by card id — one SQL `IN` query, mirroring
+    /// `conditionPrices(cardIds:)`. Cards with no rows are absent.
+    func deltas(cardIds: [String]) throws -> [String: [DeltaRecord]] {
+        guard !cardIds.isEmpty else { return [:] }
+        let marks = databaseQuestionMarks(count: cardIds.count)
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT card_id, kind, key, pct_1d, pct_7d, pct_30d FROM price_delta
+                WHERE card_id IN (\(marks))
+                """, arguments: StatementArguments(cardIds))
+        }
+        var out: [String: [DeltaRecord]] = [:]
+        for r in rows {
+            guard let rec = Self.deltaRecord(r) else { continue }
+            out[r["card_id"], default: []].append(rec)
+        }
+        return out
+    }
+
+    private static func deltaRecord(_ r: Row) -> DeltaRecord? {
+        guard let kind = DeltaRecord.Kind(rawValue: r["kind"]) else { return nil }
+        return DeltaRecord(kind: kind, key: r["key"],
+                           pct1d: r["pct_1d"], pct7d: r["pct_7d"], pct30d: r["pct_30d"])
+    }
+
+    /// Conditions that actually have `price_history_cond` rows for this card, canonical NM→DMG
+    /// order — drives the expert chart's condition menu (hidden when empty). Rows whose condition
+    /// isn't one of the five real conditions (PPT leaks printing names into that column) drop out.
+    /// Throws below the expert tier (table dropped) — callers use `try?`.
+    func availableConditions(cardId: String) throws -> [Condition] {
+        let names = try dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT condition FROM price_history_cond WHERE card_id = ?",
+                                arguments: [cardId])
+        }
+        let present = Set(names)
+        return Condition.allCases.filter { present.contains($0.rawValue) }
+    }
+
+    /// PSA grades that actually have `graded_history` rows for this card, highest grade first —
+    /// drives the expert chart's grade menu (hidden when empty; production data is empty until
+    /// PPT ships dated graded series — probe mode "timeseries"). Same tier gate as above.
+    func availableGrades(cardId: String) throws -> [Grade] {
+        let keys = try dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT LOWER(grade) FROM graded_history WHERE card_id = ?",
+                                arguments: [cardId])
+        }
+        let present = Set(keys)
+        return Grade.allCases.reversed().filter { present.contains($0.rawValue) }
     }
 
     /// Parse `(date TEXT 'yyyy-MM-dd', <valueColumn> REAL)` rows into oldest-first price points.
@@ -451,6 +600,83 @@ final class CatalogStore {
         }
     }
 
+    /// Distinct set eras that actually have cards, newest era first — populates the Browse filter.
+    func distinctEras() throws -> [String] {
+        try dbQueue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT era FROM set_info s
+                WHERE era IS NOT NULL AND era <> ''
+                  AND EXISTS (SELECT 1 FROM card WHERE card.set_id = s.id)
+                GROUP BY era ORDER BY MAX(release_date) DESC
+                """)
+        }
+    }
+
+    /// Window-shopper browse: one parameterized query assembled from the non-empty `criteria`
+    /// axes. Joins `set_info` only for an era filter, `price_latest` for a price band/sort
+    /// (which also drops null-priced cards), `price_delta` for deals/biggest-drop. `LIMIT/OFFSET`
+    /// pages in SQL; `ORDER BY … , c.id` keeps paging deterministic.
+    func browse(criteria: BrowseCriteria, ownedIds: [String], offset: Int, limit: Int) throws -> [CardRecord] {
+        var joins = ""
+        var wheres: [String] = []
+        var args: [(any DatabaseValueConvertible)?] = []
+
+        let needsPriceJoin = criteria.minPrice != nil || criteria.maxPrice != nil
+            || criteria.sort == .priceAsc || criteria.sort == .priceDesc
+        let needsDeltaJoin = criteria.dealsOnly || criteria.sort == .biggestDrop
+
+        if !criteria.eras.isEmpty {
+            joins += " JOIN set_info s ON s.id = c.set_id"
+            wheres.append("s.era IN (\(databaseQuestionMarks(count: criteria.eras.count)))")
+            args.append(contentsOf: criteria.eras.map { $0 })
+        }
+        if needsPriceJoin {
+            joins += " JOIN price_latest p ON p.card_id = c.id AND p.raw_usd IS NOT NULL"
+        }
+        if needsDeltaJoin {
+            joins += " JOIN price_delta d ON d.card_id = c.id AND d.kind = 'raw' AND d.key = ''"
+        }
+        if !criteria.rarities.isEmpty {
+            wheres.append("c.rarity IN (\(databaseQuestionMarks(count: criteria.rarities.count)))")
+            args.append(contentsOf: criteria.rarities.map { $0 })
+        }
+        if !criteria.types.isEmpty {
+            let ors = criteria.types.map { _ in "(',' || c.types || ',') LIKE ?" }.joined(separator: " OR ")
+            wheres.append("(\(ors))")
+            args.append(contentsOf: criteria.types.map { "%,\($0),%" })
+        }
+        if !criteria.regions.isEmpty {
+            let regions = PokemonRegion.all.filter { criteria.regions.contains($0.gen) }
+            let ranges = regions.map { _ in "cd.dex_id BETWEEN ? AND ?" }.joined(separator: " OR ")
+            wheres.append("EXISTS (SELECT 1 FROM card_dex cd WHERE cd.card_id = c.id AND (\(ranges)))")
+            for r in regions { args.append(r.lo); args.append(r.hi) }
+        }
+        if let minP = criteria.minPrice { wheres.append("p.raw_usd >= ?"); args.append(minP) }
+        if let maxP = criteria.maxPrice { wheres.append("p.raw_usd <= ?"); args.append(maxP) }
+        if criteria.dealsOnly { wheres.append("d.pct_7d < ?"); args.append(DiscoverConstants.dealsMaxPct7d) }
+        if criteria.sort == .biggestDrop { wheres.append("d.pct_7d IS NOT NULL") }
+        if criteria.hideOwned, !ownedIds.isEmpty {
+            wheres.append("c.id NOT IN (\(databaseQuestionMarks(count: ownedIds.count)))")
+            args.append(contentsOf: ownedIds.map { $0 })
+        }
+
+        let orderBy: String
+        switch criteria.sort {
+        case .relevance:   orderBy = "c.id"
+        case .priceAsc:    orderBy = "p.raw_usd ASC, c.id"
+        case .priceDesc:   orderBy = "p.raw_usd DESC, c.id"
+        case .biggestDrop: orderBy = "d.pct_7d ASC, c.id"
+        }
+
+        let whereSQL = wheres.isEmpty ? "" : " WHERE " + wheres.joined(separator: " AND ")
+        let sql = "SELECT c.* FROM card c\(joins)\(whereSQL) ORDER BY \(orderBy) LIMIT ? OFFSET ?"
+        args.append(limit); args.append(offset)
+
+        return try dbQueue.read { db in
+            try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args)).map(Self.cardRecord)
+        }
+    }
+
     /// Cards belonging to a curated gallery subset (Trainer/Galarian Gallery), grouped by
     /// "<setId>/<prefix>". Empty when the catalog carries no gallery-prefixed numbers.
     func galleryCards() throws -> [String: [CardRecord]] {
@@ -527,6 +753,60 @@ final class CatalogStore {
         }
     }
 
+    /// Biggest raw-market movers across the WHOLE catalog for one lookback — the cards you don't
+    /// own yet. Ranked by absolute percent, because there's no holding to weigh it against; the
+    /// `minUsd` floor is what stops the list being 20-cent commons, whose prices swing wildly on
+    /// rounding alone. Empty on the casual tier, where `price_delta` ships with zero rows.
+    func topMovers(period: DeltaPeriod, minUsd: Double, limit: Int) throws -> [Movers.MarketRow] {
+        // The lookback column can't be bound as a parameter. It comes from a closed enum and is
+        // mapped through this switch, so no caller-controlled string ever reaches the SQL.
+        let column: String
+        switch period {
+        case .d1: column = "pct_1d"
+        case .d7: column = "pct_7d"
+        case .d30: column = "pct_30d"
+        }
+        // PER-PRINTING first, raw only as a fallback. `price_latest.raw_usd` is a single headline
+        // price for a card that may have several printings, and which printing feeds it is not
+        // stable between nightly artifacts — so for a card sold as both Unlimited and 1st Edition,
+        // the raw delta can be the gap BETWEEN THE TWO PRINTINGS rather than a price move, which
+        // is where the +1800% rows came from (reported 2026-07-25; card detail showed the same
+        // card at +0.2% because it reads the per-printing series). Printing deltas join on the
+        // printing key, so both sides always describe the same thing.
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT card_id, printing, pct, usd FROM (
+                    SELECT d.card_id AS card_id, d.key AS printing, d.\(column) AS pct, v.usd AS usd
+                    FROM price_delta d
+                    JOIN price_by_variant v ON v.card_id = d.card_id AND v.printing = d.key
+                    WHERE d.kind = 'printing' AND d.\(column) IS NOT NULL
+                      AND v.usd >= ? AND ABS(d.\(column)) <= ?
+                    UNION ALL
+                    SELECT d.card_id, NULL, d.\(column), p.raw_usd
+                    FROM price_delta d JOIN price_latest p ON p.card_id = d.card_id
+                    WHERE d.kind = 'raw' AND d.\(column) IS NOT NULL
+                      AND p.raw_usd >= ? AND ABS(d.\(column)) <= ?
+                      AND NOT EXISTS (SELECT 1 FROM price_delta pd
+                                      WHERE pd.card_id = d.card_id AND pd.kind = 'printing')
+                )
+                ORDER BY ABS(pct) DESC LIMIT ?
+                """, arguments: [minUsd, Movers.implausiblePct, minUsd, Movers.implausiblePct,
+                                 limit * 3])
+                .map { Movers.MarketRow(cardId: $0["card_id"], printing: $0["printing"],
+                                        pct: $0["pct"], usd: $0["usd"]) }
+        }
+        // A card whose printings both moved would otherwise appear twice and read as a bug; keep
+        // whichever printing moved most.
+        var bestByCard: [String: Movers.MarketRow] = [:]
+        for row in rows where abs(row.pct) > abs(bestByCard[row.cardId]?.pct ?? 0) {
+            bestByCard[row.cardId] = row
+        }
+        return bestByCard.values
+            .sorted { abs($0.pct) == abs($1.pct) ? $0.cardId < $1.cardId : abs($0.pct) > abs($1.pct) }
+            .prefix(limit)
+            .map { $0 }
+    }
+
     // MARK: row mapping
 
     private static func setRecord(_ r: Row) -> SetRecord {
@@ -536,17 +816,29 @@ final class CatalogStore {
 
     static func cardRecord(_ r: Row) -> CardRecord {
         let types: String? = r["types"]
+        // Missing column (pre-attacks catalogs) or bad JSON reads as no attacks.
+        let attacksJSON: String? = r["attacks"]
+        let attacks = attacksJSON.flatMap { try? JSONDecoder().decode([Attack].self, from: Data($0.utf8)) } ?? []
         return CardRecord(id: r["id"], setId: r["set_id"], number: r["number"], name: r["name"],
                           hp: r["hp"],
                           types: (types ?? "").split(separator: ",").map(String.init),
                           rarity: r["rarity"], artist: r["artist"], imageBase: r["image_base"],
                           imageUrl: r["image_url"],
-                          tcgplayerId: r["tcgplayer_id"])
+                          tcgplayerId: r["tcgplayer_id"],
+                          attacks: attacks)
     }
 
     private static func priceRecord(_ r: Row) -> PriceRecord {
+        // Missing columns (pre-all-grades catalogs) read as nil — the record stays correct.
         PriceRecord(cardId: r["card_id"], rawUsd: r["raw_usd"], rawEur: r["raw_eur"],
-                    psa3: r["psa3"], psa7: r["psa7"], psa9: r["psa9"], psa10: r["psa10"], asOf: r["as_of"])
+                    psa1: r["psa1"], psa2: r["psa2"], psa3: r["psa3"], psa4: r["psa4"],
+                    psa5: r["psa5"], psa6: r["psa6"], psa7: r["psa7"], psa8: r["psa8"],
+                    psa9: r["psa9"], psa10: r["psa10"],
+                    sellers: r["sellers"], listings: r["listings"], lowUsd: r["low_usd"],
+                    // Absent from every artifact published before 2026-07-26; `SELECT *` simply
+                    // doesn't return it there and it reads as nil, same as the pre-all-grades
+                    // psa columns above.
+                    rawPrinting: r["raw_printing"], asOf: r["as_of"])
     }
 }
 
@@ -555,10 +847,25 @@ struct PriceDelta: Codable, Equatable {
         let cardId: String
         let rawUsd: Double?
         let rawEur: Double?
-        let psa3: Double?
-        let psa7: Double?
-        let psa9: Double?
-        let psa10: Double?
+        var psa1: Double? = nil
+        var psa2: Double? = nil
+        var psa3: Double? = nil
+        var psa4: Double? = nil
+        var psa5: Double? = nil
+        var psa6: Double? = nil
+        var psa7: Double? = nil
+        var psa8: Double? = nil
+        var psa9: Double? = nil
+        var psa10: Double? = nil
+
+        func value(for grade: Grade) -> Double? {
+            switch grade {
+            case .psa1: return psa1; case .psa2: return psa2; case .psa3: return psa3
+            case .psa4: return psa4; case .psa5: return psa5; case .psa6: return psa6
+            case .psa7: return psa7; case .psa8: return psa8; case .psa9: return psa9
+            case .psa10: return psa10
+            }
+        }
     }
     let asOf: String
     let rows: [Row]
@@ -566,17 +873,29 @@ struct PriceDelta: Codable, Equatable {
 
 extension CatalogStore {
     /// Upsert daily price rows (handoff §3.1). Rows for cards not in the catalog are skipped.
+    /// Writes only the psa columns the installed catalog actually has, so a new app applying a
+    /// delta to a pre-all-grades catalog neither errors nor over-writes columns it doesn't know
+    /// about. A true `ON CONFLICT DO UPDATE` upsert — not `INSERT OR REPLACE` — so columns this
+    /// delta never names (e.g. `sellers`/`listings`) survive untouched on existing rows.
     @discardableResult
     func applyPriceDelta(_ delta: PriceDelta) throws -> Int {
         try dbQueue.write { db in
+            let cols = try db.columns(in: "price_latest").map(\.name)
+            let psaCols = Grade.allCases.filter { cols.contains($0.rawValue) }
+            let colList = psaCols.map(\.rawValue).joined(separator: ", ")
+            let placeholders = psaCols.map { _ in "?" }.joined(separator: ", ")
+            let setClause = (["raw_usd", "raw_eur"] + psaCols.map(\.rawValue) + ["as_of"])
+                .map { "\($0) = excluded.\($0)" }.joined(separator: ", ")
             var applied = 0
             for row in delta.rows {
+                let psaValues: [DatabaseValueConvertible?] = psaCols.map { row.value(for: $0) }
                 try db.execute(sql: """
-                    INSERT OR REPLACE INTO price_latest (card_id, raw_usd, raw_eur, psa3, psa7, psa9, psa10, as_of)
-                    SELECT ?, ?, ?, ?, ?, ?, ?, ?
+                    INSERT INTO price_latest (card_id, raw_usd, raw_eur, \(colList), as_of)
+                    SELECT ?, ?, ?, \(placeholders), ?
                     WHERE EXISTS (SELECT 1 FROM card WHERE id = ?)
-                    """, arguments: [row.cardId, row.rawUsd, row.rawEur, row.psa3, row.psa7, row.psa9, row.psa10,
-                                     delta.asOf, row.cardId])
+                    ON CONFLICT(card_id) DO UPDATE SET \(setClause)
+                    """, arguments: StatementArguments([row.cardId, row.rawUsd, row.rawEur] + psaValues
+                                                       + [delta.asOf, row.cardId]))
                 applied += db.changesCount
             }
             return applied
@@ -584,6 +903,6 @@ extension CatalogStore {
     }
 }
 
-// GRDB's DatabaseQueue is internally synchronized and safe to use across threads, so the
+// GRDB's DatabasePool is internally synchronized and safe to use across threads, so the
 // read-only CatalogStore can be handed to a detached feed-build task (DiscoverModel).
 extension CatalogStore: @unchecked Sendable {}

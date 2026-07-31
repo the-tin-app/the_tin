@@ -4,6 +4,7 @@ struct DiscoverView: View {
     let store: CatalogStore
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    var goals: SetGoalsModel? = nil
     @State private var model: DiscoverModel?
 
     var body: some View {
@@ -24,8 +25,18 @@ struct DiscoverView: View {
         }
         .navigationDestination(for: StreamRoute.self) { route in
             if let model {
-                StreamView(kind: route.kind, model: model, wants: wants, collection: collection)
+                StreamView(title: route.kind.title,
+                           stream: model.makeStream(route.kind),
+                           caption: { model.caption(for: $0, kind: route.kind) },
+                           store: store, wants: wants, collection: collection)
             }
+        }
+        // The whole browse surface (By Set / By Dex / Sealed / All Cards), not just the filter
+        // deck — this row used to open a screen called "Browse" that had nothing in common with
+        // the "Browse" tab.
+        .navigationDestination(for: BrowseRoute.self) { _ in
+            BrowseView(store: store, entries: collection?.entries ?? [],
+                       collection: collection, wants: wants, goals: goals)
         }
         .task(id: tasteSignalKey) {
             let m = model ?? DiscoverModel(store: store)
@@ -48,14 +59,28 @@ private struct DiscoverHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                NavigationLink(value: BrowseRoute()) {
+                    HStack {
+                        // Not a magnifying glass — that's Search's icon, and this row leading
+                        // with it was half the reason Browse and Search read as the same door.
+                        Label("Browse the catalog", systemImage: "square.grid.2x2")
+                            .font(.title3.bold())
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal)
                 ForEach(DiscoverModel.StreamKind.allCases, id: \.self) { kind in
                     let cards = model.previews[kind] ?? []
                     if !cards.isEmpty {
-                        StreamPreviewRow(kind: kind, cards: cards, store: store, wants: wants)
+                        StreamPreviewRow(kind: kind, cards: cards, store: store,
+                                         wants: wants, collection: collection)
                     }
                 }
                 if !model.connections.isEmpty {
-                    ConnectionsRow(connections: model.connections, store: store, wants: wants)
+                    ConnectionsRow(connections: model.connections, store: store,
+                                   wants: wants, collection: collection)
                 }
             }
             .padding(.vertical)
@@ -69,6 +94,7 @@ private struct StreamPreviewRow: View {
     let cards: [CardRecord]
     let store: CatalogStore
     var wants: WantsModel?
+    var collection: CollectionModel?
 
     var body: some View {
         // Preview price = raw market, falling back to the NM condition price (a separate feed)
@@ -86,7 +112,8 @@ private struct StreamPreviewRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(cards) { card in
-                        DiscoverTile(card: card, value: prices[card.id], wants: wants)
+                        DiscoverTile(card: card, value: prices[card.id], wants: wants,
+                                     collection: collection, store: store)
                     }
                 }
                 .padding(.horizontal)
@@ -100,6 +127,7 @@ private struct ConnectionsRow: View {
     let connections: [Connection]
     let store: CatalogStore
     var wants: WantsModel?
+    var collection: CollectionModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -113,7 +141,8 @@ private struct ConnectionsRow: View {
                             Text(connection.title).font(.caption.bold()).foregroundStyle(.secondary)
                             HStack(spacing: 8) {
                                 ForEach(cards) { card in
-                                    DiscoverTile(card: card, value: prices[card.id], wants: wants)
+                                    DiscoverTile(card: card, value: prices[card.id], wants: wants,
+                                                 collection: collection, store: store)
                                 }
                             }
                         }
@@ -129,6 +158,8 @@ private struct DiscoverTile: View {
     let card: CardRecord
     let value: Double?
     var wants: WantsModel?
+    var collection: CollectionModel?
+    var store: CatalogStore?
 
     var body: some View {
         NavigationLink(value: CardID(raw: card.id)) {
@@ -141,7 +172,7 @@ private struct DiscoverTile: View {
             .frame(width: 120)
         }
         .buttonStyle(.plain)
-        .cardQuickActions(cardId: card.id, wants: wants)
+        .cardQuickActions(card: card, wants: wants, collection: collection, store: store)
         .overlay(alignment: .topTrailing) {
             if let wants {
                 Button {
