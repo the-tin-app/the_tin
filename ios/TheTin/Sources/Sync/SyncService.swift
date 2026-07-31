@@ -29,8 +29,6 @@ final class SyncService {
     var seedPrompt: SeedPrompt?
 
     static let seededKey = "syncSeeded"
-    /// Record keys this device has actually seen in the zone. See `vanished`.
-    static let knownRemoteKey = "syncKnownRemote"
 
     private let engine: SyncEngine?
     private let collection: CollectionRepository
@@ -117,8 +115,12 @@ final class SyncService {
         //
         // Nothing is subscribed on this path, so `refresh()` retries `start()` on the next
         // foreground rather than leaving sync inert until the user relaunches.
-        let remote: [SyncRecord]
-        do { remote = try await engine.fetchAll() } catch { status = .failed; return }
+        // `fetched` is everything in the zone, tombstones included; `remote` is the live records.
+        // The distinction matters in both directions: seeding must not count a tombstone as a card,
+        // and `stranded` must count one as present or it re-uploads what was just deleted.
+        let fetched: [SyncRecord]
+        do { fetched = try await engine.fetchAll() } catch { status = .failed; return }
+        let remote = fetched.filter { !$0.isTombstone }
         let local = await currentRecords()
         switch SyncSeeding.decide(localCount: local.filter { $0.type == .entry }.count,
                                   remoteCount: remote.filter { $0.type == .entry }.count,
@@ -127,13 +129,12 @@ final class SyncService {
             engine.send(upserts: local, deletes: [])
             markSeeded()
         case .pullDown:
-            await applyRemote(upserts: remote, deletes: [])
+            await applyRemote(upserts: remote, deletes: tombstoned(local: local, remote: fetched, engine: engine))
             markSeeded()
             // "Empty" here means no CARDS — `SyncSeeding.decide` counts entries only. A tin holding
             // sealed products and no cards still pulls down, and its boxes would otherwise be
             // stranded by the same seed-only fold.
-            upload(stranded(local: local, remote: remote, deleting: [], engine: engine),
-                   to: engine)
+            upload(stranded(local: local, remote: fetched, engine: engine), to: engine)
         case .ask(let localCount, let remoteCount):
             // Subscribe to NOTHING until the user answers: a local edit pushed before the choice
             // would silently merge the two collections the sheet is asking them to pick between.
@@ -145,13 +146,13 @@ final class SyncService {
             // `automaticallySync` only reacts to LOCAL pending changes and to push; a device with
             // neither never fetches on its own, so without this a card added elsewhere never
             // arrives, even across relaunches. Observed on device 2026-07-29.
-            let deletes = vanished(local: local, remote: remote, engine: engine)
-            await applyRemote(upserts: remote, deletes: deletes)
-            // …and the other half of the same question: what the ZONE is missing. `vanished` and
-            // `stranded` partition "absent from the zone" between them, so neither can claim a
-            // record the other does.
-            upload(stranded(local: local, remote: remote, deleting: deletes, engine: engine),
-                   to: engine)
+            //
+            // This is also where a missed deletion heals: the tombstone is simply one of the records
+            // `fetchAll` returned, so a feed event lost to a startup race or an advanced token costs
+            // a launch rather than diverging the two devices forever.
+            await applyRemote(upserts: remote, deletes: tombstoned(local: local, remote: fetched, engine: engine))
+            // …and the other half: what the ZONE is missing, which now means exactly one thing.
+            upload(stranded(local: local, remote: fetched, engine: engine), to: engine)
         }
         subscribe()
         // `fetchAll` above carries upserts only, so a cold launch alone can never learn about a
@@ -162,47 +163,36 @@ final class SyncService {
         await engine.fetchChanges()
     }
 
-    /// Records this device holds that the zone does not, and that are genuinely safe to delete.
+    /// Deletions the zone is reporting that this device has not applied yet.
     ///
-    /// **Why this exists.** `CKSyncEngine`'s change feed is once-only: its token advances whether or
-    /// not the app did anything with an event, and `fetchAll` cannot express a deletion. So a
-    /// deletion had exactly ONE delivery path and no recovery if it was missed — and it was missed
-    /// twice on 2026-07-29 (once to a startup race, once to a token already past the change). The
-    /// symptom is permanent, silent divergence that no pull, relaunch or reinstall can heal: the
-    /// iPad held 59 entries against the zone's 58 and stayed there through three fetch cycles that
-    /// correctly reported nothing new. This gives deletions a second path.
+    /// **This replaced a much harder question.** Deletions used to be inferred from a record's
+    /// ABSENCE in the zone, which has three causes and only one of them is a deletion — deleted
+    /// elsewhere, queued here and not sent, or never uploaded at all. Telling them apart needed a
+    /// locally-cached set of keys this device had seen in the zone (`knownRemote`), and that set was
+    /// only ever written from `fetchAll`. A record delivered by the change feed never entered it, so
+    /// a genuine deletion of such a record could neither be applied nor healed, AND the record was
+    /// re-uploaded on the next cold launch — the deletion undid itself on both devices. Proven on
+    /// device and in `testARecordDeliveredOnlyByTheChangeFeedCanStillBeDeleted`.
     ///
-    /// **Why it is safe, which is the whole difficulty.** Absence from the zone has three causes and
-    /// only one of them is a deletion:
+    /// With `SyncRecord.tombstonePayload` the deletion is a record in the zone, so `fetchAll` states
+    /// it outright. Absence now means exactly one thing — never uploaded — which is `stranded`'s
+    /// job, and an empty zone needs no special guard because an empty zone contains no tombstones.
     ///
-    /// 1. deleted on another device — delete it here too ✅
-    /// 2. queued here and not sent yet — `pendingKeys` excludes it, or this erases a card the user
-    ///    just added while offline
-    /// 3. never uploaded at all (added while the sync toggle was off, or a send that failed for
-    ///    good) — `knownRemote` excludes it, because a record this device has never once seen in the
-    ///    zone cannot have been deleted from it
+    /// Filtered to what this device actually holds: applying a tombstone for a record that isn't
+    /// here would mark the collection dirty and rewrite the whole file on every launch.
     ///
-    /// An empty zone is refused outright: a wiped or newly-recreated zone would otherwise read as
-    /// "everything was deleted" and take the entire local collection with it. A genuine mass delete
-    /// still propagates through the change feed, which reports deletions explicitly — guessing at it
-    /// from silence is exactly the wrong risk to take.
-    private func vanished(local: [SyncRecord], remote: [SyncRecord],
-                          engine: SyncEngine) -> [SyncRecord] {
-        guard !remote.isEmpty else { return [] }
-        let remoteKeys = Set(remote.map(\.key))
-        let known = Set(defaults.stringArray(forKey: Self.knownRemoteKey) ?? [])
+    /// ⚠️ `pendingKeys` still guards, for the one case a tombstone cannot settle by itself. Record
+    /// names are the MODEL's id, and `.want`/`.setGoal` are keyed by card and set id — so deleting a
+    /// wishlist card and adding it back reuses the same key. If this device re-added it while
+    /// offline, its unsent change must outrank the tombstone, or the re-add is silently erased by a
+    /// deletion the user has already undone.
+    private func tombstoned(local: [SyncRecord], remote: [SyncRecord],
+                            engine: SyncEngine) -> [SyncRecord] {
+        let localKeys = Set(local.map(\.key))
         let pending = engine.pendingKeys
-        defer {
-            // Recorded AFTER the decision, so a record's first sighting can never also authorise its
-            // deletion in the same pass.
-            // ponytail: a plain key list in UserDefaults — fine at collection scale (tens of KB for
-            // thousands of cards); move it beside the engine state if it ever gets big.
-            defaults.set(Array(remoteKeys), forKey: Self.knownRemoteKey)
-        }
-        return local.filter {
-            !remoteKeys.contains($0.key) && known.contains($0.key) && !pending.contains($0.key)
-        }
-        .map { SyncRecord(type: $0.type, recordName: $0.recordName, payload: nil) }
+        return remote
+            .filter { $0.isTombstone && localKeys.contains($0.key) && !pending.contains($0.key) }
+            .map(\.asDeletion)
     }
 
     /// Queue records for upload, and say so in the status. No-op when there is nothing to send, so
@@ -229,20 +219,16 @@ final class SyncService {
     /// syncs sealed at all, so every one of them was stranded. Measured on device 2026-07-29 — two
     /// boxes on the iPad, zero on the iPhone, stable across relaunches with a green test suite.
     ///
-    /// ⚠️ **Accepted trade.** If this device MISSED a deletion made elsewhere *and* never once saw
-    /// the record in a successful zone read, it now re-uploads it instead of keeping it silently.
-    /// That resurrects a deletion in a narrow case — but the alternative is the permanent, silent
-    /// divergence `vanished` exists to end, and a collection that converges on "the card exists" is
-    /// recoverable by deleting it once, while divergence is not recoverable at all.
+    /// ⚠️ **`remote` must be every record the zone holds, TOMBSTONES INCLUDED.** A tombstoned record
+    /// is present, so it is excluded here — which is what stops a deletion from being re-uploaded by
+    /// the device that hasn't applied it yet. Passing only the live records resurrects every
+    /// deletion on the next launch; that was the second half of the 2026-07-30 device bug, and
+    /// `testAFeedDeliveredRecordDeletedElsewhereIsNotResurrected` fails if this regresses.
     private func stranded(local: [SyncRecord], remote: [SyncRecord],
-                          deleting: [SyncRecord], engine: SyncEngine) -> [SyncRecord] {
+                          engine: SyncEngine) -> [SyncRecord] {
         let remoteKeys = Set(remote.map(\.key))
-        let deletingKeys = Set(deleting.map(\.key))
         let pending = engine.pendingKeys
-        return local.filter {
-            !remoteKeys.contains($0.key) && !deletingKeys.contains($0.key)
-                && !pending.contains($0.key)
-        }
+        return local.filter { !remoteKeys.contains($0.key) && !pending.contains($0.key) }
     }
 
     /// Catch up now — called when the app comes to the foreground.
@@ -275,9 +261,9 @@ final class SyncService {
         // Read the zone explicitly rather than with `try?`: a failed read must decide NOTHING here.
         // Conflating "couldn't read" with "the zone is empty" is the bug `3faab6a` fixed once
         // already, and the consequence would be worse on this path.
-        let remote: [SyncRecord]
-        do { remote = try await engine.fetchAll() } catch { status = .failed; return }
-        let deletes = vanished(local: await currentRecords(), remote: remote, engine: engine)
+        let fetched: [SyncRecord]
+        do { fetched = try await engine.fetchAll() } catch { status = .failed; return }
+        let deletes = tombstoned(local: await currentRecords(), remote: fetched, engine: engine)
         if !deletes.isEmpty { await applyRemote(upserts: [], deletes: deletes) }
     }
 

@@ -135,11 +135,16 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
         return keys
     }
 
+    /// A delete is SAVED as a tombstone, not removed — see `SyncRecord.tombstonePayload`. Both halves
+    /// therefore go out as `.saveRecord`, and both need materialising from `outbound` when
+    /// `nextRecordZoneChangeBatch` asks.
     func send(upserts: [SyncRecord], deletes: [SyncRecord]) {
         guard let engine else { return }
-        lock.withLock { for record in upserts { outbound[record.key] = record } }
-        engine.state.add(pendingRecordZoneChanges:
-            upserts.map { .saveRecord(recordID($0)) } + deletes.map { .deleteRecord(recordID($0)) })
+        let outgoing = upserts + deletes.map {
+            SyncRecord.tombstone(type: $0.type, recordName: $0.recordName)
+        }
+        lock.withLock { for record in outgoing { outbound[record.key] = record } }
+        engine.state.add(pendingRecordZoneChanges: outgoing.map { .saveRecord(recordID($0)) })
     }
 
     /// Deliberately swallows: a refresh that can't reach the network is not an error the user did
@@ -182,8 +187,13 @@ final class CloudKitSyncEngine: NSObject, SyncEngine, CKSyncEngineDelegate, @unc
                 for m in changes.modifications { serverRecords[m.record.recordID.recordName] = m.record }
                 for d in changes.deletions { serverRecords[d.recordID.recordName] = nil }
             }
-            let upserts = changes.modifications.compactMap { Self.syncRecord($0.record) }
-            let deletes = changes.deletions.compactMap {
+            // A deletion now arrives as a MODIFICATION carrying a tombstone payload, so the two have
+            // to be separated here. `changes.deletions` is still honoured: records hard-deleted by
+            // an older build (or by the CloudKit console) must still apply.
+            let fetched = changes.modifications.compactMap { Self.syncRecord($0.record) }
+            let upserts = fetched.filter { !$0.isTombstone }
+            var deletes = fetched.filter(\.isTombstone).map(\.asDeletion)
+            deletes += changes.deletions.compactMap {
                 Self.deletedRecord(recordName: $0.recordID.recordName)
             }
             if !upserts.isEmpty || !deletes.isEmpty { onRemoteChange?(upserts, deletes) }

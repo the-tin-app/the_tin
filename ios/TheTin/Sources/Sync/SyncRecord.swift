@@ -32,6 +32,39 @@ struct SyncRecord: Equatable, Sendable {
     /// The CloudKit `CKRecord.ID` name. Record names are unique per ZONE, not per type, so a want
     /// on card "base1" and a goal on set "base1" would otherwise be the same record.
     var key: String { "\(type.rawValue)/\(recordName)" }
+
+    /// A deleted record, kept in the zone rather than removed from it.
+    ///
+    /// **Why deletions are soft.** `fetchAll` can only report what exists, so a hard delete makes a
+    /// record's absence the only evidence it was deleted — and absence is equally "never uploaded"
+    /// or "queued here, not sent yet". Telling those apart needed a locally-cached set of keys this
+    /// device had seen in the zone, maintained on one narrow path; when a record arrived by change
+    /// feed it never entered that set, so a real deletion could neither be applied nor healed, and
+    /// the record was re-uploaded on the next launch instead. Measured on device 2026-07-30: an
+    /// iPad held 57 entries against the iPhone's 56 through two foreground cycles and a pull.
+    ///
+    /// A tombstone makes the deletion a FACT IN THE ZONE that `fetchAll` reports like any other, so
+    /// absence stops carrying meaning and the whole three-way guess disappears.
+    ///
+    /// A sentinel payload rather than a `deleted` field, because the schema is deliberately one
+    /// `payload` blob per type — a new field is a CloudKit console trip, and this is not.
+    /// `nil` could not serve: `.setGoal` is a live record whose payload is legitimately nil.
+    ///
+    /// ponytail: tombstones are never collected. At collection scale (tens of thousands of ~20-byte
+    /// records) that is cheaper than any GC that has to prove a device has seen them; add one only
+    /// if the zone actually gets big.
+    static let tombstonePayload = Data(#"{"__tin_deleted":true}"#.utf8)
+
+    var isTombstone: Bool { payload == Self.tombstonePayload }
+
+    /// The wire form of "this record was deleted".
+    static func tombstone(type: SyncRecordType, recordName: String) -> SyncRecord {
+        SyncRecord(type: type, recordName: recordName, payload: tombstonePayload)
+    }
+
+    /// A tombstone read back as the internal deletion shape (`payload == nil`), which is what
+    /// `SyncService.applyRemote` and `SyncDiff` consume.
+    var asDeletion: SyncRecord { SyncRecord(type: type, recordName: recordName, payload: nil) }
 }
 
 extension SyncRecord {

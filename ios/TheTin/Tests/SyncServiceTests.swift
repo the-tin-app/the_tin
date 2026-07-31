@@ -395,18 +395,18 @@ final class SyncServiceTests: XCTestCase {
                        ["s1", "s2"])
     }
 
-    /// A record queued but not yet sent must not be uploaded twice, and one the zone deleted must
-    /// not be resurrected by the very pass that deletes it — `vanished` and `stranded` partition
-    /// "absent from the zone", so a key can belong to at most one of them.
+    /// A record queued but not yet sent must not be uploaded twice, and a tombstoned one must not be
+    /// resurrected by the very pass that applies its deletion. A tombstone is PRESENT in the zone,
+    /// so `stranded` excludes it on the same rule that excludes every other present record.
     func testUploadSkipsPendingRecordsAndOnesBeingDeleted() async throws {
         defaults.set(true, forKey: SyncService.seededKey)
-        defaults.set(["Entry/wasDeleted"], forKey: SyncService.knownRemoteKey)
         let collection = InMemoryCollectionRepository()
-        try await collection.addEntry(entry("wasDeleted"))   // seen in the zone before, now gone
+        try await collection.addEntry(entry("wasDeleted"))   // tombstoned in the zone
         try await collection.addEntry(entry("queued"))       // still on its way up
         try await collection.addEntry(entry("stranded"))     // never uploaded
         let engine = FakeSyncEngine()
-        engine.zone = [try SyncRecord.entry(entry("anchor"))]
+        engine.zone = [try SyncRecord.entry(entry("anchor")),
+                       SyncRecord.tombstone(type: .entry, recordName: "wasDeleted")]
         engine.pendingKeys = ["Entry/queued"]
         let service = makeService(engine: engine, collection: collection)
 
@@ -420,34 +420,28 @@ final class SyncServiceTests: XCTestCase {
 
     // MARK: Reconcile — the second delivery path for a deletion
 
-    /// The bug this exists for. A record this device HAS seen in the zone, now gone from it, with
-    /// nothing pending, was deleted elsewhere — and the change feed is once-only, so if its event
-    /// was missed there is no other way to learn. Measured on device 2026-07-29: an iPad held 59
-    /// entries against the zone's 58 and stayed diverged through three fetch cycles, a
-    /// pull-to-refresh and a relaunch.
-    func testARecordSeenInTheZoneAndThenMissingIsDeletedLocally() async throws {
+    /// The bug this exists for. The other device deleted a record and this one missed the feed
+    /// event; the tombstone left behind says so on the next launch. Measured on device 2026-07-29:
+    /// an iPad held 59 entries against the zone's 58 and stayed diverged through three fetch cycles,
+    /// a pull-to-refresh and a relaunch.
+    func testATombstoneInTheZoneIsAppliedOnLaunch() async throws {
         defaults.set(true, forKey: SyncService.seededKey)
         let collection = InMemoryCollectionRepository()
         try await collection.addEntry(entry("keep"))
         try await collection.addEntry(entry("gone"))
 
-        // First launch: both records are in the zone, so both become "known remote".
-        let first = FakeSyncEngine()
-        first.zone = [try SyncRecord.entry(entry("keep")), try SyncRecord.entry(entry("gone"))]
-        await makeService(engine: first, collection: collection).start()
-
-        // Second launch: the other device deleted "gone", and its feed event never arrived.
-        let second = FakeSyncEngine()
-        second.zone = [try SyncRecord.entry(entry("keep"))]
-        await makeService(engine: second, collection: collection).start()
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("keep")),
+                       SyncRecord.tombstone(type: .entry, recordName: "gone")]
+        await makeService(engine: engine, collection: collection).start()
 
         XCTAssertEqual(collection.entries.map(\.id), ["keep"],
                        "a record deleted elsewhere must not survive forever just because its feed event was missed")
     }
 
-    /// A record this device has NEVER seen in the zone was never uploaded — added while the sync
-    /// toggle was off, or a send that failed for good. Absence from the zone is not evidence it was
-    /// deleted, and erasing it would destroy a card the user added.
+    /// A record this device has never uploaded is merely ABSENT from the zone, and absence is no
+    /// longer evidence of anything — only a tombstone deletes. Erasing it would destroy a card the
+    /// user added while the toggle was off.
     func testARecordNeverSeenInTheZoneIsNotDeleted() async throws {
         defaults.set(true, forKey: SyncService.seededKey)
         let collection = InMemoryCollectionRepository()
@@ -463,21 +457,40 @@ final class SyncServiceTests: XCTestCase {
 
     /// Queued locally and not sent yet — the exact case that made this approach look too dangerous
     /// to attempt. `pendingKeys` is what makes it safe.
-    func testAPendingRecordIsNotDeletedEvenIfPreviouslySeen() async throws {
+    func testAPendingRecordIsNotUploadedTwice() async throws {
         defaults.set(true, forKey: SyncService.seededKey)
         let collection = InMemoryCollectionRepository()
         try await collection.addEntry(entry("queued"))
-        let first = FakeSyncEngine()
-        first.zone = [try SyncRecord.entry(entry("queued")), try SyncRecord.entry(entry("other"))]
-        await makeService(engine: first, collection: collection).start()
 
-        let second = FakeSyncEngine()
-        second.zone = [try SyncRecord.entry(entry("other"))]
-        second.pendingKeys = [try SyncRecord.entry(entry("queued")).key]
-        await makeService(engine: second, collection: collection).start()
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("other"))]
+        engine.pendingKeys = [try SyncRecord.entry(entry("queued")).key]
+        await makeService(engine: engine, collection: collection).start()
+        try await settle()
 
         XCTAssertTrue(collection.entries.contains { $0.id == "queued" },
                       "an unsent local change must never be read as a remote deletion")
+        XCTAssertFalse(engine.sentUpserts.contains { $0.recordName == "queued" },
+                       "the engine already owes the zone this record; queueing it again duplicates the send")
+    }
+
+    /// A tombstone must not erase a record this device re-added and has not uploaded yet. `.want`
+    /// and `.setGoal` use the model's own id as the record name, so deleting a wishlist card and
+    /// adding it back lands on the very same key as its tombstone.
+    func testATombstoneDoesNotEraseAnUnsentLocalReAdd() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("readded"))
+
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("anchor")),
+                       SyncRecord.tombstone(type: .entry, recordName: "readded")]
+        engine.pendingKeys = ["Entry/readded"]
+        await makeService(engine: engine, collection: collection).start()
+        try await settle()
+
+        XCTAssertTrue(collection.entries.contains { $0.id == "readded" },
+                      "an unsent local re-add must outrank a deletion the user has already undone")
     }
 
     /// A wiped or recreated zone must never be read as "the user deleted everything". A genuine mass
@@ -510,14 +523,15 @@ final class SyncServiceTests: XCTestCase {
         first.zone = [try SyncRecord.entry(entry("keep")), try SyncRecord.entry(entry("gone"))]
         await makeService(engine: first, collection: collection).start()
 
-        // A second session, subscribed, with "gone" no longer in the zone and its feed event missed.
+        // A second session, subscribed, with "gone" tombstoned in the zone and its feed event missed.
         let engine = FakeSyncEngine()
         engine.zone = [try SyncRecord.entry(entry("keep")),
                        try SyncRecord.entry(entry("gone"))]
         let service = makeService(engine: engine, collection: collection)
         await service.start()
         try await settle()
-        engine.zone = [try SyncRecord.entry(entry("keep"))]
+        engine.zone = [try SyncRecord.entry(entry("keep")),
+                       SyncRecord.tombstone(type: .entry, recordName: "gone")]
 
         await service.refresh()
         try await settle()
@@ -755,6 +769,73 @@ final class SyncServiceTests: XCTestCase {
         try await settle()
 
         XCTAssertEqual(engine.sentUpserts.filter { $0.type == .sealed }.map(\.recordName), ["s1"])
+    }
+
+    /// The device case the suite never expressed: a record whose ONLY arrival was the change feed.
+    ///
+    /// Every other reconcile test puts the record in `engine.zone` and then calls `start()`, so
+    /// `fetchAll` enters it into `knownRemote` — the fixture pre-seeds the very guard under test.
+    /// A record delivered by the feed is written to disk but never entered into `knownRemote`
+    /// (its only writer is `vanished`'s defer), so `vanished` classifies it as never-uploaded and
+    /// refuses to delete it. Measured on device 2026-07-30: an iPad held 57 entries against the
+    /// iPhone's 56 through two foreground cycles and a pull-to-refresh.
+    func testARecordDeliveredOnlyByTheChangeFeedCanStillBeDeleted() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("keep"))
+
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("keep"))]
+        let service = makeService(engine: engine, collection: collection)
+        await service.start()
+        try await settle()
+
+        // The other device adds a card. It reaches this device ONLY through the feed — no
+        // `fetchAll` ever observes it as a live record, because it is deleted before the next one.
+        engine.zone = [try SyncRecord.entry(entry("keep")), try SyncRecord.entry(entry("fromFeed"))]
+        engine.onRemoteChange?([try SyncRecord.entry(entry("fromFeed"))], [])
+        try await settle()
+        XCTAssertTrue(collection.entries.contains { $0.id == "fromFeed" },
+                      "precondition: the feed event was applied locally")
+
+        // The other device deletes it and this device misses that feed event.
+        engine.zone = [try SyncRecord.entry(entry("keep")),
+                       SyncRecord.tombstone(type: .entry, recordName: "fromFeed")]
+        await service.refresh(reconcile: true)
+        try await settle()
+
+        XCTAssertEqual(collection.entries.map(\.id), ["keep"],
+                       "a record that arrived by feed must still be deletable by reconcile")
+    }
+
+    /// The same root cause pointed the other way: `stranded` never consults `knownRemote`, so the
+    /// record `vanished` just refused to delete is re-uploaded on the next cold launch — pushing
+    /// the deletion back out to the device that made it. A deletion that undoes itself on both
+    /// devices is worse than divergence, because divergence at least leaves one copy correct.
+    func testAFeedDeliveredRecordDeletedElsewhereIsNotResurrected() async throws {
+        defaults.set(true, forKey: SyncService.seededKey)
+        let collection = InMemoryCollectionRepository()
+        try await collection.addEntry(entry("keep"))
+
+        let engine = FakeSyncEngine()
+        engine.zone = [try SyncRecord.entry(entry("keep"))]
+        let service = makeService(engine: engine, collection: collection)
+        await service.start()
+        try await settle()
+
+        // Arrives here only through the feed — no `fetchAll` ever sees it as a live record.
+        engine.onRemoteChange?([try SyncRecord.entry(entry("fromFeed"))], [])
+        try await settle()
+
+        // Deleted on the other device, its feed event missed here. Now a cold launch.
+        let second = FakeSyncEngine()
+        second.zone = [try SyncRecord.entry(entry("keep")),
+                       SyncRecord.tombstone(type: .entry, recordName: "fromFeed")]
+        await makeService(engine: second, collection: collection).start()
+        try await settle()
+
+        XCTAssertFalse(second.sentUpserts.contains { $0.recordName == "fromFeed" },
+                       "a record deleted on another device must not be re-uploaded from this one")
     }
 
     private func entry(_ id: String) -> CollectionEntry {

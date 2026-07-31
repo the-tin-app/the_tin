@@ -114,4 +114,28 @@ final class SyncRecordTests: XCTestCase {
         XCTAssertNil(CloudKitSyncEngine.deletedRecord(recordName: "Sprocket/abc"))
         XCTAssertNil(CloudKitSyncEngine.deletedRecord(recordName: "noslash"))
     }
+
+    /// ⚠️ Why a tombstone is a SENTINEL payload and not a nil one. `.setGoal` is a live record whose
+    /// payload is legitimately nil — "the record's existence IS the fact" — so treating nil as a
+    /// tombstone would erase every chased set on the next launch.
+    func testALiveSetGoalIsNotMistakenForATombstone() {
+        XCTAssertFalse(SyncRecord.setGoal("base1").isTombstone)
+        XCTAssertTrue(SyncRecord.tombstone(type: .setGoal, recordName: "base1").isTombstone)
+    }
+
+    /// No encoded model may collide with the sentinel, or syncing that record would delete it.
+    func testNoEncodedModelLooksLikeATombstone() throws {
+        XCTAssertFalse(try SyncRecord.entry(entry).isTombstone)
+        XCTAssertFalse(try SyncRecord.group(group).isTombstone)
+        XCTAssertFalse(try SyncRecord.want(cardId: "base1-4", WantEntry()).isTombstone)
+    }
+
+    /// A tombstone is consumed as the internal deletion shape, which is what carries `recordName`
+    /// into `applyRemote` — the payload must be dropped, not forwarded.
+    func testATombstoneReadsBackAsADeletion() {
+        let deletion = SyncRecord.tombstone(type: .entry, recordName: "e1").asDeletion
+        XCTAssertNil(deletion.payload)
+        XCTAssertEqual(deletion.recordName, "e1")
+        XCTAssertEqual(deletion.type, .entry)
+    }
 }
