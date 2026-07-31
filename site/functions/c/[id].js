@@ -47,10 +47,10 @@ ${ogImage}
 <body>
 <main class="card">
   ${cardArt}
-  <h1>${esc(name || "A Pokémon card")}</h1>
+  <h1>${esc(name || "A trading card")}</h1>
   <p class="set">${esc(set)}</p>
-  <a class="cta" href="${esc(origin)}/">Coming to the App Store</a>
-  <p class="foot">Shared from <a href="${esc(origin)}/">The Tin</a> — free, open-source Pokémon TCG tracker.</p>
+  <a class="cta" href="https://apps.apple.com/app/id6788516920">Download on the App Store</a>
+  <p class="foot">Shared from <a href="${esc(origin)}/">The Tin</a> — free, open-source TCG card tracker.</p>
 </main>
 </body>
 </html>`;
