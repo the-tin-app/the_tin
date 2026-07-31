@@ -1,11 +1,45 @@
-# The Tin
+<h1 align="center">The Tin</h1>
 
-**A free, open source collector app — for collectors, by collectors.**
+<p align="center">
+  <strong>A free, open source collector app — for collectors, by collectors.</strong><br>
+  Scan a card, know what it's worth, keep your collection yours.
+</p>
+
+<p align="center">
+  <a href="https://apps.apple.com/app/id6788516920">
+    <img src="site/assets/app-store-badge.svg" alt="Download on the App Store" height="56">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://apps.apple.com/app/id6788516920"><img alt="App Store" src="https://img.shields.io/badge/iOS-App%20Store-0D96F6?logo=apple&logoColor=white"></a>
+  <img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
+  <img alt="Platform" src="https://img.shields.io/badge/iOS-17.0%2B-lightgrey">
+  <img alt="Price" src="https://img.shields.io/badge/price-free%20forever-brightgreen">
+</p>
+
+<p align="center">
+  <img src="site/assets/shot-scan.jpg" alt="Scanning a card with the camera" width="20%">
+  <img src="site/assets/shot-tin.jpg" alt="A collection organized into dividers, priced daily" width="20%">
+  <img src="site/assets/shot-prices.jpg" alt="Raw, condition and graded prices for one card" width="20%">
+  <img src="site/assets/shot-grade.jpg" alt="Price history and the grading-ROI estimate" width="20%">
+</p>
+
+> Card artwork and card names are blurred in these captures. The app itself shows them
+> normally — see [Trademarks & fair use](#license) for why.
+
+---
+
+**No ads. No paywall. No subscription. No account.** Every competitor meters something —
+the scanner, price history, the export button. The Tin doesn't, and the code is here so
+you can check.
 
 The Tin is an iOS app for tracking a trading card collection: scan cards with the
 camera (entirely on-device), organize them into groups, follow their market value
 over time, and know what your collection is worth — without ads, subscriptions,
 or your collection leaving your phone.
+
+**[⬇︎ Download on the App Store](https://apps.apple.com/app/id6788516920)** · iOS 17+, iPhone and iPad
 
 ## Why "The Tin"?
 
@@ -32,12 +66,12 @@ collector-grade tracker where everything works, free, forever:
 
 ## Status & roadmap
 
-The Tin is currently in beta on iOS via TestFlight — **we're looking for beta
-testers!** If you'd like to help shake out bugs before the 1.0 release,
-[open an issue](../../issues) introducing yourself and we'll get you an invite.
+**v1.0 is live on the App Store** as of 2026-07-31 — iPhone and iPad, iOS 17+.
+[Download it here](https://apps.apple.com/app/id6788516920).
 
-Once version 1.0 ships on the iOS App Store, the next step is an Android
-translation of the app, released on Google Play.
+Next up: multi-device sync over iCloud, trading tools, and an Android translation
+of the app on Google Play. Bugs and feature requests are welcome in
+[issues](../../issues) — early reports get acted on fast.
 
 ## Features
 
@@ -131,10 +165,8 @@ The repo follows a three-tier branch doctrine:
 feature/* ──PR──▶ staging ──promotion──▶ main
 ```
 
-- **`main` — major versions only (`1.X.X`).** While The Tin is in beta, a main
-  version is cut to TestFlight; once we leave beta, main versions are the App
-  Store releases. Each release is tagged `vX.Y.Z` on the exact commit that was
-  archived.
+- **`main` — App Store releases.** Each release is tagged on the exact commit that
+  was archived and reviewed — `v1.0` points at the binary Apple approved.
 - **`staging` — TestFlight builds.** The long-lived integration branch that
   internal testers run. Every TestFlight upload is archived from `staging` and
   tagged with its release and TestFlight build number (`vX.Y.Z-buildN`), so any
@@ -151,6 +183,14 @@ Code is licensed under [AGPL-3.0](LICENSE). The name "The Tin", the app icon,
 and the App Store presence are not part of the license — see
 [TRADEMARK.md](TRADEMARK.md). If you distribute a modified version, rebrand it.
 
+### Trademarks & fair use
+
 The Tin is an independent fan project. It is not affiliated with, endorsed by,
 or sponsored by Nintendo, The Pokémon Company, or Creatures Inc. Pokémon and all
-card images and names are trademarks of their respective owners.
+card images and names are trademarks of their respective owners, used here only
+to identify the cards a collector owns.
+
+Card artwork and card names are blurred in the screenshots above and in the App
+Store listing. The app displays them normally — a collection tracker that can't
+show you your cards would be useless. The blurring is a deliberate choice about
+*promotional* material, not a limitation of the app.
