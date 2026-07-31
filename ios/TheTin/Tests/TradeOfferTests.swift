@@ -51,6 +51,27 @@ final class TradeOfferBuilderTests: XCTestCase {
         XCTAssertTrue(TradeOfferBuilder.suggest(taking: 100, from: [c("a", 0)]).isEmpty)
     }
 
+    /// A list worth less than their side reaches every target by offering everything, so 100/95/90
+    /// were three rows naming one pile — three choices that aren't choices. One row, and it says
+    /// what it actually comes to.
+    func testAListThatCannotReachTheTargetOffersOneRow() {
+        let out = TradeOfferBuilder.suggest(taking: 1_000, from: [c("a", 400), c("b", 300)])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].total, 700, accuracy: 0.001)
+        XCTAssertEqual(out[0].achieved, 0.7, accuracy: 0.001)
+        XCTAssertNotEqual(Int((out[0].achieved * 100).rounded()), out[0].percent,
+                          "the row must be able to tell the user it fell short")
+    }
+
+    /// …and distinct piles still get their own row. Deduping must not collapse real choices.
+    func testDistinctOffersAreAllKept() {
+        let out = TradeOfferBuilder.suggest(taking: 100, from: [c("a", 100), c("b", 95), c("c", 90)])
+        XCTAssertEqual(out.count, 3)
+        for s in out {
+            XCTAssertEqual(Int((s.achieved * 100).rounded()), s.percent)
+        }
+    }
+
     func testNoCandidateIsUsedTwiceInOneOffer() {
         let out = TradeOfferBuilder.suggest(taking: 1_000, from: [c("a", 10), c("b", 20)],
                                            percents: [100])
@@ -160,7 +181,8 @@ final class TradeSeedingTests: XCTestCase {
         s.offer(owned[0]); s.offer(owned[1])
         XCTAssertEqual(s.yours.lines.count, 2)
 
-        s.apply(TradeOfferBuilder.Suggestion(percent: 100, entryIds: ["e2"], total: 30.1), from: owned)
+        s.apply(TradeOfferBuilder.Suggestion(percent: 100, entryIds: ["e2"], total: 30.1, achieved: 1),
+                from: owned)
         XCTAssertEqual(s.yours.lines.map(\.id), ["e2"])
     }
 }

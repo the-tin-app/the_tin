@@ -155,8 +155,9 @@ struct TradeSessionView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Offer \(s.percent)%").font(.body.weight(.medium))
-                                Text("\(s.entryIds.count) \(s.entryIds.count == 1 ? "card" : "cards") from your trade list")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                Text(offerCaption(s))
+                                    .font(.caption)
+                                    .foregroundStyle(reached(s) == s.percent ? Color.secondary : Color.orange)
                             }
                             Spacer()
                             Text(currency(s.total)).monospacedDigit().foregroundStyle(.secondary)
@@ -170,6 +171,20 @@ struct TradeSessionView: View {
                 Text("Picks from your For Trade list to reach that share of what you're taking. Tapping one replaces your side.")
             }
         }
+    }
+
+    private func reached(_ s: TradeOfferBuilder.Suggestion) -> Int {
+        Int((s.achieved * 100).rounded())
+    }
+
+    /// Says what the pile actually comes to whenever that isn't the share on the label — a list
+    /// worth less than their side can't reach 100%, and a row that never admits it is a claim.
+    private func offerCaption(_ s: TradeOfferBuilder.Suggestion) -> String {
+        let n = s.entryIds.count
+        let cards = "\(n) \(n == 1 ? "card" : "cards")"
+        return reached(s) == s.percent
+            ? "\(cards) from your trade list"
+            : "\(cards) — all your list reaches is \(reached(s))%"
     }
 
     // MARK: Columns
@@ -210,42 +225,46 @@ struct TradeSessionView: View {
 
     @ViewBuilder private func lineRow(_ session: TradeSession, line: TradeLine, mine: Bool) -> some View {
         let card = try? store.card(id: line.entry.cardId)
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(card?.name ?? line.entry.cardId).font(.body)
-                    // What makes a shared list worth opening in the app: which of these you're
-                    // actually hunting, answered without reading fourteen names.
-                    if !mine, wants?.isWanted(line.entry.cardId) == true {
-                        Image(systemName: "heart.fill")
-                            .font(.caption2).foregroundStyle(.pink)
-                            .accessibilityLabel("On your wanted list")
+        // Their condition picker gets a row of its own. Five segments beside a price and a stepper
+        // is wider than an iPhone, and the ×N label used to be drawn OUTSIDE the stepper's bounds
+        // by a fixed offset, so "DMG" and "×1" landed on top of each other as `DMG⊗1`.
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(card?.name ?? line.entry.cardId).font(.body)
+                        // What makes a shared list worth opening in the app: which of these you're
+                        // actually hunting, answered without reading fourteen names.
+                        if !mine, wants?.isWanted(line.entry.cardId) == true {
+                            Image(systemName: "heart.fill")
+                                .font(.caption2).foregroundStyle(.pink)
+                                .accessibilityLabel("On your wanted list")
+                        }
                     }
+                    if mine { Text(subtitle(line)).font(.caption).foregroundStyle(.secondary) }
                 }
-                if mine {
-                    Text(subtitle(line)).font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Picker("Condition", selection: conditionBinding(session, line: line)) {
-                        ForEach(CardCondition.allCases) { Text($0.rawValue).tag($0) }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 3) {
+                    if let v = session.pricing.lineValue(line) {
+                        Text(currency(v)).monospacedDigit()
+                    } else {
+                        Text("No price").font(.caption).foregroundStyle(.orange)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 3) {
-                if let v = session.pricing.lineValue(line) {
-                    Text(currency(v)).monospacedDigit()
-                } else {
-                    Text("No price").font(.caption).foregroundStyle(.orange)
-                }
-                Stepper("×\(line.copies)", value: copiesBinding(session, line: line, mine: mine),
-                        in: 1...(mine ? line.entry.qty : 99))
-                    .labelsHidden()
-                    .overlay(alignment: .leading) {
+                    HStack(spacing: 4) {
                         Text("×\(line.copies)").font(.caption).monospacedDigit()
-                            .offset(x: -22)
+                        Stepper("Copies", value: copiesBinding(session, line: line, mine: mine),
+                                in: 1...(mine ? line.entry.qty : 99))
+                            .labelsHidden()
                     }
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+            if !mine {
+                Picker("Condition", selection: conditionBinding(session, line: line)) {
+                    ForEach(CardCondition.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
         }
     }

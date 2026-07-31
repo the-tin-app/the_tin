@@ -31,14 +31,53 @@ struct ScanTabContainer: View {
     /// This container sits directly in `RootView.body` beside the toast and funding modifiers, so
     /// a re-render mid-scan needs nothing more than a toast. Diagnosed on an iPad, 2026-07-27.
     @State private var model: ScanModel?
+    @State private var reviewingStaged = false
 
     var body: some View {
         content
             .navigationTitle("Scan")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $reviewingStaged) {
+                NavigationStack {
+                    StagingReviewView(staging: staging, collection: collection, store: store, wants: wants)
+                }
+            }
     }
 
+    /// The tray is the scanner's, but the scanner is not its only writer: executing a trade puts
+    /// the cards you took straight into it. Without this, a user who never downloads the ~500 MB
+    /// pack has their traded-for cards sitting safely on disk with no surface anywhere in the app.
     @ViewBuilder private var content: some View {
+        if case .ready = pack.phase {
+            packContent
+        } else if staging.drafts.isEmpty {
+            packContent
+        } else {
+            VStack(spacing: 0) {
+                stagedBanner
+                packContent.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var stagedBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "tray.full").imageScale(.large).foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("^[\(staging.drafts.count) card](inflect: true) waiting")
+                    .font(.subheadline.bold())
+                Text("Cards you traded for. File them into your tin.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Review") { reviewingStaged = true }
+                .buttonStyle(.borderedProminent).controlSize(.small)
+        }
+        .padding(.horizontal).padding(.vertical, 10)
+        .background(.thinMaterial)
+    }
+
+    @ViewBuilder private var packContent: some View {
         switch pack.phase {
         case .checking:
             TinLoadingView(label: "Preparing scanner…").task { await pack.refresh() }

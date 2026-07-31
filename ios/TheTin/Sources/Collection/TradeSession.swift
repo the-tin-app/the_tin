@@ -128,10 +128,14 @@ enum TradeOfferBuilder {
     }
 
     struct Suggestion: Equatable, Identifiable {
-        /// Share of what you're taking that this offer gives back — 100, 95, 90.
+        /// Share of what you're taking that this offer AIMS at — 100, 95, 90.
         var percent: Int
         var entryIds: [String]
         var total: Double
+        /// What the pile is actually worth as a share of what you're taking, 0…1. Below `percent`
+        /// when your trade list can't reach it — the row has to say so, or it claims a share it
+        /// isn't offering.
+        var achieved: Double
         var id: Int { percent }
     }
 
@@ -142,7 +146,9 @@ enum TradeOfferBuilder {
         guard taking > 0, !candidates.isEmpty else { return [] }
         let ordered = candidates.filter { $0.value > 0 }.sorted { $0.value > $1.value }
         guard !ordered.isEmpty else { return [] }
-        return percents.map { percent in
+        var out: [Suggestion] = []
+        var seen = Set<String>()
+        for percent in percents {
             let target = taking * Double(percent) / 100
             var picked: [Candidate] = []
             var total = 0.0
@@ -156,8 +162,14 @@ enum TradeOfferBuilder {
                abs(total + closer.value - target) < abs(total - target) {
                 picked.append(closer); total += closer.value
             }
-            return Suggestion(percent: percent, entryIds: picked.map(\.entryId), total: total)
+            // Rows naming the same pile are not choices. A list worth less than their side returns
+            // *everything* at 100, 95 and 90 alike, which reads as three options and is one — keep
+            // the first and let `achieved` say how far it actually lands.
+            guard seen.insert(picked.map(\.entryId).sorted().joined(separator: "\u{1}")).inserted else { continue }
+            out.append(Suggestion(percent: percent, entryIds: picked.map(\.entryId),
+                                  total: total, achieved: total / taking))
         }
+        return out
     }
 }
 
