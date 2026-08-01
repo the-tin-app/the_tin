@@ -57,3 +57,5 @@ CLAUDE.md
 .impeccable/live/deferred-svelte-component-accepts.json
 .impeccable/live/*.png
 # impeccable-ignore-end
+# wrangler local cache (holds the Cloudflare account id — public repo)
+site/.wrangler/
