@@ -55,6 +55,19 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertFalse(spotlights.contains { $0.cardIds.contains("s1-3") })
     }
 
+    /// The Connections strip renders every card of a connection in a NON-lazy HStack, so an
+    /// uncapped artist spotlight (topArtists returns the most prolific illustrators — hundreds of
+    /// cards each) built hundreds of tiles at once and jetsam killed the app on a fast scroll.
+    func testNoConnectionExceedsTheCardCap() throws {
+        let store = try makeStore()
+        for c in ConnectionsBuilder.build(store: store, maxCards: 1) {
+            XCTAssertLessThanOrEqual(c.cardIds.count, 1, "\(c.id) ignored the cap")
+        }
+        for c in ConnectionsBuilder.build(store: store) {
+            XCTAssertLessThanOrEqual(c.cardIds.count, ConnectionsBuilder.maxCardsPerConnection)
+        }
+    }
+
     func testBuildIncludesGalleryGroupWithAtLeastTwoCards() throws {
         let connections = ConnectionsBuilder.build(store: try makeStore())
         let galleries = connections.filter { $0.kind == .gallery }

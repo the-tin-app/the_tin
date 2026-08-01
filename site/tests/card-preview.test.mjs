@@ -16,9 +16,10 @@ assert.ok(html.includes("Charizard") && html.includes("Base Set"), "title has na
 // Raw angle brackets / quotes from input are escaped, never emitted literally in an attribute
 assert.ok(!html.includes("<friends>"), "input HTML-escaped");
 assert.ok(html.includes("&lt;friends&gt;"), "escaped entity present");
-// Install CTA copy + link home
-assert.ok(html.includes("Coming to the App Store"), "install CTA copy");
-assert.ok(html.includes('href="https://thetinapp.com/"'), "CTA links home");
+// Install CTA points at the live listing (approved 2026-07-31); footer still links home
+assert.ok(html.includes("Download on the App Store"), "install CTA copy");
+assert.ok(html.includes('href="https://apps.apple.com/app/id6788516920"'), "CTA links to App Store");
+assert.ok(html.includes('href="https://thetinapp.com/"'), "footer links home");
 // Missing params still render (no throw)
 assert.doesNotThrow(() => renderCardHTML({ id: "x", name: "", set: "", img: "", origin: "https://thetinapp.com" }));
 

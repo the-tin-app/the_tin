@@ -44,6 +44,12 @@ private struct MainTabView: View {
     @State private var pack: ScannerPackModel
     @State private var searchModel: SearchModel?
     @State private var showingSettings = false
+    /// The scan tray, owned HERE rather than in the Scan tab.
+    ///
+    /// A trade's incoming cards land in it too, and `ScanStagingStore.persisted()` reads the same
+    /// file — so two instances would each hold half the tray and the last write would erase the
+    /// other's cards. One instance, two writers.
+    @State private var staging = ScanStagingStore.persisted()
 
     init(store: CatalogStore, collection: CollectionModel, wants: WantsModel?, model: AppModel) {
         self.store = store
@@ -70,6 +76,7 @@ private struct MainTabView: View {
     @State private var discoverPath = NavigationPath()
     @State private var consumedRouteToken = 0
     @State private var consumedCardToken = 0
+    @State private var consumedTradeToken = 0
     @State private var consumedIntentToken = 0
     @State private var consumedImportToken = 0
 
@@ -135,6 +142,11 @@ private struct MainTabView: View {
                                },
                                goals: model.setGoals,
                                openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) },
+                               staging: staging,
+                               backup: model.backup,
+                               // Filing the cards you just took is the obvious next step, so land
+                               // on the tray rather than leaving it to be discovered later.
+                               onExecutedTrade: { selection = .scan },
                                // The gear belongs to CollectionView's own toolbar. Applying it
                                // here as a second `.toolbar` is what lost it on iPadOS 18.
                                onOpenSettings: { showingSettings = true })
@@ -147,7 +159,7 @@ private struct MainTabView: View {
 
             NavigationStack {
                 ScanTabContainer(store: store, collection: collection, wants: model.wants,
-                                 pack: pack, network: model.network)
+                                 pack: pack, network: model.network, staging: staging)
                     .fundingBanner(model: model, store: store, pack: pack)
             }
             .appToasts(model: model, pack: pack, showsScannerToast: false)
@@ -164,6 +176,13 @@ private struct MainTabView: View {
         .onChange(of: model.importRouteToken) { consumeImportRoute() }
         .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
+        .onChange(of: model.tradeRouteToken) { consumeTradeRoute() }
+        // A shared WANT link belongs in the browser. `UIApplication.open` called from the app that
+        // owns the universal link opens Safari rather than bouncing back here — which is the whole
+        // point, since the association file cannot tell a want link from a trade link.
+        .onChange(of: model.externalURLToken) {
+            if let url = model.pendingExternalURL { UIApplication.shared.open(url) }
+        }
         .onChange(of: model.intentRouteToken) { consumeIntentRoute() }
         // Collection writes can fail from any tab (card detail lives under Browse/Search too),
         // so the failure alert hangs off the TabView, not the Tin stack.
@@ -221,6 +240,19 @@ private struct MainTabView: View {
         guard (try? store.card(id: id)) != nil else { return }
         selection = .tin
         tinPath.append(CardID(raw: id))
+    }
+
+    /// Someone's shared trade list, opened in the app: land on a live trade with their side
+    /// already filled in.
+    ///
+    /// The payload travels ON the route rather than being read out of `AppModel` by the screen, so
+    /// one destination serves both a deep link and a trade you started yourself with nothing in it.
+    private func consumeTradeRoute() {
+        guard model.tradeRouteToken > consumedTradeToken,
+              let offer = model.pendingTradeOffer else { return }
+        consumedTradeToken = model.tradeRouteToken
+        selection = .tin
+        tinPath.append(TradeSessionRoute(offer: offer))
     }
 }
 

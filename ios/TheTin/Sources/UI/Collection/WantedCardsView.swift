@@ -21,6 +21,7 @@ struct WantedCardsView: View {
     @State private var exportName = "the-tin-wishlist"
     /// Rebuilt when the wishlist changes rather than per body pass — see `TradeListView`.
     @State private var shareLink: (url: URL, included: Int)?
+    @State private var sharing: SharePayload?
 
     // `.top` so a tile that carries the "In a set you collect" caption doesn't force a blank
     // reserved line onto every tile that doesn't — see the note in `SetsListView`.
@@ -91,6 +92,7 @@ struct WantedCardsView: View {
             exportDoc = nil
         }
         .printSheetFlow($printRequest)
+        .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
         // A new catalog artifact can rename a set or reprice every card, and the cache keys off
         // the wishlist alone — so the swap has to invalidate it explicitly, exactly as
         // CollectionView does for `CardSearchIndex`.
@@ -146,6 +148,13 @@ struct WantedCardsView: View {
                 }
             }
             .font(.subheadline)
+            // The share button is an icon now, so the "first N cards" notice that used to be the
+            // menu item's own text has nowhere else to live. Without it a 71-card wishlist shares
+            // 67 and says nothing — which is how it was found on device, by counting the web page.
+            if let shareLink, shareLink.included < r.allCards.count {
+                Text("A shared link fits the \(shareLink.included) most valuable of these.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -200,24 +209,28 @@ struct WantedCardsView: View {
         }
     }
 
-    /// Export (CSV data) and Print (PDF sheet) under one share icon. The section titles say what
-    /// each produces, so the difference is visible before tapping.
+    /// Export (CSV data) and Print (PDF sheet) under one icon. The section titles say what each
+    /// produces, so the difference is visible before tapping.
+    ///
+    /// ⚠️ **Not a `ShareLink`, and not inside the menu** — see `ShareSheet`. This one shipped
+    /// broken in v1.0: from build 23 (when iPad shipped) until 2026-08-01, "Link to this list" was
+    /// unusable on an iPad, while working fine on every iPhone.
     @ToolbarContentBuilder private func shareMenu(r: Resolved, disabled: Bool) -> some ToolbarContent {
         ToolbarItem {
+            // A link a friend can open without the app — the thing you actually paste into
+            // Discord before a meetup. Carries card ids only; see `ShareList`.
+            Button {
+                if let shareLink { sharing = SharePayload(url: shareLink.url) }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .accessibilityLabel((shareLink?.included ?? 0) < r.allCards.count
+                                ? "Share a link to the first \(shareLink?.included ?? 0) cards"
+                                : "Share a link to this list")
+            .disabled(disabled || shareLink == nil)
+        }
+        ToolbarItem {
             Menu {
-                // A link a friend can open without the app — the thing you actually paste into
-                // Discord before a meetup. Carries card ids only; see `ShareList`.
-                Section("Share a link") {
-                    if let shareLink {
-                        ShareLink(item: shareLink.url,
-                                  subject: Text("My wishlist"),
-                                  message: Text("My wishlist — from The Tin")) {
-                            Text(shareLink.included < r.allCards.count
-                                 ? "Link (first \(shareLink.included) cards)"
-                                 : "Link to this list")
-                        }
-                    }
-                }
                 Section("Export as CSV (spreadsheet)") {
                     Button("All cards") { exportCSV(r, priority: nil) }
                     ForEach(WantPriority.allCases) { p in
@@ -230,8 +243,8 @@ struct WantedCardsView: View {
                         Button("\(p.label) priority only") { printSheet(r, priority: p) }
                     }
                 }
-            } label: { Image(systemName: "square.and.arrow.up") }
-            .accessibilityLabel("Share wishlist")
+            } label: { Image(systemName: "ellipsis.circle") }
+            .accessibilityLabel("More")
             .disabled(disabled)
         }
     }

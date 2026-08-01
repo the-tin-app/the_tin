@@ -72,8 +72,33 @@ final class AppModel {
     /// request — a plain `onChange` on the URL wouldn't fire the second time.
     private(set) var importRouteToken = 0
 
-    /// Parse a universal link. Only `/c/<id>` routes; anything else is ignored so the web
-    /// pages (home/privacy/support) keep opening in the browser.
+    /// Someone's shared trade list, opened in the app instead of in a browser — the cards they
+    /// said they'll part with, ready to become the other column of a trade.
+    ///
+    /// Same token pattern as the card route, so opening the SAME link twice is two requests.
+    private(set) var tradeRouteToken = 0
+    private(set) var pendingTradeOffer: ShareList.Payload?
+
+    func openTradeOffer(_ payload: ShareList.Payload) {
+        pendingTradeOffer = payload
+        tradeRouteToken += 1
+    }
+
+    /// A universal link the app owns but has nothing to do with, to be handed back to the browser.
+    ///
+    /// The open itself belongs to the view layer — this model deliberately imports no UIKit, so
+    /// the decision stays testable without a running app.
+    private(set) var externalURLToken = 0
+    private(set) var pendingExternalURL: URL?
+
+    func openInBrowser(_ url: URL) {
+        pendingExternalURL = url
+        externalURLToken += 1
+    }
+
+    /// Parse a universal link. `/c/<id>` opens a card and `/l?d=…` opens a shared trade list;
+    /// anything else is ignored so the web pages (home/privacy/support) keep opening in the
+    /// browser.
     ///
     /// Also the entry point for FILES opened in The Tin. `CFBundleDocumentTypes` declares CSV, and
     /// a file URL has no `/c/<id>` shape — without this branch it would fall through the guard
@@ -86,6 +111,29 @@ final class AppModel {
             return
         }
         let parts = url.pathComponents   // e.g. ["/", "c", "base1-4"]
+        if parts.count >= 2, parts[1] == "l" {
+            // Only a TRADE payload opens a trade. A `.want` link is what somebody is looking FOR,
+            // and seeding it as "what they'll give you" would invert the whole screen.
+            //
+            // ⚠️ Refusing it is NOT enough, and the comment here used to claim it was: "it keeps
+            // falling through to the web page." It does not. The association file claims `/l`
+            // wholesale — it cannot see the payload, which is gzipped inside `d` — so iOS opens
+            // the app for a want link too, and a bare `return` leaves the user staring at
+            // whatever screen they were on. Found on device 2026-08-01, one day after the
+            // association file went live; before that the link opened Safari and worked.
+            //
+            // So a want link is handed BACK to the browser explicitly. The web page renders it
+            // properly and that remains the right destination — it just has to be asked for now.
+            guard let d = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "d" })?.value,
+                  let payload = try? ShareList.decode(d) else { return }
+            if payload.k == .trade {
+                openTradeOffer(payload)
+            } else {
+                openInBrowser(url)
+            }
+            return
+        }
         guard parts.count >= 3, parts[1] == "c", !parts[2].isEmpty else { return }
         openCard(id: parts[2])
     }

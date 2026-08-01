@@ -179,7 +179,17 @@ struct GroupDetailView: View {
             if let group {
                 ToolbarItem {
                     Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
-                        label: { Label("Print sheet…", systemImage: "printer") }
+                        label: {
+                            // Spelled out as an HStack, not a `Label` + `.labelStyle(.titleAndIcon)`:
+                            // the toolbar overrides the label style and renders icon-only, which is
+                            // exactly the problem — a lone printer glyph reads as "print the screen"
+                            // when what it makes is a shareable PDF price list of this divider.
+                            HStack(spacing: 4) {
+                                Image(systemName: "printer")
+                                Text("Trade sheet")
+                            }
+                        }
+                        .accessibilityLabel("Trade sheet")
                         .disabled(model.entries(in: group.id).isEmpty)
                 }
             }

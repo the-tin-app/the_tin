@@ -19,7 +19,7 @@ final class CardDetailModel {
     private(set) var variants: [VariantPrice] = []
     private(set) var matrix: [MatrixPrice] = []
     private(set) var gradedByPrinting: [GradedPrintingPrice] = []
-    let gradedSales: [GradedSale]
+    private(set) var gradedSales: [GradedSale] = []
     private(set) var population: [PopulationRow] = []
     /// Population grouped by grading company (PSA/CGC/Beckett/SGC) for the picker-driven section.
     /// `population` above stays PSA-only — it backs the price-based "Grade it?" ROI, which has no
@@ -41,30 +41,85 @@ final class CardDetailModel {
     private let store: CatalogStore
     private let history: PriceHistoryProviding
 
+    /// `init` does NO catalog work. It used to run twelve synchronous GRDB queries, and it is
+    /// constructed inside a `navigationDestination` closure — so every push paid all twelve on the
+    /// main thread, mid-transition. That is a latent watchdog hang (`0x8BADF00D`), which is
+    /// uncatchable and never reaches Crashlytics, and it was the standing suspect for the build-21
+    /// hang whose faulting stack was a `NavigationStack` push. `load()` does the reads off-main.
     init(store: CatalogStore, card: CardRecord, history: PriceHistoryProviding) {
         self.card = card
         self.store = store
         self.history = history
         self.tier = CatalogTier(rawValue: AppConfig.catalogTier) ?? .average
-        price = try? store.price(cardId: card.id)
-        conditions = (try? store.conditionPrices(cardId: card.id)) ?? []
-        variants = (try? store.variantPrices(cardId: card.id)) ?? []
-        matrix = (try? store.matrixPrices(cardId: card.id)) ?? []
-        gradedByPrinting = (try? store.gradedPrintingPrices(cardId: card.id)) ?? []
-        gradedSales = (try? store.gradedSales(cardId: card.id)) ?? []
-        population = (try? store.population(cardId: card.id)) ?? []
-        populationGroups = (try? store.populationByGrader(cardId: card.id)) ?? []
-        deltas = (try? store.deltas(cardId: card.id)) ?? []
+    }
+
+    /// Everything the detail screen reads from the catalog, gathered in one off-main hop.
+    private struct Loaded: Sendable {
+        var setName: String?
+        var year: String?
+        var price: PriceRecord?
+        var conditions: [ConditionPrice] = []
+        var variants: [VariantPrice] = []
+        var matrix: [MatrixPrice] = []
+        var gradedByPrinting: [GradedPrintingPrice] = []
+        var gradedSales: [GradedSale] = []
+        var population: [PopulationRow] = []
+        var populationGroups: [GraderPopulation] = []
+        var deltas: [DeltaRecord] = []
+        var availableConditions: [Condition] = []
+        var availableGrades: [Grade] = []
+    }
+
+    private var isLoaded = false
+
+    /// Idempotent — `.task` re-fires whenever the view reappears, and a second full read of the
+    /// catalog per back-swipe is exactly the cost this move was meant to remove.
+    func load() async {
+        guard !isLoaded else { return }
+        let (store, card, tier) = (self.store, self.card, self.tier)
+        let out = await Task.detached(priority: .userInitiated) {
+            CardDetailModel.read(store: store, card: card, tier: tier)
+        }.value
+
+        setName = out.setName
+        year = out.year
+        price = out.price
+        conditions = out.conditions
+        variants = out.variants
+        matrix = out.matrix
+        gradedByPrinting = out.gradedByPrinting
+        gradedSales = out.gradedSales
+        population = out.population
+        populationGroups = out.populationGroups
+        deltas = out.deltas
+        availableConditions = out.availableConditions
+        availableGrades = out.availableGrades
+        overlayCondition = out.availableConditions.contains(.nearMint) ? .nearMint : nil
+        overlayGrade = out.availableGrades.first   // highest available grade, or nil
+        isLoaded = true
+    }
+
+    nonisolated private static func read(store: CatalogStore, card: CardRecord,
+                                         tier: CatalogTier) -> Loaded {
+        var out = Loaded()
+        out.price = try? store.price(cardId: card.id)
+        out.conditions = (try? store.conditionPrices(cardId: card.id)) ?? []
+        out.variants = (try? store.variantPrices(cardId: card.id)) ?? []
+        out.matrix = (try? store.matrixPrices(cardId: card.id)) ?? []
+        out.gradedByPrinting = (try? store.gradedPrintingPrices(cardId: card.id)) ?? []
+        out.gradedSales = (try? store.gradedSales(cardId: card.id)) ?? []
+        out.population = (try? store.population(cardId: card.id)) ?? []
+        out.populationGroups = (try? store.populationByGrader(cardId: card.id)) ?? []
+        out.deltas = (try? store.deltas(cardId: card.id)) ?? []
         if tier == .expert {
-            availableConditions = (try? store.availableConditions(cardId: card.id)) ?? []
-            availableGrades = (try? store.availableGrades(cardId: card.id)) ?? []
+            out.availableConditions = (try? store.availableConditions(cardId: card.id)) ?? []
+            out.availableGrades = (try? store.availableGrades(cardId: card.id)) ?? []
         }
-        overlayCondition = availableConditions.contains(.nearMint) ? .nearMint : nil
-        overlayGrade = availableGrades.first   // highest available grade, or nil
         if let set = try? store.set(id: card.setId) {
-            setName = set.name
-            if let date = set.releaseDate, date.count >= 4 { year = String(date.prefix(4)) }
+            out.setName = set.name
+            if let date = set.releaseDate, date.count >= 4 { out.year = String(date.prefix(4)) }
         }
+        return out
     }
 
     func delta(_ kind: DeltaRecord.Kind, _ key: String = "") -> DeltaRecord? {
@@ -106,6 +161,7 @@ struct CardDetailView: View {
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
     @State private var showingAddSheet = false
+    @State private var sharing: SharePayload?
     @State private var editingEntry: CollectionEntry?
     @State private var editingWishlist = false
     @State private var selectedPrinting: String?
@@ -361,11 +417,16 @@ struct CardDetailView: View {
         }
         .navigationTitle(model.card.name)
         .navigationBarTitleDisplayMode(.inline)
+        // The header (art, name, number, artist) comes straight off `card`, so it draws on the
+        // first frame and the price sections fill in behind it — the body was already written
+        // against optionals and empty arrays, so no spinner and no gating is needed.
+        .task { await model.load() }
         .task(id: "\(model.overlayCondition?.rawValue ?? "-")|\(model.overlayGrade?.rawValue ?? "-")") {
             await model.loadHistory()
         }
         .toolbar { detailToolbar }
         .sheet(item: $marketplaceURL) { SafariSheet(url: $0.url) }
+        .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
         .sheet(isPresented: $showingAddSheet) {
             if let collection {
                 NavigationStack {
@@ -421,15 +482,14 @@ struct CardDetailView: View {
             }
         }
         ToolbarItem {
-            ShareLink(
-                item: CardShareLink.url(card: model.card, setName: model.setName),
-                subject: Text(model.card.name),
-                message: Text("Check out this card on The Tin"),
-                preview: SharePreview(
-                    model.setName.map { "\(model.card.name) · \($0)" } ?? model.card.name,
-                    image: Image(systemName: "rectangle.portrait.on.rectangle.portrait")
-                )
-            ) {
+            // Not a `ShareLink` — see `ShareSheet`. This was the last one left, and it was left
+            // because it looked immune: it worked on an iPad Pro simulator while the list screens
+            // failed. That was an artefact of the SIMULATOR'S OS, not of this call site. On the
+            // real iPad (A10, iOS 18.7.9) it collapses to an ellipsis bubble and never opens.
+            Button {
+                sharing = SharePayload(url: CardShareLink.url(card: model.card,
+                                                              setName: model.setName))
+            } label: {
                 Image(systemName: "square.and.arrow.up")
             }
             .accessibilityLabel("Share card")

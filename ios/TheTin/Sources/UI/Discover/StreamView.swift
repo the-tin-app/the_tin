@@ -22,6 +22,7 @@ struct StreamView: View {
     @State private var currentIndex: Int?
     @State private var prefetcher = CardImagePrefetcher()
     @State private var wantBump = 0 // bumped on each double-tap to fire the haptic
+    @State private var sharing: SharePayload?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -51,6 +52,7 @@ struct StreamView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
         .task {
             if pager == nil {
                 pager = StreamPager(stream: stream)
@@ -65,6 +67,11 @@ struct StreamView: View {
                 Task { await pager.loadNextPage(); prefetchAround(i) }
             }
         }
+    }
+
+    /// Set name for the share link's `?set=` (the web preview renders it under the card name).
+    private func setName(of card: CardRecord) -> String? {
+        (try? store.set(id: card.setId))?.name
     }
 
     /// Warm the next several cards' high-res art so it's cached before the swipe reaches them.
@@ -103,6 +110,30 @@ struct StreamView: View {
                 }
             }
             .padding(.horizontal)
+
+            // Real buttons, not gestures: the deck's taps are already spoken for (single tap is
+            // left to the pan, double tap is Want), and these are the only VoiceOver-reachable
+            // way off this card. `CardID` resolves on whichever stack pushed the deck — Discover
+            // registers the destination for both entry points (See all, and Browse's All Cards).
+            HStack(spacing: 12) {
+                NavigationLink(value: CardID(raw: card.id)) {
+                    Label("Card details", systemImage: "info.circle")
+                }
+                // Not a `ShareLink` — see `ShareSheet`. Every one of them tested on a real iPad
+                // failed to present; this one sits in a card body rather than a toolbar, but
+                // there is no reason left to believe that saves it.
+                Button {
+                    sharing = SharePayload(url: CardShareLink.url(card: card,
+                                                                  setName: setName(of: card)))
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .accessibilityLabel("Share card")
+            }
+            .font(.subheadline)
+            .buttonStyle(.bordered)
+            .padding(.top, 4)
+
             Spacer(minLength: 0)
         }
     }

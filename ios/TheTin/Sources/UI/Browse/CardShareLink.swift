@@ -8,6 +8,12 @@ import Foundation
 enum CardShareLink {
     static let host = "thetinapp.com"
 
+    /// Stand-in for a list link that hasn't been built yet. Exists so a `ShareLink` never has to
+    /// be conditionally PRESENT — an absent toolbar item leaves a zero-size placeholder that the
+    /// iPad share popover then anchors to, which is what broke sharing on iPad entirely. The
+    /// button is disabled while this is what it holds, so it is never actually shared.
+    static let homeURL = URL(string: "https://\(host)")!
+
     static func url(card: CardRecord, setName: String?) -> URL {
         var c = URLComponents()
         c.scheme = "https"

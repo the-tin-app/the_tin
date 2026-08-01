@@ -20,7 +20,7 @@ import Gzip
 /// post would unfurl as a blank grey box. Since posting to those is the whole point, the payload
 /// goes where the crawler can see it. It still names nobody, and the route is `noindex`.
 enum ShareList {
-    enum Kind: String, Codable {
+    enum Kind: String, Codable, Hashable {
         case want, trade
 
         var title: String { self == .want ? "Want List" : "For Trade" }
@@ -28,7 +28,7 @@ enum ShareList {
 
     /// Field names are single letters because they're repeated per card. Gzip would squeeze long
     /// ones anyway, but the pre-compression size is what decides how many cards fit in a URL.
-    struct Item: Codable, Equatable {
+    struct Item: Codable, Equatable, Hashable {
         /// Card id — the only required field. Lets a recipient WITH the app deep-link to the card.
         var c: String
         /// Card name. Carried because the recipient usually doesn't have the app, and a list of
@@ -46,7 +46,7 @@ enum ShareList {
         var d: String?
     }
 
-    struct Payload: Codable, Equatable {
+    struct Payload: Codable, Equatable, Hashable {
         /// Format version, so an old link can still be read after the shape changes.
         var v: Int = 1
         var k: Kind
