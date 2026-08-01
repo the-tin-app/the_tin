@@ -51,7 +51,14 @@ final class SetDetailModelTests: XCTestCase {
                       PricePoint(date: Date(timeIntervalSince1970: 86_400), value: 92.5)]
 
         let model = CardDetailModel(store: store, card: card, history: FakeHistory(points: points))
+        // `init` reads nothing — it runs inside a `navigationDestination` closure on the main
+        // thread, where twelve synchronous GRDB queries are a watchdog hang waiting for a cold
+        // disk. `load()` does the reads off-main.
+        XCTAssertNil(model.price, "init must not touch the catalog")
+        await model.load()
         XCTAssertEqual(model.price?.rawUsd, 92.5)
+        await model.load()
+        XCTAssertEqual(model.price?.rawUsd, 92.5, "load() must be idempotent — .task re-fires on every reappear")
         await model.loadHistory()
         XCTAssertEqual(model.historyState, .loaded([PriceSeries(name: "Raw", points: points)]))
 

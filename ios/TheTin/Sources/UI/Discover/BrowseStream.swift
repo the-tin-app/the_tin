@@ -7,9 +7,11 @@ struct BrowseStream: CardStream {
     let criteria: BrowseCriteria
     let ownedIds: [String]
     var pageSize: Int = 15
+    /// Shuffles the `.relevance` order (see `CatalogStore.browse`). 0 = catalog id order.
+    var seed: Int = 0
 
     func page(_ index: Int) -> [CardRecord] {
         (try? store.browse(criteria: criteria, ownedIds: ownedIds,
-                           offset: index * pageSize, limit: pageSize)) ?? []
+                           offset: index * pageSize, limit: pageSize, seed: seed)) ?? []
     }
 }

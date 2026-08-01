@@ -95,15 +95,22 @@ struct MoversView: View {
             .pickerStyle(.segmented)
             if scope == .mine {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(signed(summary.totalImpact))
+                    // No coverage is NOT a $0.00 move. `price_delta` only carries a window once
+                    // the catalog has built that much history (30d is the long pole), and until
+                    // then a bold "+$0.00 last month" is the app asserting something it doesn't
+                    // know. An em dash says the same thing honestly.
+                    Text(hasWindowData(summary) ? signed(summary.totalImpact) : "—")
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
                         .monospacedDigit()
                         .contentTransition(.numericText())
-                        .foregroundStyle(tint(summary.totalImpact))
-                    Text(period.label).font(.subheadline).foregroundStyle(.secondary)
+                        .foregroundStyle(hasWindowData(summary) ? tint(summary.totalImpact) : .secondary)
+                    Text(hasWindowData(summary) ? period.label : "no \(period.short) data yet")
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Your tin is \(summary.totalImpact >= 0 ? "up" : "down") \(abs(summary.totalImpact).formatted(.currency(code: "USD"))) since \(period.label)")
+                .accessibilityLabel(hasWindowData(summary)
+                    ? "Your tin is \(summary.totalImpact >= 0 ? "up" : "down") \(abs(summary.totalImpact).formatted(.currency(code: "USD"))) since \(period.label)"
+                    : "No price changes for \(period.label) have reached the catalog yet")
             } else {
                 // No total to headline: these aren't your cards, so there's no holding to sum.
                 Text("Biggest movers \(period.label)")
@@ -115,6 +122,11 @@ struct MoversView: View {
     }
 
     private var ownedIds: Set<String> { Set(model.entries.map(\.cardId)) }
+
+    /// False when the catalog carries no change at all for this window — which is "we don't know
+    /// yet", not "nothing moved". The two look identical in the data (an absent `pct_30d` and a
+    /// zero one both produce no rows) and only this denominator tells them apart.
+    private func hasWindowData(_ summary: Movers.Summary) -> Bool { summary.cardsWithData > 0 }
 
     private func loadMarket() async {
         guard scope == .market else { return }
@@ -149,20 +161,22 @@ struct MoversView: View {
             .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
             .padding()
         } else if scope == .market {
+            // "Nothing moved" was a claim; an empty window is an absence of one. 30d in particular
+            // stays empty until the catalog has built a month of history behind it.
             if market.isEmpty {
-                ContentUnavailableView("Nothing moved \(period.label)", systemImage: "equal.circle",
-                                       description: Text("No catalog price changes landed for this window. Try a longer one."))
+                ContentUnavailableView("No \(period.short) data yet", systemImage: "hourglass",
+                                       description: Text("Price changes for \(period.label) haven't reached the catalog yet — they fill in as it builds history. Try a shorter window."))
             }
         } else if model.entries.isEmpty {
             ContentUnavailableView("Nothing in your tin yet", systemImage: "chart.line.uptrend.xyaxis",
                                    description: Text("Add a card and this is where you'll see what it does."))
         } else if summary.rows.isEmpty {
-            ContentUnavailableView {
-                Label("Nothing moved \(period.label)", systemImage: "equal.circle")
-            } description: {
-                Text(summary.cardsWithData == 0
-                     ? "No price changes have landed for your cards in this window yet — try a longer one, or check back after the next catalog update."
-                     : "Your cards held their value. Try a longer window.")
+            if !hasWindowData(summary) {
+                ContentUnavailableView("No \(period.short) data yet", systemImage: "hourglass",
+                                       description: Text("Price changes for \(period.label) haven't reached the catalog for your cards yet — they fill in as it builds history. Try a shorter window."))
+            } else {
+                ContentUnavailableView("Nothing moved \(period.label)", systemImage: "equal.circle",
+                                       description: Text("Your cards held their value. Try a longer window."))
             }
         }
     }
