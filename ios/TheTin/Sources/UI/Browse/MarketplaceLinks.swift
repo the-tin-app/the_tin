@@ -78,10 +78,28 @@ enum MarketplaceLinks {
     /// name (keychains, magnets, fridge art) is out of scope structurally.
     static let ebayCardCategory = "183454"
 
-    /// A listing under this fraction of the card's market price is a counterfeit or a novelty,
-    /// not a bargain. Low enough that a genuinely beaten-up copy still clears it: a heavily
-    /// played Base Set Charizard trades around a third of a clean one, and 0.25 sits under that.
-    static let huntPriceFloorFraction = 0.25
+    /// A listing under this fraction of the card's market price is a counterfeit, a novelty, or a
+    /// reprint wearing the original's collector number — not a bargain. Low enough that a
+    /// genuinely beaten-up copy still clears it: a heavily played Base Set Charizard trades around
+    /// a third of a clean one, which is where this now sits.
+    ///
+    /// **Raised from 0.25 to 0.35 on 2026-08-01, from a hand count against live eBay.** The old
+    /// value was reasoning about false negatives — "sit under a third so a real HP copy survives"
+    /// — with nothing measured about false positives. Measured, on a $850 Base Set Charizard:
+    /// a $212 floor (0.25) returned 600+ results of which roughly three in four were fakes or
+    /// mislabelled reprints; a $300 floor (0.35) cut that to about one in four, and the real
+    /// beaten-up copies the margin was protecting still showed up.
+    ///
+    /// **This is the ONLY defence, and lengthening `huntNegativeKeywords` cannot help.** Sellers
+    /// deliberately put "4/102" and "Base Set" in titles for cards that are neither — the honest
+    /// and the dishonest listing say the same words, and only the set symbol in the photo tells
+    /// them apart. Same shape as the counterfeit problem below, same and only answer: the price.
+    ///
+    /// ⚠️ One card is one data point, and a fraction of the NM price is still a heuristic. The
+    /// real fix is a floor derived from the catalog's actual `conditionPrices` for the hunt's
+    /// `minCondition` — see `docs/superpowers/specs/2026-08-01-price-alert-delivery-design.md`
+    /// §13. Deliberately deferred, not forgotten.
+    static let huntPriceFloorFraction = 0.35
 
     /// The `_udlo` floor, or nil when there shouldn't be one.
     ///

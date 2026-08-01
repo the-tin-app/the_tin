@@ -157,7 +157,7 @@ extension MarketplaceLinksTests {
     func testHuntFloorsThePriceAtAFractionOfMarket() throws {
         let i = try items(MarketplaceLinks.ebayHunt(name: "Charizard", setName: nil, number: "4",
                                                     total: nil, maxUsd: 300, marketUsd: 250))
-        XCTAssertEqual(i.first { $0.name == "_udlo" }?.value, "62.50")
+        XCTAssertEqual(i.first { $0.name == "_udlo" }?.value, "87.50")
     }
 
     /// No market price, no floor — a guessed one is worse than none. Cards priced only in EUR
@@ -174,15 +174,15 @@ extension MarketplaceLinksTests {
     func testHuntDropsTheFloorWhenItWouldReachTheBudget() throws {
         let i = try items(MarketplaceLinks.ebayHunt(name: "Charizard", setName: nil, number: "4",
                                                     total: nil, maxUsd: 50, marketUsd: 250))
-        XCTAssertNil(i.first { $0.name == "_udlo" }, "floor $62.50 above a $50 budget: empty page")
+        XCTAssertNil(i.first { $0.name == "_udlo" }, "floor $87.50 above a $50 budget: empty page")
         XCTAssertEqual(i.first { $0.name == "_udhi" }?.value, "50")
     }
 
     /// Boundary: equal is still empty-ish, so equal must drop too.
     func testHuntPriceFloorRules() {
-        XCTAssertEqual(MarketplaceLinks.priceFloor(marketUsd: 250, maxUsd: 300), 62.5)
-        XCTAssertEqual(MarketplaceLinks.priceFloor(marketUsd: 250, maxUsd: nil), 62.5)
-        XCTAssertNil(MarketplaceLinks.priceFloor(marketUsd: 250, maxUsd: 62.5))
+        XCTAssertEqual(MarketplaceLinks.priceFloor(marketUsd: 250, maxUsd: 300), 87.5)
+        XCTAssertEqual(MarketplaceLinks.priceFloor(marketUsd: 250, maxUsd: nil), 87.5)
+        XCTAssertNil(MarketplaceLinks.priceFloor(marketUsd: 250, maxUsd: 87.5))
         XCTAssertNil(MarketplaceLinks.priceFloor(marketUsd: 0, maxUsd: 300))
         XCTAssertNil(MarketplaceLinks.priceFloor(marketUsd: nil, maxUsd: 300))
     }
