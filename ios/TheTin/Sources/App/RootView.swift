@@ -174,6 +174,12 @@ private struct MainTabView: View {
         .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
         .onChange(of: model.tradeRouteToken) { consumeTradeRoute() }
+        // A shared WANT link belongs in the browser. `UIApplication.open` called from the app that
+        // owns the universal link opens Safari rather than bouncing back here — which is the whole
+        // point, since the association file cannot tell a want link from a trade link.
+        .onChange(of: model.externalURLToken) {
+            if let url = model.pendingExternalURL { UIApplication.shared.open(url) }
+        }
         .onChange(of: model.intentRouteToken) { consumeIntentRoute() }
         // Collection writes can fail from any tab (card detail lives under Browse/Search too),
         // so the failure alert hangs off the TabView, not the Tin stack.

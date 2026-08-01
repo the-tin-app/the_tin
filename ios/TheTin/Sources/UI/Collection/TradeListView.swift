@@ -98,6 +98,12 @@ struct TradeListView: View {
                 .monospacedDigit()
             Text("\(v.totalCards) \(v.totalCards == 1 ? "card" : "cards") you'll trade")
                 .font(.footnote).foregroundStyle(.secondary)
+            // See WantedCardsView: the share button is an icon, so the truncation notice that was
+            // the menu item's text has to live beside the count instead.
+            if let shareLink, shareLink.included < model.tradeEntries.count {
+                Text("A shared link fits the \(shareLink.included) most valuable of these.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if let asOf = model.priceAsOf { AsOfLabel(date: asOf) }
         }
     }

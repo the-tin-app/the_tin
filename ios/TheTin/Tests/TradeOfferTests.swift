@@ -134,12 +134,37 @@ final class TradeDeepLinkTests: XCTestCase {
         XCTAssertNil(model.pendingTradeOffer)
     }
 
+    /// …and refusing it is NOT enough. The association file claims `/l` wholesale — it cannot see
+    /// the payload — so iOS opens the app for a want link too, and a bare `return` left the user
+    /// staring at whatever screen they were on. Found on device 2026-08-01. It has to be handed
+    /// back to the browser explicitly.
+    func testAWantLinkIsHandedBackToTheBrowser() throws {
+        let model = AppModel.makeDefault(skipFirebase: true)
+        let url = try ShareList.link(kind: .want, items: [ShareList.Item(c: "swsh7-215")]).url
+        let before = model.externalURLToken
+
+        model.handleDeepLink(url)
+        XCTAssertEqual(model.externalURLToken, before + 1)
+        XCTAssertEqual(model.pendingExternalURL, url)
+    }
+
+    /// A trade link opens in the app and must NOT also be thrown at Safari.
+    func testATradeLinkIsNotHandedToTheBrowser() throws {
+        let model = AppModel.makeDefault(skipFirebase: true)
+        let url = try ShareList.link(kind: .trade, items: [ShareList.Item(c: "swsh7-215")]).url
+        model.handleDeepLink(url)
+        XCTAssertNil(model.pendingExternalURL)
+    }
+
     func testAMalformedListLinkIsIgnoredRatherThanCrashing() {
         let model = AppModel.makeDefault(skipFirebase: true)
         let before = model.tradeRouteToken
         model.handleDeepLink(URL(string: "https://thetinapp.com/l?d=notbase64url%21%21")!)
         model.handleDeepLink(URL(string: "https://thetinapp.com/l")!)
         XCTAssertEqual(model.tradeRouteToken, before)
+        // Not sent to the browser either: a link we cannot decode would render an error page, and
+        // bouncing the user out to see one is worse than doing nothing.
+        XCTAssertNil(model.pendingExternalURL)
     }
 
     /// Card links must keep working — `/l` was added beside `/c`, not in front of it.
