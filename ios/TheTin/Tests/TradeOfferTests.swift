@@ -15,6 +15,30 @@ final class TradeOfferBuilderTests: XCTestCase {
         XCTAssertEqual(out[2].entryIds, ["c"])
     }
 
+    /// Found on the simulator, not by a test: a 90% row offered $163 against a 95% row's $118 —
+    /// 130% of what was being received, under a label promising less than even. The closing move
+    /// measures nearest-to-target in BOTH directions, so when the only unused cards are large it
+    /// overshoots. A row that costs more than the row above it is not a cheaper option, it's a
+    /// trap, and the screen exists to stop someone handing over too much.
+    func testARowNeverAsksForMoreThanTheRowAboveIt() {
+        // taking 125.74 — the real case, verbatim. 90%'s target of $113 is nearer to $44 + $119
+        // than to $44 alone, so the unbounded builder took it.
+        let out = TradeOfferBuilder.suggest(taking: 125.74,
+                                            from: [c("a", 120), c("b", 118.63), c("c", 44.48)])
+        XCTAssertEqual(out.map(\.percent), [100, 95])
+        XCTAssertEqual(out[0].total, 120, accuracy: 0.01)
+        XCTAssertEqual(out[1].total, 118.63, accuracy: 0.01)
+        for s in out { XCTAssertLessThanOrEqual(s.total, 125.74) }
+    }
+
+    /// The rule is monotonic totals, not a cap — a genuinely cheaper lower row still appears.
+    func testACheaperRowStillSurvives() {
+        let out = TradeOfferBuilder.suggest(taking: 100,
+                                            from: [c("a", 50), c("b", 45), c("c", 40), c("d", 5)])
+        XCTAssertGreaterThan(out.count, 1)
+        for (a, b) in zip(out, out.dropFirst()) { XCTAssertLessThan(b.total, a.total) }
+    }
+
     /// Largest first, so the offer reads as "my two best cards" rather than as an arbitrary
     /// basket of seven — you have to justify this pile to the person across the table.
     func testFillsLargestFirst() {

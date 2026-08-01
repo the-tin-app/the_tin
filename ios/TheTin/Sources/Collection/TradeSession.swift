@@ -166,6 +166,13 @@ enum TradeOfferBuilder {
             // *everything* at 100, 95 and 90 alike, which reads as three options and is one — keep
             // the first and let `achieved` say how far it actually lands.
             guard seen.insert(picked.map(\.entryId).sorted().joined(separator: "\u{1}")).inserted else { continue }
+            // Neither is a row that asks for MORE than the row above it. `percents` descends, so
+            // every offer must cost less than the last or it isn't an option, it's a trap: the
+            // closing move is nearest-to-target and therefore symmetric, so when the only unused
+            // cards are large it overshoots — a 90% row came out at $163 against a 95% row's $118,
+            // 130% of what was being received, under a label promising less than even. Erring
+            // short is a worse offer; erring long is the screen telling you to overpay.
+            if let last = out.last, total >= last.total { continue }
             out.append(Suggestion(percent: percent, entryIds: picked.map(\.entryId),
                                   total: total, achieved: total / taking))
         }

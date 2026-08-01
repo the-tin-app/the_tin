@@ -187,12 +187,17 @@ struct TradeSessionView: View {
 
     /// Says what the pile actually comes to whenever that isn't the share on the label — a list
     /// worth less than their side can't reach 100%, and a row that never admits it is a claim.
+    ///
+    /// Both directions, because they are different sentences. Falling short is the list's limit;
+    /// landing over is the pile costing you more than the label says, and calling that "all your
+    /// list reaches is 95%" reads as an apology for a row that is in fact asking for more.
     private func offerCaption(_ s: TradeOfferBuilder.Suggestion) -> String {
         let n = s.entryIds.count
         let cards = "\(n) \(n == 1 ? "card" : "cards")"
-        return reached(s) == s.percent
-            ? "\(cards) from your trade list"
-            : "\(cards) — all your list reaches is \(reached(s))%"
+        if reached(s) == s.percent { return "\(cards) from your trade list" }
+        return reached(s) < s.percent
+            ? "\(cards) — all your list reaches is \(reached(s))%"
+            : "\(cards) — the nearest pile comes to \(reached(s))%"
     }
 
     // MARK: Columns
@@ -351,7 +356,7 @@ struct TradeSessionView: View {
 
     private func executeSummary(_ session: TradeSession) -> String {
         let out = session.yours.cardCount, inn = session.theirs.cardCount
-        return "\(out) \(out == 1 ? "card" : "cards") leave your tin, \(inn) \(inn == 1 ? "card lands" : "cards land") in the scan tray for review. You can undo it on the next screen."
+        return "\(out) \(out == 1 ? "card leaves" : "cards leave") your tin, \(inn) \(inn == 1 ? "card lands" : "cards land") in the scan tray for review. You can undo it on the next screen."
     }
 
     private func execute(_ session: TradeSession) async {
