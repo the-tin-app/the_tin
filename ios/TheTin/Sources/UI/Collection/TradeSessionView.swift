@@ -37,6 +37,9 @@ struct TradeSessionView: View {
     /// Set once the trade is written. Holds the whole plan, because undoing needs the rows as
     /// they were and the ids the plan minted — not just the knowledge that something happened.
     @State private var executed: TradePlan?
+    /// The decimal pad has no return key, so without a Done button of our own there is no way off
+    /// the cash field at all — you can't tap past it, because the rows behind it are a List.
+    @FocusState private var cashFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -71,6 +74,15 @@ struct TradeSessionView: View {
             executeSection(session)
         }
         .listStyle(.insetGrouped)
+        // Two ways off the decimal pad, because it offers none of its own: an explicit Done, and
+        // a scroll — someone reaching for the balance is already dragging.
+        .scrollDismissesKeyboard(.interactively)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { cashFocused = false }
+            }
+        }
         .sheet(isPresented: $pickingYours) {
             NavigationStack {
                 TradeOwnedPicker(model: model, store: store) { session.offer($0) }
@@ -327,6 +339,7 @@ struct TradeSessionView: View {
             TextField("0", value: cash,
                       format: .number.precision(.fractionLength(0...2)))
                 .keyboardType(.decimalPad)
+                .focused($cashFocused)
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: 110)
                 .monospacedDigit()

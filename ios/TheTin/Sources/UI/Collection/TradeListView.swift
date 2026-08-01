@@ -17,6 +17,7 @@ struct TradeListView: View {
     /// Built once per change of the list rather than per body pass — encoding is a gzip per
     /// binary-search step, which is cheap but not free.
     @State private var shareLink: (url: URL, included: Int)?
+    @State private var sharing: SharePayload?
 
     var body: some View {
         List {
@@ -73,6 +74,7 @@ struct TradeListView: View {
             }
         }
         .printSheetFlow($printRequest)
+        .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
         .task(id: model.tradeEntries.count) { rebuildShareLink() }
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
@@ -122,20 +124,23 @@ struct TradeListView: View {
 
     /// Post it to Discord, or print it and bring it. The link carries card ids and nothing that
     /// identifies you — see `ShareList`.
+    ///
+    /// ⚠️ **Not a `ShareLink`** — see `ShareSheet` for the four things that were tried first. A
+    /// `ShareLink` here anchored its popover to the wrong view on iPad and was unusable.
     @ToolbarContentBuilder private var shareMenu: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
+            Button {
+                if let shareLink { sharing = SharePayload(url: shareLink.url) }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .accessibilityLabel((shareLink?.included ?? 0) < model.tradeEntries.count
+                                ? "Share a link to the first \(shareLink?.included ?? 0) cards"
+                                : "Share a link to this list")
+            .disabled(shareLink == nil || model.tradeEntries.isEmpty)
+        }
+        ToolbarItem(placement: .primaryAction) {
             Menu {
-                Section("Share a link") {
-                    if let shareLink {
-                        ShareLink(item: shareLink.url,
-                                  subject: Text("Cards I'll trade"),
-                                  message: Text("Cards I'll trade — from The Tin")) {
-                            Text(shareLink.included < model.tradeEntries.count
-                                 ? "Link (first \(shareLink.included) cards)"
-                                 : "Link to this list")
-                        }
-                    }
-                }
                 Section("Print (PDF of card images)") {
                     Button("All cards") {
                         printRequest = PrintSheet.tradeRequest(title: "For Trade",
@@ -144,9 +149,9 @@ struct TradeListView: View {
                     }
                 }
             } label: {
-                Image(systemName: "square.and.arrow.up")
+                Image(systemName: "ellipsis.circle")
             }
-            .accessibilityLabel("Share trade list")
+            .accessibilityLabel("More")
             .disabled(model.tradeEntries.isEmpty)
         }
     }
