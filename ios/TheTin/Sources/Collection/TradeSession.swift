@@ -184,6 +184,14 @@ struct TradePlan: Equatable {
     /// Incoming cards, headed for scan staging rather than straight into a divider — nothing
     /// enters the tin unreviewed, and you are not typing condition and divider at a folding table.
     var incomingDrafts: [ScanDraft] = []
+
+    /// The outgoing rows exactly as they were BEFORE the trade, so undo is a write rather than a
+    /// reconstruction. A backup snapshot can only put the whole tin back to before the trade —
+    /// including everything you did after it — which is not an answer to "wrong card".
+    var originalEntries: [CollectionEntry] = []
+    /// Ids this plan MINTED: the sold half of a stack traded in part. Restoring the originals
+    /// alone would leave those rows behind and the copies would exist twice.
+    var mintedIds: [String] = []
 }
 
 /// A trade in progress, across a table.
@@ -251,10 +259,14 @@ final class TradeSession {
         theirs.lines.removeAll()
         for item in payload.i {
             let condition = item.d.flatMap(CardCondition.init(rawValue:)) ?? .nm
+            // The printing is guessed from the catalog, NOT left nil. A nil variant skips the
+            // per-printing rung of the price ladder entirely, so the same card would be worth
+            // different amounts depending on whether it arrived by link or by search.
+            let variant = CardVariant.defaultFor(rarity: (try? store.card(id: item.c))?.rarity)
             let synthetic = CollectionEntry(id: UUID().uuidString, cardId: item.c, groupId: "",
                                             qty: 1, condition: condition.rawValue, grade: nil,
                                             pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
-                                            addedAt: now, variant: nil)
+                                            addedAt: now, variant: variant.rawValue)
             theirs.lines.append(TradeLine(entry: synthetic, copies: max(1, item.q ?? 1)))
         }
         reprice()
@@ -285,6 +297,20 @@ final class TradeSession {
     func setCondition(_ condition: CardCondition, forTheirLine id: String) {
         guard let i = theirs.lines.firstIndex(where: { $0.id == id }) else { return }
         theirs.lines[i].entry.condition = condition.rawValue
+        reprice()
+    }
+
+    /// Correct the printing on one of their cards.
+    ///
+    /// This has to be settable, not guessed. `CardVariant.defaultFor(rarity:)` can only ever
+    /// return `.regular` or `.holo`, so a reverse holo or a 1st Edition on their side is
+    /// unreachable — and the variant is a real rung of the price ladder (matrix, then per-
+    /// printing). Guessing low on THEIR side makes them look under-favored, which tells you to
+    /// hand over more than you should: the exact failure this screen exists to prevent. Your own
+    /// rows need no equivalent — they carry the printing you recorded when you added the card.
+    func setVariant(_ variant: CardVariant, forTheirLine id: String) {
+        guard let i = theirs.lines.firstIndex(where: { $0.id == id }) else { return }
+        theirs.lines[i].entry.variant = variant.rawValue
         reprice()
     }
 
@@ -339,6 +365,7 @@ final class TradeSession {
         for line in yours.lines {
             let row = line.entry
             let copies = min(max(line.copies, 1), row.qty)
+            plan.originalEntries.append(row)
             // Money on a row is a total ("Price paid — total"), so it divides across the copies
             // and the cost basis survives the split.
             let share = { (total: Double?) in total.map { $0 / Double(row.qty) } }
@@ -359,6 +386,7 @@ final class TradeSession {
 
                 var gone = row
                 gone.id = UUID().uuidString
+                plan.mintedIds.append(gone.id)
                 gone.qty = copies
                 gone.pricePaid = share(row.pricePaid).map { $0 * Double(copies) }
                 gone.gradingFeeUsd = share(row.gradingFeeUsd).map { $0 * Double(copies) }

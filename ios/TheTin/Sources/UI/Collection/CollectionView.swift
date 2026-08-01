@@ -521,6 +521,21 @@ final class CollectionModel {
         }
     }
 
+    /// Put the tin back to before the trade — the outgoing half only; the trade screen clears the
+    /// incoming drafts out of the tray itself.
+    ///
+    /// A backup snapshot is written before every execute, but restoring one reverses everything
+    /// done since, so it is no answer to "wrong card". This is: the original rows written back
+    /// over the sold ones, and any row the plan MINTED (the sold half of a stack traded in part)
+    /// deleted — without that, those copies would exist twice.
+    func revertTradePlan(_ plan: TradePlan) async -> Bool {
+        guard !plan.originalEntries.isEmpty || !plan.mintedIds.isEmpty else { return true }
+        return await write("undo that trade") {
+            try await repository.applyEntryEdits(updated: plan.originalEntries,
+                                                 deletedIds: plan.mintedIds)
+        }
+    }
+
     func deleteEntry(id: String) async {
         // Sold rows are deletable too (from the Gone section), so look in the full list — else
         // the write lands but the undo offer never appears.

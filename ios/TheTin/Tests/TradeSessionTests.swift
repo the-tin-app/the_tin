@@ -201,4 +201,78 @@ final class TradeSessionTests: XCTestCase {
         s.request(cardId: ray, rarity: nil)
         XCTAssertTrue(s.plan().updatedEntries.isEmpty)
     }
+
+    // MARK: Printing
+
+    /// The printing is a real rung of the price ladder, and `defaultFor(rarity:)` can only ever
+    /// guess `.regular` or `.holo` — so a reverse holo or a 1st Edition on their side is only
+    /// reachable if it is settable.
+    func testTheirPrintingIsSettableToTheOnesNoGuessCanReach() throws {
+        let s = TradeSession(store: store)
+        s.request(cardId: ray, rarity: "Secret Rare")
+        let id = try XCTUnwrap(s.theirs.lines.first).id
+        XCTAssertEqual(s.theirs.lines[0].entry.variantValue, .regular)
+
+        s.setVariant(.reverseHolo, forTheirLine: id)
+        XCTAssertEqual(s.theirs.lines[0].entry.variantValue, .reverseHolo)
+        s.setVariant(.firstEdition, forTheirLine: id)
+        XCTAssertEqual(s.theirs.lines[0].entry.variantValue, .firstEdition)
+    }
+
+    /// A card that arrived by shared link and the same card added by search must be the same
+    /// card. Seeding used to leave `variant` nil, which skips the per-printing rung entirely —
+    /// so the two paths could price one card two ways.
+    func testASeededCardCarriesAPrintingJustLikeASearchedOne() throws {
+        let rarity = (try? store.card(id: ray))?.rarity
+
+        let seeded = TradeSession(store: store)
+        seeded.seedTheirSide(from: ShareList.Payload(k: .trade, i: [ShareList.Item(c: ray)]))
+
+        let searched = TradeSession(store: store)
+        searched.request(cardId: ray, rarity: rarity)
+
+        let a = try XCTUnwrap(seeded.theirs.lines.first).entry.variantValue
+        XCTAssertNotNil(a)
+        XCTAssertEqual(a, try XCTUnwrap(searched.theirs.lines.first).entry.variantValue)
+    }
+
+    // MARK: Undo
+
+    /// Undo is a write, not a reconstruction, so the plan has to carry the rows as they were —
+    /// verbatim, including the fields a trade never touches.
+    func testThePlanCarriesTheRowsAsTheyWereSoUndoIsAWrite() throws {
+        let before = owned("e1", qty: 2, pricePaid: 40)
+        let s = TradeSession(store: store)
+        s.offer(before)
+
+        let plan = s.plan(now: Date(timeIntervalSince1970: 1_000))
+        XCTAssertEqual(plan.originalEntries, [before])
+    }
+
+    /// A stack traded in part mints a second row. Restoring the originals alone would leave that
+    /// row behind and the copies would exist twice — so the minted ids travel with the plan.
+    func testAPartialSplitRecordsTheIdItMintedSoUndoCanDeleteIt() throws {
+        let s = TradeSession(store: store)
+        s.offer(owned("e1", qty: 3, pricePaid: 30))
+        s.setCopies(1, forYourLine: "e1")
+
+        let plan = s.plan(now: Date(timeIntervalSince1970: 1_000))
+        let gone = try XCTUnwrap(plan.updatedEntries.first { $0.id != "e1" })
+        XCTAssertEqual(plan.mintedIds, [gone.id])
+        // The row that continues to exist keeps its id, so it is restored by overwrite, not by
+        // deletion — undo must never delete a card you still own.
+        XCTAssertEqual(plan.originalEntries.map(\.id), ["e1"])
+        XCTAssertFalse(plan.mintedIds.contains("e1"))
+    }
+
+    /// A whole-stack trade mints nothing: the sold row IS the original row, so undo is one
+    /// overwrite and deleting anything would be wrong.
+    func testTradingAWholeStackMintsNothingToDelete() {
+        let s = TradeSession(store: store)
+        s.offer(owned("e1", qty: 2))
+        // `offer` puts ONE copy on the table, so the whole stack has to be asked for explicitly —
+        // otherwise this is the partial-split case wearing a whole-stack name.
+        s.setCopies(2, forYourLine: "e1")
+        XCTAssertTrue(s.plan().mintedIds.isEmpty)
+    }
 }

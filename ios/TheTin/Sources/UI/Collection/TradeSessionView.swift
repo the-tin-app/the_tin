@@ -34,11 +34,19 @@ struct TradeSessionView: View {
     @State private var pickingTheirs = false
     @State private var confirmingExecute = false
     @State private var executing = false
+    /// Set once the trade is written. Holds the whole plan, because undoing needs the rows as
+    /// they were and the ids the plan minted — not just the knowledge that something happened.
+    @State private var executed: TradePlan?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Group {
-            if let session {
+            if let executed {
+                // The trade REPLACES the screen once it's written. Leaving the columns editable
+                // would offer taps that change nothing — the session is in memory and the write
+                // already happened.
+                recorded(executed)
+            } else if let session {
                 content(session)
             } else {
                 TinLoadingView(label: "Setting up…")
@@ -218,7 +226,7 @@ struct TradeSessionView: View {
             }
         } footer: {
             if !mine {
-                Text("Their cards come from the catalog — set each one's condition to price it honestly.")
+                Text("Their cards come from the catalog — set each one's condition and printing to price it honestly. A reverse holo priced as the base card is the argument this screen exists to prevent.")
             }
         }
     }
@@ -265,6 +273,13 @@ struct TradeSessionView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                // A MENU, not segments. Four printings including "Reverse Holo" cannot share a
+                // row on an iPhone, and crowding this row is what put `DMG` on top of `×1`.
+                Picker("Printing", selection: variantBinding(session, line: line)) {
+                    ForEach(CardVariant.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .font(.caption)
             }
         }
     }
@@ -280,6 +295,13 @@ struct TradeSessionView: View {
     private func conditionBinding(_ session: TradeSession, line: TradeLine) -> Binding<CardCondition> {
         Binding(get: { line.entry.conditionValue ?? .nm },
                 set: { session.setCondition($0, forTheirLine: line.id) })
+    }
+
+    /// Defaults to `.regular` rather than to `defaultFor(rarity:)` — the session already made
+    /// that guess when the card was added, so reading it back is what the row is showing.
+    private func variantBinding(_ session: TradeSession, line: TradeLine) -> Binding<CardVariant> {
+        Binding(get: { line.entry.variantValue ?? .regular },
+                set: { session.setVariant($0, forTheirLine: line.id) })
     }
 
     private func copiesBinding(_ session: TradeSession, line: TradeLine, mine: Bool) -> Binding<Int> {
@@ -329,7 +351,7 @@ struct TradeSessionView: View {
 
     private func executeSummary(_ session: TradeSession) -> String {
         let out = session.yours.cardCount, inn = session.theirs.cardCount
-        return "\(out) \(out == 1 ? "card" : "cards") leave your tin, \(inn) \(inn == 1 ? "card lands" : "cards land") in the scan tray for review. This can't be undone in one tap."
+        return "\(out) \(out == 1 ? "card" : "cards") leave your tin, \(inn) \(inn == 1 ? "card lands" : "cards land") in the scan tray for review. You can undo it on the next screen."
     }
 
     private func execute(_ session: TradeSession) async {
@@ -345,8 +367,64 @@ struct TradeSessionView: View {
         // reversed, a failed write would hand you their cards while yours stayed put.
         guard await model.applyTradePlan(plan) else { return }
         for draft in plan.incomingDrafts { staging.append(draft) }
-        dismiss()
-        onExecuted?()
+        executed = plan
+    }
+
+    /// What was written, plus the way back.
+    ///
+    /// This screen does NOT dismiss on execute. Routing straight to the scan tray put the undo a
+    /// tab away from the person who just realised they tapped the wrong card, and a timed toast
+    /// would be counting down while they read the tray. The way out is a button.
+    @ViewBuilder private func recorded(_ plan: TradePlan) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 44)).foregroundStyle(.green)
+            Text("Trade recorded").font(.title3.weight(.semibold))
+            Text(recordedSummary(plan))
+                .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            VStack(spacing: 10) {
+                Button {
+                    dismiss()
+                    onExecuted?()
+                } label: {
+                    Text("Review the scan tray").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                Button(role: .destructive) {
+                    Task { await undo(plan) }
+                } label: {
+                    if executing {
+                        HStack { ProgressView(); Text("Undoing…") }.frame(maxWidth: .infinity)
+                    } else {
+                        Text("Undo this trade").frame(maxWidth: .infinity)
+                    }
+                }
+                .disabled(executing)
+            }
+            .padding(.top, 6)
+        }
+        .padding(28)
+        .frame(maxWidth: 420)
+    }
+
+    private func recordedSummary(_ plan: TradePlan) -> String {
+        // Copies, not rows: a stack traded in part contributes two rows and only one of them left.
+        let out = plan.updatedEntries.filter { $0.soldAt != nil }.reduce(0) { $0 + $1.qty }
+        let inn = plan.incomingDrafts.reduce(0) { $0 + $1.qty }
+        let left = out == 1 ? "1 card left your tin" : "\(out) cards left your tin"
+        let landed = inn == 1 ? "1 landed in the scan tray"
+                              : "\(inn) landed in the scan tray"
+        return "\(left), \(landed) for review."
+    }
+
+    /// Reverse both halves. The tin first — if that write fails the cards stay in the tray, which
+    /// is recoverable; clearing the tray first and then failing would lose them outright.
+    private func undo(_ plan: TradePlan) async {
+        executing = true
+        defer { executing = false }
+        guard await model.revertTradePlan(plan) else { return }
+        for draft in plan.incomingDrafts { staging?.remove(id: draft.id) }
+        executed = nil
     }
 
     private func currency(_ v: Double) -> String {
