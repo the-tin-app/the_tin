@@ -9,7 +9,7 @@ final class HuntingListViewTests: XCTestCase {
                    tcgplayerId: nil)
     }
     private func hunting(target: Double? = 300) -> WantEntry {
-        WantEntry(targetUsd: target, hunt: Hunt(minCondition: .hp, until: .distantFuture))
+        WantEntry(targetUsd: target, hunt: Hunt(minCondition: .hp))
     }
     private func nkw(_ url: URL) throws -> String {
         try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?

@@ -39,36 +39,25 @@ enum WantPriority: Int, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// "I am buying this card, within a window." Deliberately separate from `WantPriority`:
-/// a grail you can't afford yet isn't hunting, and a $40 card you're buying Friday is
-/// hunting without being a grail. Collapsing them forces a lie in one direction.
+/// "I am buying this card." Deliberately separate from `WantPriority`: a grail you can't afford
+/// yet isn't hunting, and a $40 card you're buying this week is hunting without being a grail.
+/// Collapsing them forces a lie in one direction.
 ///
 /// The budget is `WantEntry.targetUsd` — there is no second price field, because "the price
 /// I'd pay for this" is what that field already means.
+///
+/// **No deadline (2026-08-01).** Hunts used to carry a 7/14/30-day `until` and expire on their
+/// own. A card worth chasing can take six months, and a hunt shouldn't "just expire" — it ends
+/// when you delete it. That trades a self-cleaning list for one you maintain, which is the
+/// accepted cost; the old `isActive`/`daysLeft` arithmetic existed only to give a notification
+/// something urgent to say, and there are no notifications any more.
+///
+/// A `Hunt` written by a build that stored `until` still decodes — Codable ignores the unknown
+/// key. `WantEntryTests.testAHuntWrittenWithADeadlineStillDecodes` is the guard, and it matters
+/// because a decode failure here empties the entire wishlist.
 struct Hunt: Codable, Hashable {
     /// Worst condition you'd accept. "Anything but DMG" is `.hp`.
     var minCondition: CardCondition
-    /// Absolute expiry, computed from the 7/14/30-day choice at save time.
-    var until: Date
-
-    /// Expiry is arithmetic, not a background job — there is no state to reconcile and
-    /// nothing to clean up. This is the ONLY place the test is written.
-    func isActive(now: Date = Date()) -> Bool { until >= now }
-    var isActive: Bool { isActive() }
-
-    /// Whole days remaining, rounded up — "0 days left" on a hunt that still has hours to run
-    /// reads as expired. Clamped at 0 so a lapsed hunt never counts backwards. Lives here with
-    /// `isActive` because every time question about a hunt is answered in one place.
-    func daysLeft(now: Date = Date()) -> Int {
-        max(0, Int((until.timeIntervalSince(now) / 86_400).rounded(.up)))
-    }
-
-    /// The one phrasing of "how long is left", shared by the Hunting row and the alert body.
-    /// Takes the count rather than a `Hunt` because `PriceAlertsService.Crossing` carries the
-    /// number across a serialization boundary, not the hunt.
-    static func daysLeftLabel(_ days: Int) -> String {
-        days == 1 ? "1 day left" : "\(days) days left"
-    }
 }
 
 /// One wishlist entry's per-card data. Every field defaults, so a plain `WantEntry()` is the

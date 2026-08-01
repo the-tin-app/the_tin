@@ -35,20 +35,42 @@ final class WantEntryTests: XCTestCase {
     }
 
     func testHuntRoundTrips() throws {
-        let until = Date(timeIntervalSince1970: 800_000_000)
         let entry = WantEntry(priority: .grail, targetUsd: 300, notes: "", addedAt: .distantPast,
-                              hunt: Hunt(minCondition: .hp, until: until))
+                              hunt: Hunt(minCondition: .hp))
         let decoded = try JSONDecoder().decode(WantEntry.self, from: JSONEncoder().encode(entry))
         XCTAssertEqual(decoded.hunt?.minCondition, .hp)
-        XCTAssertEqual(decoded.hunt?.until, until)
     }
 
-    /// Expiry is arithmetic, not a job. Boundary: `until` exactly now is still active.
-    func testHuntIsActiveAcrossTheBoundary() {
-        let now = Date(timeIntervalSince1970: 800_000_000)
-        XCTAssertTrue(Hunt(minCondition: .hp, until: now.addingTimeInterval(1)).isActive(now: now))
-        XCTAssertTrue(Hunt(minCondition: .hp, until: now).isActive(now: now))
-        XCTAssertFalse(Hunt(minCondition: .hp, until: now.addingTimeInterval(-1)).isActive(now: now))
+    /// A hunt stored by a build that had deadlines must still decode. Codable ignores unknown
+    /// keys, so `until` is simply dropped — but this is wants.json, where a decode failure makes
+    /// `LocalWantsRepository.load` return `[:]` and the next write persist that empty map over
+    /// the file. The Grail tier already cost us this once; it is never allowed to be theoretical.
+    func testAHuntWrittenWithADeadlineStillDecodes() throws {
+        let json = Data("""
+        {"priority":0,"targetUsd":250,"notes":"","addedAt":770000000,
+         "hunt":{"minCondition":"NM","until":770500000}}
+        """.utf8)
+        let entry = try JSONDecoder().decode(WantEntry.self, from: json)
+        XCTAssertEqual(entry.hunt?.minCondition, .nm)
+        XCTAssertEqual(entry.targetUsd, 250)
+    }
+
+    /// And a whole wishlist FILE holding such a hunt survives the repository's decoder — the
+    /// layer that actually turns a decode failure into an empty wishlist.
+    func testAWishlistFileWithDeadlinedHuntsIsNotEmptied() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wants-deadline-\(UUID().uuidString).json")
+        try Data("""
+        {"sv1-1":{"priority":0,"targetUsd":250,"notes":"","addedAt":770000000,
+                  "hunt":{"minCondition":"NM","until":770500000}},
+         "sv1-2":{"priority":1,"notes":"","addedAt":770000000}}
+        """.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let loaded = LocalWantsRepository.load(from: url)
+        XCTAssertEqual(loaded.count, 2, "a deadlined hunt must not empty the wishlist")
+        XCTAssertEqual(loaded["sv1-1"]?.hunt?.minCondition, .nm)
+        XCTAssertNil(loaded["sv1-2"]?.hunt)
     }
 }
 
@@ -63,17 +85,6 @@ extension WantEntryTests {
 }
 
 extension WantEntryTests {
-    /// The window picker stores an ABSOLUTE date at save time, so "14 days" doesn't quietly
-    /// re-mean something else every time the sheet is reopened.
-    func testHuntWindowProducesAnAbsoluteDate() {
-        let from = Date(timeIntervalSince1970: 800_000_000)
-        XCTAssertEqual(HuntWindow.d7.until(from: from), from.addingTimeInterval(7 * 86_400))
-        XCTAssertEqual(HuntWindow.d30.until(from: from), from.addingTimeInterval(30 * 86_400))
-    }
-
-    func testHuntWindowLabels() {
-        XCTAssertEqual(HuntWindow.allCases.map(\.label), ["7 days", "14 days", "30 days"])
-    }
 
     /// `.decimalPad` shows the LOCALE's separator while `Double(_:)` only accepts "." — and
     /// `save()` drops both the target AND the hunt when the budget parses as nil, so a French
@@ -97,24 +108,3 @@ extension WantEntryTests {
     }
 }
 
-extension WantEntryTests {
-    /// A hunt with only a few hours left still has a day to go — "0 days left" would read as
-    /// already expired. `now` is injectable so this doesn't depend on the wall clock.
-    func testDaysLeftRoundsPartialDayUpAndNeverGoesNegative() {
-        let now = Date(timeIntervalSince1970: 800_000_000)
-        func hunt(_ seconds: Double) -> Hunt {
-            Hunt(minCondition: .hp, until: now.addingTimeInterval(seconds))
-        }
-        XCTAssertEqual(hunt(3 * 3_600).daysLeft(now: now), 1)
-        XCTAssertEqual(hunt(9 * 86_400).daysLeft(now: now), 9)
-        XCTAssertEqual(hunt(-5 * 86_400).daysLeft(now: now), 0)
-    }
-
-    /// One phrasing, shared by the Hunting row and the alert body — the two used to carry
-    /// byte-identical copies of this ternary.
-    func testDaysLeftLabelSingularAndPlural() {
-        XCTAssertEqual(Hunt.daysLeftLabel(1), "1 day left")
-        XCTAssertEqual(Hunt.daysLeftLabel(9), "9 days left")
-        XCTAssertEqual(Hunt.daysLeftLabel(0), "0 days left")
-    }
-}

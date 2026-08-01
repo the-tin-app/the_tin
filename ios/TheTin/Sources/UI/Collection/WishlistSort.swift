@@ -69,19 +69,21 @@ enum WishlistGrid {
     ///
     /// Unpriced cards sort last: with no market price there is nothing to rank against the
     /// budget, and slotting them at 0 would present unknown as "free".
-    /// Ties break on the soonest deadline, then card id, so the order is total.
+    /// Ties break on how long you've been hunting, then card id, so the order is total. The old
+    /// second key was the hunt's deadline; with no deadline, the longest-running hunt leads —
+    /// it's the one you've been waiting on.
     static func huntSorted(cards: [CardRecord], entries: [String: WantEntry],
-                           prices: [String: Double], now: Date = Date()) -> [CardRecord] {
-        struct Key { let ratio: Double; let until: Date; let id: String }
+                           prices: [String: Double]) -> [CardRecord] {
+        struct Key { let ratio: Double; let addedAt: Date; let id: String }
         let keyed: [(CardRecord, Key)] = cards.compactMap { card in
-            guard let e = entries[card.id], let hunt = e.hunt, hunt.isActive(now: now),
+            guard let e = entries[card.id], e.hunt != nil,
                   let target = e.targetUsd, target > 0 else { return nil }
             let ratio = prices[card.id].map { $0 / target } ?? .greatestFiniteMagnitude
-            return (card, Key(ratio: ratio, until: hunt.until, id: card.id))
+            return (card, Key(ratio: ratio, addedAt: e.addedAt, id: card.id))
         }
         return keyed.sorted { a, b in
             if a.1.ratio != b.1.ratio { return a.1.ratio < b.1.ratio }
-            if a.1.until != b.1.until { return a.1.until < b.1.until }
+            if a.1.addedAt != b.1.addedAt { return a.1.addedAt < b.1.addedAt }
             return a.1.id < b.1.id
         }.map(\.0)
     }

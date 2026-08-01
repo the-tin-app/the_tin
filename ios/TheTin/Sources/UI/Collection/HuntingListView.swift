@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Cards you are actively buying: a budget, a condition floor, a deadline, and one tap to a
-/// precise eBay search. Deliberately a list, not a grid — every row carries three numbers
-/// and a button, and a 110pt tile can't hold that.
+/// Cards you are actively buying: a budget, a condition floor, and one tap to a precise eBay
+/// search. Deliberately a list, not a grid — every row carries two numbers and a button, and a
+/// 110pt tile can't hold that. A hunt runs until you switch it off; there is no expiry.
 struct HuntingListView: View {
     let store: CatalogStore
     let wants: WantsModel
@@ -18,7 +18,7 @@ struct HuntingListView: View {
         // WantedCardsView): this screen has no `.searchable` keystroke driving re-renders, so
         // there's no hot path to protect, and a cache here would risk showing a card whose
         // hunt was just switched on elsewhere without its price/set loaded yet.
-        let ids = wants.entries.filter { $0.value.hunt?.isActive == true }.map(\.key)
+        let ids = wants.entries.filter { $0.value.hunt != nil }.map(\.key)
         let cards = (try? store.cards(ids: ids)) ?? []
         // compactMapValues: a null raw_usd (EUR/graded only) is treated as unpriced, not $0.
         let rawUsd = ((try? store.prices(cardIds: ids)) ?? [:]).compactMapValues(\.rawUsd)
@@ -86,7 +86,7 @@ struct HuntingListView: View {
                     .font(.subheadline)
                 }
                 if let hunt = entry?.hunt {
-                    Text("\(Hunt.daysLeftLabel(hunt.daysLeft()))  ·  \(hunt.minCondition.floorLabel)")
+                    Text(hunt.minCondition.floorLabel)
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let url = Self.huntURL(card: card, entry: entry,
