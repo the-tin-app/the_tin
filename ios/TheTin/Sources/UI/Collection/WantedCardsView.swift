@@ -146,6 +146,13 @@ struct WantedCardsView: View {
                 }
             }
             .font(.subheadline)
+            // The share button is an icon now, so the "first N cards" notice that used to be the
+            // menu item's own text has nowhere else to live. Without it a 71-card wishlist shares
+            // 67 and says nothing — which is how it was found on device, by counting the web page.
+            if let shareLink, shareLink.included < r.allCards.count {
+                Text("A shared link fits the \(shareLink.included) most valuable of these.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

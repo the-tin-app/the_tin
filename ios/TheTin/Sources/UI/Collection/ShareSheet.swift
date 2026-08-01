@@ -5,20 +5,26 @@ import UIKit
 ///
 /// ## Why this exists
 ///
-/// `ShareLink` in the list toolbars does not present usably on iPad. On the For Trade and Wanted
-/// screens it drew a small, permanently uninteractable card at the centre of the screen — the
-/// share popover anchored to the wrong view — while the identical control on `CardDetailView`
-/// worked on the same device. Four structural differences were tested on an iPad Pro 11 simulator
-/// on 2026-08-01 and **all four were ruled out**: nesting inside a `Menu`, the absence of an
-/// explicit `SharePreview`, the ~1,800-character payload URL, and wrapping the `ShareLink` in an
-/// `if let` inside its `ToolbarItem`. Every one of them still failed.
+/// **`ShareLink` does not present usably on iPad in this app — anywhere. Do not reintroduce one.**
 ///
-/// So the presentation is no longer SwiftUI's to get right. A `UIActivityViewController` inside a
-/// `.sheet` needs **no popover anchor at all** — iPad renders it as a form sheet, iPhone as the
-/// usual sheet — which removes the entire class of failure rather than another guess at it.
+/// On the For Trade and Wanted screens it drew a small, permanently uninteractable card at the
+/// centre of the screen; on card detail it collapsed to an ellipsis bubble that never opened.
+/// Four structural differences were tested on an iPad Pro 11 simulator on 2026-08-01 and **all
+/// four were ruled out**: nesting inside a `Menu`, the absence of an explicit `SharePreview`, the
+/// ~1,800-character payload URL, and wrapping the `ShareLink` in an `if let` inside its
+/// `ToolbarItem`. Every one still failed. So the presentation stopped being SwiftUI's to get
+/// right: a `UIActivityViewController` inside a `.sheet` needs **no popover anchor at all** —
+/// iPad renders a form sheet, iPhone the usual sheet.
 ///
-/// iPhone was never affected: there the share sheet is full-height and never uses the anchor,
-/// which is exactly why this shipped in v1.0 and went unnoticed until an iPad tried to use it.
+/// ⚠️ **This doc comment used to say `CardDetailView`'s `ShareLink` "worked on the same device",
+/// and that was wrong.** It worked on an iPad Pro 11 **simulator running iOS 26**; on the real
+/// iPad (A10, iOS 18.7.9) it fails like all the others. On the strength of that false contrast it
+/// was left as a `ShareLink` and shipped broken for another day. The lesson is not about sharing:
+/// **an iPad bug must be reproduced on the iPad's OS version**, and the newest available runtime
+/// is not a substitute. `grep ShareLink(` should return nothing but this comment.
+///
+/// iPhone is genuinely unaffected — there the sheet is full-height and never uses an anchor —
+/// which is why this shipped in v1.0 and went unnoticed until an iPad tried to use it.
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
 
