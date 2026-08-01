@@ -646,6 +646,7 @@ struct ImportSummary: Identifiable {
 private struct ImportResultSheet: View {
     let summary: ImportSummary
     @Environment(\.dismiss) private var dismiss
+    @State private var sharing: SharePayload?
 
     var body: some View {
         NavigationStack {
@@ -657,9 +658,14 @@ private struct ImportResultSheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let url = summary.skippedURL {
-                    ShareLink("Share skipped rows (CSV)", item: url)
+                    // Not a `ShareLink` — see `ShareSheet`. This one is the least likely to have
+                    // been broken (a plain row, already inside a presented sheet) and the least
+                    // likely to be noticed if it were: it only appears after an import that
+                    // skipped rows. Converted with the rest rather than left as the odd one out.
+                    Button("Share skipped rows (CSV)") { sharing = SharePayload(url: url) }
                 }
             }
+            .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
             .navigationTitle("Import complete")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

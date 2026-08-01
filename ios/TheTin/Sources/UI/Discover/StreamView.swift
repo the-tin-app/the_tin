@@ -22,6 +22,7 @@ struct StreamView: View {
     @State private var currentIndex: Int?
     @State private var prefetcher = CardImagePrefetcher()
     @State private var wantBump = 0 // bumped on each double-tap to fire the haptic
+    @State private var sharing: SharePayload?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -51,6 +52,7 @@ struct StreamView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
         .task {
             if pager == nil {
                 pager = StreamPager(stream: stream)
@@ -117,9 +119,13 @@ struct StreamView: View {
                 NavigationLink(value: CardID(raw: card.id)) {
                     Label("Card details", systemImage: "info.circle")
                 }
-                ShareLink(item: CardShareLink.url(card: card, setName: setName(of: card)),
-                          subject: Text(card.name),
-                          message: Text("Check out this card on The Tin")) {
+                // Not a `ShareLink` — see `ShareSheet`. Every one of them tested on a real iPad
+                // failed to present; this one sits in a card body rather than a toolbar, but
+                // there is no reason left to believe that saves it.
+                Button {
+                    sharing = SharePayload(url: CardShareLink.url(card: card,
+                                                                  setName: setName(of: card)))
+                } label: {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
                 .accessibilityLabel("Share card")

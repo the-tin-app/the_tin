@@ -161,6 +161,7 @@ struct CardDetailView: View {
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
     @State private var showingAddSheet = false
+    @State private var sharing: SharePayload?
     @State private var editingEntry: CollectionEntry?
     @State private var editingWishlist = false
     @State private var selectedPrinting: String?
@@ -425,6 +426,7 @@ struct CardDetailView: View {
         }
         .toolbar { detailToolbar }
         .sheet(item: $marketplaceURL) { SafariSheet(url: $0.url) }
+        .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
         .sheet(isPresented: $showingAddSheet) {
             if let collection {
                 NavigationStack {
@@ -480,15 +482,14 @@ struct CardDetailView: View {
             }
         }
         ToolbarItem {
-            ShareLink(
-                item: CardShareLink.url(card: model.card, setName: model.setName),
-                subject: Text(model.card.name),
-                message: Text("Check out this card on The Tin"),
-                preview: SharePreview(
-                    model.setName.map { "\(model.card.name) · \($0)" } ?? model.card.name,
-                    image: Image(systemName: "rectangle.portrait.on.rectangle.portrait")
-                )
-            ) {
+            // Not a `ShareLink` — see `ShareSheet`. This was the last one left, and it was left
+            // because it looked immune: it worked on an iPad Pro simulator while the list screens
+            // failed. That was an artefact of the SIMULATOR'S OS, not of this call site. On the
+            // real iPad (A10, iOS 18.7.9) it collapses to an ellipsis bubble and never opens.
+            Button {
+                sharing = SharePayload(url: CardShareLink.url(card: model.card,
+                                                              setName: model.setName))
+            } label: {
                 Image(systemName: "square.and.arrow.up")
             }
             .accessibilityLabel("Share card")
