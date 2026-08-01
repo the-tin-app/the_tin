@@ -12,17 +12,9 @@ final class SettingsModel {
     private(set) var connection: ConnectionStatus?
     private(set) var probing = false
     private let cache: ImageCache
-    private let notifier: LocalNotifier
 
-    // Wishlist price alerts (spec 2026-07-14). Mirrors AppConfig so the UI updates reactively.
-    private(set) var alertsEnabled = AppConfig.priceAlertsEnabled
-    private(set) var alertSensitivityPct = AppConfig.priceAlertSensitivityPct
-    /// True when iOS notification permission is denied — drives the "enable in iOS Settings" hint.
-    private(set) var alertsDenied = false
-
-    init(cache: ImageCache = .shared, notifier: LocalNotifier = UserNotificationNotifier()) {
+    init(cache: ImageCache = .shared) {
         self.cache = cache
-        self.notifier = notifier
     }
 
     /// Probe both backends (Settings appear + manual Refresh). Never throws.
@@ -41,27 +33,6 @@ final class SettingsModel {
         catalogText = Self.artifactSummary(url: CatalogPaths.default().stateURL) {
             (try? JSONDecoder().decode(CatalogState.self, from: $0)).map { "v\($0.version)" }
         }
-        if alertsEnabled { alertsDenied = await notifier.isAuthorizationDenied() }
-    }
-
-    /// Toggle flow per spec: turning ON requests notification permission first; a denial leaves
-    /// the toggle off and shows the Settings hint. Turning OFF never touches permissions (the
-    /// snapshot keeps updating regardless — see PriceAlertsService.runAfterInstall).
-    func setAlertsEnabled(_ on: Bool) async {
-        if on {
-            let granted = await notifier.requestAuthorization()
-            alertsDenied = !granted
-            AppConfig.priceAlertsEnabled = granted
-            alertsEnabled = granted
-        } else {
-            AppConfig.priceAlertsEnabled = false
-            alertsEnabled = false
-        }
-    }
-
-    func setAlertSensitivity(_ pct: Int) {
-        AppConfig.priceAlertSensitivityPct = pct
-        alertSensitivityPct = pct
     }
 
     /// "v7 · Jul 11, 2026" from a state file's decoded version + its filesystem mod date

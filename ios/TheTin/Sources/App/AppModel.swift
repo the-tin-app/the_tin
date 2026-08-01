@@ -28,18 +28,6 @@ final class AppModel {
     /// checkmark updates reactively after a switch.
     private(set) var currentTier: String = AppConfig.catalogTier
     private(set) var tierChange: TierChange = .idle
-    /// Bumped when a price-alert notification tap asks for the wishlist screen; RootView
-    /// watches it (tab switch + WantedRoute push). A counter, not a Bool, so a second tap
-    /// re-routes even if the first was already consumed.
-    private(set) var wishlistRouteToken = 0
-    /// Which Wanted scope the pending tap asked for, from the alert's `userInfo["scope"]`.
-    /// nil leaves the user's last-used scope alone.
-    private(set) var pendingWishlistScope: String?
-    func openWishlist(scope: String? = nil) {
-        pendingWishlistScope = scope
-        wishlistRouteToken += 1
-    }
-
     /// Inbound card deep link (`https://thetinapp.com/c/<id>`). RootView watches the token and
     /// pushes `CardID(pendingCardId)` onto the Tin stack — same pattern as the wishlist route.
     private(set) var cardRouteToken = 0
@@ -152,7 +140,6 @@ final class AppModel {
     private let paths: CatalogPaths
     private let makeRepository: (String) -> CollectionRepository
     private let skipFirebase: Bool // unit tests exercise catalog flow without Firebase
-    private let priceAlerts: PriceAlertsService
     private let now: () -> Date // injectable clock for deterministic funding tests
     private var updater: CatalogUpdater { CatalogUpdater(remote: remote, paths: paths) }
 
@@ -182,14 +169,12 @@ final class AppModel {
          paths: CatalogPaths = .default(),
          makeRepository: @escaping (String) -> CollectionRepository = { _ in LocalCollectionRepository() },
          skipFirebase: Bool = false,
-         priceAlerts: PriceAlertsService = PriceAlertsService(),
          now: @escaping () -> Date = { Date() }) {
         self.remote = remote
         self.fallbackRemote = fallback
         self.paths = paths
         self.makeRepository = makeRepository
         self.skipFirebase = skipFirebase
-        self.priceAlerts = priceAlerts
         self.now = now
     }
 
@@ -204,14 +189,11 @@ final class AppModel {
         onProgress: (@MainActor @Sendable (Double) -> Void)? = nil
     ) async throws -> CatalogUpdateOutcome {
         let outcome = try await updateFromPrimaryOrFallback(onProgress: onProgress)
-        if case .installed(let version) = outcome {
+        if case .installed = outcome {
             // The install swap deleted the open connection's WAL sidecars. Reopen HERE — in the
             // same funnel that installed — so no call path (foreground start, tier switch,
             // background refresh, BG tasks) can forget and serve a dead handle for the session.
             reopenStore()
-            // Wishlist price alerts: diff + snapshot after EVERY successful install (spec:
-            // "hook into the updater's completion").
-            await priceAlerts.runAfterInstall(version: version, dbPath: paths.databaseURL.path)
         }
         return outcome
     }

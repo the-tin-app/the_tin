@@ -16,9 +16,8 @@ struct WantedView: View {
     enum Scope: String, CaseIterable {
         case sets, singles, hunting
 
-        /// Shared by `RootView`, which writes this to route a hunting alert's tap at the
-        /// Hunting list. A typo in a second literal would break that routing with every
-        /// test still green — so there is only ever one literal.
+        /// One literal for the persisted segment choice. A second copy could desynchronise
+        /// silently with every test still green — so there is only ever one.
         static let storageKey = "wantedScope"
         var label: String {
             switch self {

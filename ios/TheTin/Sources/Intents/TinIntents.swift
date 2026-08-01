@@ -4,9 +4,8 @@ import Foundation
 /// Bridges an App Intent to the running UI.
 ///
 /// Intents perform in the app's process but have no handle on `AppModel`, so they park a request
-/// here and `TheTin` forwards it — the same shape as `NotificationRouter`, which does this for
-/// price-alert taps. A request that arrives before the scene installs its handler (cold launch
-/// straight from Siri or the Action button) is held, not dropped.
+/// here and `TheTin` forwards it. A request that arrives before the scene installs its handler
+/// (cold launch straight from Siri or the Action button) is held, not dropped.
 @MainActor
 final class IntentRouter {
     static let shared = IntentRouter()
