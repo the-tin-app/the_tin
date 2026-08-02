@@ -152,11 +152,12 @@ final class AppModel {
 
     /// The self-hosted NAS catalog remote (App Attest identity), or nil when no self-host URL is
     /// configured. Firebase serves as the operation-level fallback — see `ensureLatestWithFailover`.
-    nonisolated static func selfHostedRemote() -> SelfHostedCatalogRemote? {
+    nonisolated static func selfHostedRemote() -> OriginCatalogRemote? {
         guard let url = AppConfig.selfHostBaseURL else { return nil }
         let session = AppAttestSessionProvider(baseURL: url, attestor: DeviceCheckAttestor(),
                                                http: URLSessionHTTPClient(), keys: KeychainStore())
-        return SelfHostedCatalogRemote(baseURL: url, session: session, http: URLSessionHTTPClient())
+        return OriginCatalogRemote(baseURL: url, authorize: Authorizers.appAttest(session),
+                                   http: URLSessionHTTPClient())
     }
 
     /// Production wiring: self-host primary (if configured) with Firebase as the operation-level
@@ -213,13 +214,13 @@ final class AppModel {
     private func updateFromPrimaryOrFallback(
         onProgress: (@MainActor @Sendable (Double) -> Void)? = nil
     ) async throws -> CatalogUpdateOutcome {
-        let primaryName = remote is SelfHostedCatalogRemote ? "self-hosted" : "backup"
+        let primaryName = remote is OriginCatalogRemote ? "self-hosted" : "backup"
         do {
             let outcome = try await CatalogUpdater(remote: remote, paths: paths)
                 .ensureLatest(onProgress: onProgress)
             // A successful primary fetch means its manifest (and, for self-host, the App Attest
             // session token) round-tripped — this line is how we confirm the NAS path is live.
-            activeSource = remote is SelfHostedCatalogRemote ? .selfHosted : .firebase
+            activeSource = remote is OriginCatalogRemote ? .selfHosted : .firebase
             Self.catalogLog.notice("catalog: primary \(primaryName, privacy: .public) served \(String(describing: outcome), privacy: .public)")
             if case .installed = outcome { CatalogActivity.record("\(primaryName): \(describe(outcome))") }
             return outcome

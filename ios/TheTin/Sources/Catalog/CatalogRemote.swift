@@ -93,7 +93,7 @@ enum AppConfig {
 
     /// Which catalog tier the self-hosted client downloads: "casual" | "average" | "expert".
     /// User-changeable in Settings, persisted in UserDefaults; defaults to the average archetype
-    /// (today's price + a weekly history sparkline). Read by SelfHostedCatalogRemote at construction.
+    /// (today's price + a weekly history sparkline). Read by OriginCatalogRemote at construction.
     static var catalogTier: String {
         get {
             let raw = UserDefaults.standard.string(forKey: catalogTierKey) ?? ""
@@ -188,7 +188,10 @@ struct HTTPCatalogRemote: CatalogRemote {
     private func get(_ path: String,
                      onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
         guard let url = Self.downloadURL(base: baseURL, path: path) else { throw CatalogError.badResponse }
-        let request = await StorageAuth.authorizedRequest(url: url)
+        var request = URLRequest(url: url)
+        if let token = await StorageAuth.appCheckToken(forcingRefresh: false) {
+            request.setValue(token, forHTTPHeaderField: "X-Firebase-AppCheck")
+        }
         let (data, response): (Data, URLResponse)
         if let onBytes {
             (data, response) = try await session.dataReportingProgress(for: request, onBytes: onBytes)

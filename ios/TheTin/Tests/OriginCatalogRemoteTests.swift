@@ -20,7 +20,7 @@ private final class PathHTTP: HTTPClient {
     }
 }
 
-final class SelfHostedCatalogRemoteTests: XCTestCase {
+final class OriginCatalogRemoteTests: XCTestCase {
     private let base = URL(string: "https://apithetin.reyes.ai")!
 
     private func manifestJSON(extra: [String: Any] = [:]) -> Data {
@@ -40,7 +40,7 @@ final class SelfHostedCatalogRemoteTests: XCTestCase {
     func testFetchManifestSelectsConfiguredTier() async throws {
         let http = PathHTTP()
         http.responses["/catalog/manifest.json"] = [(200, manifestJSON())]
-        let remote = SelfHostedCatalogRemote(baseURL: base, session: TokenStub(), http: http, tier: "average")
+        let remote = OriginCatalogRemote(baseURL: base, authorize: Authorizers.appAttest(TokenStub()), http: http, tier: "average")
 
         let m = try await remote.fetchManifest()
         XCTAssertEqual(m, CatalogManifest(version: 7, path: "average-v7.sqlite.gz", sha256: "avg",
@@ -59,7 +59,7 @@ final class SelfHostedCatalogRemoteTests: XCTestCase {
                         "raisedCents": 6300, "updatedAt": "2026-07-12T00:00:00.000Z"],
             "supporters": [["name": "Ada", "tier": "secret-rare", "url": "https://example.com"]],
         ]))]
-        let remote = SelfHostedCatalogRemote(baseURL: base, session: TokenStub(), http: http, tier: "average")
+        let remote = OriginCatalogRemote(baseURL: base, authorize: Authorizers.appAttest(TokenStub()), http: http, tier: "average")
 
         let m = try await remote.fetchManifest()
         XCTAssertEqual(m.funding?.raisedCents, 6300)
@@ -72,7 +72,7 @@ final class SelfHostedCatalogRemoteTests: XCTestCase {
     func testFetchManifestWithoutFundingOrSupportersStillDecodes() async throws {
         let http = PathHTTP()
         http.responses["/catalog/manifest.json"] = [(200, manifestJSON())]
-        let remote = SelfHostedCatalogRemote(baseURL: base, session: TokenStub(), http: http, tier: "average")
+        let remote = OriginCatalogRemote(baseURL: base, authorize: Authorizers.appAttest(TokenStub()), http: http, tier: "average")
         let m = try await remote.fetchManifest()
         XCTAssertNil(m.funding)
         XCTAssertNil(m.supporters)
@@ -81,7 +81,7 @@ final class SelfHostedCatalogRemoteTests: XCTestCase {
     func testFetchManifestCasualTier() async throws {
         let http = PathHTTP()
         http.responses["/catalog/manifest.json"] = [(200, manifestJSON())]
-        let remote = SelfHostedCatalogRemote(baseURL: base, session: TokenStub(), http: http, tier: "casual")
+        let remote = OriginCatalogRemote(baseURL: base, authorize: Authorizers.appAttest(TokenStub()), http: http, tier: "casual")
         let m = try await remote.fetchManifest()
         XCTAssertEqual(m.path, "casual-v7.sqlite.gz")
         XCTAssertEqual(m.sha256, "cas")
@@ -90,7 +90,7 @@ final class SelfHostedCatalogRemoteTests: XCTestCase {
     func testFetchDataPrefixesCatalogPathAndCarriesBearer() async throws {
         let http = PathHTTP()
         http.responses["/catalog/average-v7.sqlite.gz"] = [(200, Data("gz".utf8))]
-        let remote = SelfHostedCatalogRemote(baseURL: base, session: TokenStub(), http: http, tier: "average")
+        let remote = OriginCatalogRemote(baseURL: base, authorize: Authorizers.appAttest(TokenStub()), http: http, tier: "average")
 
         let data = try await remote.fetchData(path: "average-v7.sqlite.gz")
         XCTAssertEqual(data, Data("gz".utf8))
@@ -102,7 +102,7 @@ final class SelfHostedCatalogRemoteTests: XCTestCase {
         let http = PathHTTP()
         http.responses["/catalog/average-v7.sqlite.gz"] = [(401, Data()), (200, Data("gz".utf8))]
         let session = TokenStub()
-        let remote = SelfHostedCatalogRemote(baseURL: base, session: session, http: http, tier: "average")
+        let remote = OriginCatalogRemote(baseURL: base, authorize: Authorizers.appAttest(session), http: http, tier: "average")
 
         let data = try await remote.fetchData(path: "average-v7.sqlite.gz")
         XCTAssertEqual(data, Data("gz".utf8))
@@ -115,7 +115,7 @@ final class SelfHostedCatalogRemoteTests: XCTestCase {
     func testNon401ErrorDoesNotRetry() async {
         let http = PathHTTP()
         http.responses["/catalog/average-v7.sqlite.gz"] = [(404, Data())]
-        let remote = SelfHostedCatalogRemote(baseURL: base, session: TokenStub(), http: http, tier: "average")
+        let remote = OriginCatalogRemote(baseURL: base, authorize: Authorizers.appAttest(TokenStub()), http: http, tier: "average")
         do { _ = try await remote.fetchData(path: "average-v7.sqlite.gz"); XCTFail("expected throw") }
         catch let e as CatalogError { XCTAssertEqual(e, .httpStatus(404)) }
         catch { XCTFail("wrong error") }

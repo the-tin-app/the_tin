@@ -93,7 +93,7 @@ final class ScannerPackModel {
         guard let url = AppConfig.selfHostBaseURL else { return UnavailableFingerprintRemote() }
         let session = AppAttestSessionProvider(baseURL: url, attestor: DeviceCheckAttestor(),
                                                http: URLSessionHTTPClient(), keys: KeychainStore())
-        return SelfHostedFingerprintRemote(baseURL: url, session: session)
+        return OriginFingerprintRemote(baseURL: url, authorize: Authorizers.appAttest(session))
     }
 
     // MARK: Status

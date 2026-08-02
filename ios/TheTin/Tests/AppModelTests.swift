@@ -302,8 +302,8 @@ final class AppModelTests: XCTestCase {
     func testSelfHostTierUnreachableFallsBackToFirebaseCasual() async throws {
         // "NAS down": a real self-hosted remote whose HTTP layer always fails. The Firebase
         // fallback serves the casual catalog and the whole update still reaches .ready.
-        let selfHost = SelfHostedCatalogRemote(baseURL: URL(string: "https://apithetin.reyes.ai")!,
-                                               session: StubSession(), http: FailHTTP(), tier: "average")
+        let selfHost = OriginCatalogRemote(baseURL: URL(string: "https://apithetin.reyes.ai")!,
+                                           authorize: Authorizers.appAttest(StubSession()), http: FailHTTP(), tier: "average")
         let model = AppModel(remote: selfHost, fallback: try stubRemoteWithFixture(),
                              paths: tempPaths(), skipFirebase: true)
         await model.start()
@@ -317,8 +317,8 @@ final class AppModelTests: XCTestCase {
         defer { AppConfig.catalogTier = saved }
         AppConfig.catalogTier = CatalogTier.casual.rawValue
 
-        let selfHost = SelfHostedCatalogRemote(baseURL: URL(string: "https://apithetin.reyes.ai")!,
-                                               session: StubSession(), http: FailHTTP(), tier: "average")
+        let selfHost = OriginCatalogRemote(baseURL: URL(string: "https://apithetin.reyes.ai")!,
+                                           authorize: Authorizers.appAttest(StubSession()), http: FailHTTP(), tier: "average")
         let model = AppModel(remote: selfHost,
                              fallback: try stubRemoteWithFixture(tier: CatalogTier.casual.rawValue),
                              paths: tempPaths(), skipFirebase: true)
