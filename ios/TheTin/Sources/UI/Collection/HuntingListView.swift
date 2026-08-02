@@ -55,7 +55,10 @@ struct HuntingListView: View {
     private func list(_ hunting: [CardRecord], rawUsd: [String: Double],
                       setsById: [String: SetRecord]) -> some View {
         List(hunting) { card in
-            row(card, rawUsd: rawUsd, setsById: setsById)
+            HuntRow(card: card, entry: wants.entry(card.id),
+                    setName: setsById[card.setId]?.name,
+                    printedTotal: printedTotalBySet[card.setId],
+                    marketUsd: rawUsd[card.id])
                 .contentShape(Rectangle())
                 .onTapGesture { editing = card }
                 // `.onTapGesture` alone is silent to VoiceOver — a `Button` wrapping a row that
@@ -65,60 +68,5 @@ struct HuntingListView: View {
                 .accessibilityAction { editing = card }
         }
         .listStyle(.plain)
-    }
-
-    @ViewBuilder private func row(_ card: CardRecord, rawUsd: [String: Double],
-                                  setsById: [String: SetRecord]) -> some View {
-        let entry = wants.entry(card.id)
-        let target = entry?.targetUsd
-        let market = rawUsd[card.id]
-        HStack(alignment: .top, spacing: 12) {
-            CardImageView(card: card, quality: "low").frame(width: 52)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(card.name).font(.headline).lineLimit(2)
-                if let market, let target {
-                    HStack(spacing: 4) {
-                        Text(market, format: .currency(code: "USD"))
-                            .foregroundStyle(market <= target ? .green : .primary)
-                        Text("· budget \(target, format: .currency(code: "USD"))")
-                            .foregroundStyle(.secondary)
-                    }
-                    .font(.subheadline)
-                }
-                if let hunt = entry?.hunt {
-                    Text(hunt.minCondition.floorLabel)
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if let url = Self.huntURL(card: card, entry: entry,
-                                          setName: setsById[card.setId]?.name,
-                                          printedTotal: printedTotalBySet[card.setId],
-                                          marketUsd: market) {
-                    Link(destination: url) {
-                        Label("Find one on eBay", systemImage: "magnifyingglass")
-                            .font(.subheadline)
-                    }
-                    .buttonStyle(.bordered)
-                    .padding(.top, 2)
-                    Text("Save this search in eBay to get notified.")
-                        .font(.caption2).foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    /// The eBay hunt URL for one row. Static and value-only — no store, no view state — so the
-    /// wiring is testable without a view host. The denominator is the highest-value token in
-    /// the query and reached production as `nil` once already; it needs a test that can fail.
-    static func huntURL(card: CardRecord, entry: WantEntry?, setName: String?,
-                        printedTotal: Int?, marketUsd: Double? = nil) -> URL? {
-        guard entry?.hunt != nil else { return nil }
-        return MarketplaceLinks.ebayHunt(
-            name: card.name,
-            setName: setName,
-            number: card.number,
-            total: MarketplaceLinks.denominator(number: card.number, printedTotal: printedTotal),
-            maxUsd: entry?.targetUsd,
-            marketUsd: marketUsd)
     }
 }

@@ -1,7 +1,7 @@
 import XCTest
 @testable import TheTin
 
-final class HuntingListViewTests: XCTestCase {
+final class HuntRowTests: XCTestCase {
     private func card(number: String, name: String = "Charizard",
                       setId: String = "base1") -> CardRecord {
         CardRecord(id: "\(setId)-\(number)", setId: setId, number: number, name: name, hp: nil,
@@ -20,7 +20,7 @@ final class HuntingListViewTests: XCTestCase {
     /// searched a bare "4", which eBay ANDs against item counts, prices and "4 cards" — so this
     /// asserts the value reaches the URL, not just that the builder can accept one.
     func testHuntURLCarriesThePrintedDenominator() throws {
-        let url = try XCTUnwrap(HuntingListView.huntURL(card: card(number: "4"),
+        let url = try XCTUnwrap(HuntRow.huntURL(card: card(number: "4"),
                                                         entry: hunting(),
                                                         setName: "Base Set", printedTotal: 102))
         let q = try nkw(url)
@@ -29,7 +29,7 @@ final class HuntingListViewTests: XCTestCase {
 
     /// Promo numbers are already unique, and "SWSH223/307" matches no real listing title.
     func testHuntURLOmitsTheDenominatorForAPromoNumber() throws {
-        let url = try XCTUnwrap(HuntingListView.huntURL(card: card(number: "SWSH223",
+        let url = try XCTUnwrap(HuntRow.huntURL(card: card(number: "SWSH223",
                                                                   name: "Mewtwo V",
                                                                   setId: "swshp"),
                                                         entry: hunting(),
@@ -43,7 +43,7 @@ final class HuntingListViewTests: XCTestCase {
     /// An unknown printed total emits the bare number rather than guessing one — a wrong
     /// denominator returns zero results silently, which is worse than a loose query.
     func testHuntURLOmitsTheDenominatorWhenThePrintedTotalIsUnknown() throws {
-        let url = try XCTUnwrap(HuntingListView.huntURL(card: card(number: "4"),
+        let url = try XCTUnwrap(HuntRow.huntURL(card: card(number: "4"),
                                                         entry: hunting(),
                                                         setName: "Base Set", printedTotal: nil))
         let q = try nkw(url)
@@ -53,15 +53,35 @@ final class HuntingListViewTests: XCTestCase {
 
     /// The budget is the price ceiling, and a card that isn't hunted has no row and no link.
     func testHuntURLPassesTheBudgetAndSkipsUnhuntedCards() throws {
-        let url = try XCTUnwrap(HuntingListView.huntURL(card: card(number: "4"),
+        let url = try XCTUnwrap(HuntRow.huntURL(card: card(number: "4"),
                                                         entry: hunting(target: 300),
                                                         setName: "Base Set", printedTotal: 102))
         let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
         XCTAssertEqual(items.first { $0.name == "_udhi" }?.value, "300")
 
-        XCTAssertNil(HuntingListView.huntURL(card: card(number: "4"), entry: WantEntry(),
+        XCTAssertNil(HuntRow.huntURL(card: card(number: "4"), entry: WantEntry(),
                                              setName: "Base Set", printedTotal: 102))
-        XCTAssertNil(HuntingListView.huntURL(card: card(number: "4"), entry: nil,
+        XCTAssertNil(HuntRow.huntURL(card: card(number: "4"), entry: nil,
                                              setName: "Base Set", printedTotal: 102))
+    }
+
+    /// Direction and whole percent. Shared by the Hunting row and Watching's drops section, so
+    /// the two cannot phrase the same number differently.
+    func testDeltaLabelReadsDirectionAndWholePercent() {
+        XCTAssertEqual(HuntRow.deltaLabel(-0.1449), "↓14% this week")
+        XCTAssertEqual(HuntRow.deltaLabel(0.034), "↑3% this week")
+    }
+
+    /// The floor rose to 0.35 on 2026-08-01 after a hand count against live eBay. Pinned at the
+    /// URL because it is the ONLY defence against counterfeits and mislabelled reprints —
+    /// sellers put the right set name and collector number on the wrong card, so no keyword
+    /// can separate them and `huntNegativeKeywords` must not be extended to try.
+    func testHuntFloorsAtThirtyFivePercentOfMarket() throws {
+        let url = try XCTUnwrap(HuntRow.huntURL(card: card(number: "4"),
+                                                entry: hunting(target: 700),
+                                                setName: "Base Set", printedTotal: 102,
+                                                marketUsd: 850))
+        let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(items.first { $0.name == "_udlo" }?.value, "297.50")
     }
 }
