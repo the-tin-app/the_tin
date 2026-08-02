@@ -331,3 +331,69 @@ describe("pruneOldArtifacts", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("pruneOldArtifacts — per-tier retention", () => {
+  const NOW = new Date("2026-08-02T07:00:00Z");
+
+  /** Write a zero-byte artifact and backdate its mtime by `ageDays`. */
+  function artifact(dir: string, name: string, ageDays: number) {
+    const p = join(dir, name);
+    writeFileSync(p, "");
+    const t = new Date(NOW.getTime() - ageDays * 86_400_000);
+    utimesSync(p, t, t);
+  }
+
+  function manifestFor(version: number): NasManifest {
+    const e = (tier: string) => ({ path: `${tier}-v${version}.sqlite.gz`, sha256: "x", sizeBytes: 1 });
+    return {
+      version,
+      generatedAt: NOW.toISOString(),
+      tiers: { casual: e("casual"), average: e("average"), expert: e("expert") },
+    };
+  }
+
+  it("keeps only the 3 newest casual/average versions regardless of age", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prune-"));
+    for (const v of [27, 28, 29, 30]) {
+      artifact(dir, `casual-v${v}.sqlite.gz`, 30 - v);
+      artifact(dir, `average-v${v}.sqlite.gz`, 30 - v);
+    }
+    const deleted = pruneOldArtifacts(dir, manifestFor(30), NOW);
+    expect(deleted.sort()).toEqual(["average-v27.sqlite.gz", "casual-v27.sqlite.gz"]);
+    expect(existsSync(join(dir, "casual-v28.sqlite.gz"))).toBe(true);
+    expect(existsSync(join(dir, "casual-v30.sqlite.gz"))).toBe(true);
+  });
+
+  it("keeps expert artifacts by AGE, not by version count — the delta ledger", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prune-"));
+    // 30 expert versions, one per day. All are inside the 45-day window.
+    for (let i = 0; i < 30; i++) artifact(dir, `expert-v${30 - i}.sqlite.gz`, i);
+    const deleted = pruneOldArtifacts(dir, manifestFor(30), NOW);
+    expect(deleted).toEqual([]);
+    // The 30d lookback window (25–40 days) must still have a candidate.
+    expect(existsSync(join(dir, "expert-v3.sqlite.gz"))).toBe(true);
+  });
+
+  it("still deletes expert artifacts past 45 days", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prune-"));
+    artifact(dir, "expert-v1.sqlite.gz", 46);
+    artifact(dir, "expert-v29.sqlite.gz", 1);
+    const deleted = pruneOldArtifacts(dir, manifestFor(30), NOW);
+    expect(deleted).toEqual(["expert-v1.sqlite.gz"]);
+  });
+
+  it("never deletes a file the current manifest names", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prune-"));
+    for (const t of ["casual", "average", "expert"]) artifact(dir, `${t}-v30.sqlite.gz`, 99);
+    expect(pruneOldArtifacts(dir, manifestFor(30), NOW)).toEqual([]);
+  });
+
+  it("ignores files that are not tier artifacts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prune-"));
+    artifact(dir, "manifest.json", 99);
+    artifact(dir, "supporters.json", 99);
+    artifact(dir, "catalog-v9.sqlite.gz", 99);
+    expect(pruneOldArtifacts(dir, manifestFor(30), NOW)).toEqual([]);
+    expect(existsSync(join(dir, "supporters.json"))).toBe(true);
+  });
+});
