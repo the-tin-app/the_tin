@@ -28,8 +28,15 @@ describe("handle", () => {
     expect((await handle(req, env, yes)).status).toBe(404);
   });
 
-  it("refuses path traversal", async () => {
+  it("404s a literal .. path (URL parser normalizes it before we see it)", async () => {
     const req = new Request("https://x/catalog/../devices.sqlite", { headers: { "X-Firebase-AppCheck": "ok" } });
+    expect((await handle(req, env, yes)).status).toBe(404);
+  });
+
+  it("refuses percent-encoded path traversal", async () => {
+    const req = new Request("https://x/catalog/%2E%2E%2Ffingerprint%2Fsecret", {
+      headers: { "X-Firebase-AppCheck": "ok" },
+    });
     expect((await handle(req, env, yes)).status).toBe(404);
   });
 
