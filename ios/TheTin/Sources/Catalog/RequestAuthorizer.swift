@@ -6,8 +6,8 @@ import Foundation
 /// This exists because the NAS and the R2 backup serve the *same* object layout and the *same*
 /// manifest contract, and differ only in how a request proves it may read. Injecting that one
 /// difference is what keeps a single tested remote implementation serving both origins — the
-/// previous shape (a whole second `HTTPCatalogRemote`) is what let the Firebase-only casual
-/// assumption rot into a silent tier bug.
+/// previous shape (a whole second remote type, one bucket-REST fallback with its own casual-only
+/// assumption baked in) is what let that assumption rot into a silent tier bug.
 typealias RequestAuthorizer = @Sendable (inout URLRequest, Bool) async throws -> Void
 
 enum Authorizers {

@@ -332,6 +332,27 @@ final class AppModelTests: XCTestCase {
         }
         XCTAssertTrue(msg.contains("backup source"), msg)
     }
+
+    // MARK: - R2 backup source labelling (Task 7)
+
+    func testFallbackIsLabelledBackupNotSelfHosted() async throws {
+        // Both remotes are now the same TYPE (OriginCatalogRemote), so a type-sniff would
+        // mislabel the source. Only the explicit `primarySource` can tell them apart.
+        let model = AppModel(remote: DeadRemote(),
+                             fallback: try stubRemoteWithFixture(version: 30, tier: "expert"),
+                             paths: tempPaths(), skipFirebase: true)
+        await model.start()
+        XCTAssertEqual(model.activeSource, .backup)
+    }
+
+    func testBackupServesTheUsersOwnTierNotCasual() async throws {
+        // The whole point of putting all three tiers on R2: failover must not degrade the tier.
+        let model = AppModel(remote: DeadRemote(),
+                             fallback: try stubRemoteWithFixture(version: 30, tier: "expert"),
+                             paths: tempPaths(), skipFirebase: true)
+        await model.start()
+        XCTAssertFalse(model.reducedData)
+    }
 }
 
 private extension ISO8601DateFormatter {

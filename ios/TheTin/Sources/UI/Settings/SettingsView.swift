@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Settings sheet. Shows app version, live connection status to the self-hosted server and the
-/// Firebase backup, the data-tier picker (with per-tier contents + download size), plus the
+/// R2 backup, the data-tier picker (with per-tier contents + download size), plus the
 /// existing Support / Data / Storage sections.
 struct SettingsView: View {
     @Bindable var app: AppModel
@@ -153,8 +153,8 @@ struct SettingsView: View {
             StatusRow(title: "Self-hosted", systemImage: "server.rack",
                       ok: model.connection.map { $0.selfHostAlive && $0.selfHostAuthOK },
                       detail: selfHostDetail)
-            StatusRow(title: "Backup (Firebase)", systemImage: "externaldrive.badge.icloud",
-                      ok: model.connection.map { $0.firebaseReachable }, detail: firebaseDetail)
+            StatusRow(title: "Backup", systemImage: "externaldrive.badge.icloud",
+                      ok: model.connection.map { $0.backupReachable }, detail: backupDetail)
             LabeledContent("Active source", value: activeSourceText)
         } header: {
             HStack {
@@ -169,15 +169,15 @@ struct SettingsView: View {
             }
         } footer: {
             if onBackupSource {
-                Text("The backup source only provides the Small catalog (latest prices, no history). Anything richer you already downloaded stays available on this device.")
+                Text("The backup source carries the same catalog as the self-hosted one, including your chosen data tier.")
             }
         }
     }
 
-    /// True when catalog data is coming from the Firebase backup instead of the self-hosted
+    /// True when catalog data is coming from the R2 backup instead of the self-hosted
     /// server — either the last update actually fell back, or the probe shows auth failing.
     private var onBackupSource: Bool {
-        if app.activeSource == .firebase { return true }
+        if app.activeSource == .backup { return true }
         if let c = model.connection { return c.selfHostConfigured && !c.selfHostAuthOK }
         return false
     }
@@ -191,15 +191,15 @@ struct SettingsView: View {
         return parts.joined(separator: " · ")
     }
 
-    private var firebaseDetail: String {
+    private var backupDetail: String {
         guard let c = model.connection else { return "…" }
-        return c.firebaseReachable ? Self.versionText(c.firebaseVersion) : "Unreachable"
+        return c.backupReachable ? Self.versionText(c.backupVersion) : "Unreachable"
     }
 
     private var activeSourceText: String {
         switch app.activeSource {
         case .selfHosted: return "Self-hosted"
-        case .firebase: return "Backup (Firebase)"
+        case .backup: return "Backup"
         case nil: return "—"
         }
     }
@@ -249,7 +249,7 @@ struct SettingsView: View {
             Text(msg).foregroundStyle(.red)
         case .idle:
             if onBackupSource {
-                Text("On the backup source only the Small catalog can download.\(installedTierNote)")
+                Text("The backup source carries your chosen tier too.\(installedTierNote)")
             } else {
                 Text("Just a download-size choice — every option is free. Change it anytime.")
             }

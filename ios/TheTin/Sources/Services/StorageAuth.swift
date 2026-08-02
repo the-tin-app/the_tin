@@ -3,12 +3,10 @@ import FirebaseAppCheck
 import FirebaseAuth
 import FirebaseCore
 
-/// Two consumers share this file: the App Check token that authorizes the R2 backup origin
-/// (`Authorizers.appCheck`), and `authorizedRequest(url:)` — still used by `HTTPCatalogRemote`,
-/// the Firebase Storage REST fallback. That fallback's bucket rules require BOTH headers
-/// (`storage.rules`: `allow read: if request.auth != null` — App Check alone is not enough), so
-/// dropping the Auth ID token here would 403 every fallback read until Task 7 replaces
-/// `HTTPCatalogRemote` with an `OriginCatalogRemote` pointed at the R2 backup.
+/// The App Check token that authorizes the R2 backup origin lives here (`Authorizers.appCheck`).
+/// `authorizedRequest(url:)` is a leftover from the old bucket-REST fallback remote that Task 7
+/// deleted — nothing in the app calls it any more. Kept only because `CatalogRemoteTests` still
+/// pins its "Firebase not configured" guard behavior directly.
 ///
 /// Guards on `FirebaseApp.app() != nil` first: unlike most Firebase APIs, `AppCheck.appCheck()`
 /// and `Auth.auth()` raise an uncaught NSException (not a catchable Swift `Error`, so `try?`

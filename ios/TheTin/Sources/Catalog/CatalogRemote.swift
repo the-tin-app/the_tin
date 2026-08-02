@@ -13,9 +13,10 @@ struct CatalogManifest: Codable, Equatable {
     /// Sponsors who asked to be listed. Served, never compiled in, so a name can be added or
     /// removed without an App Store review cycle. Absent in legacy JSON and while nobody is listed.
     let supporters: [Supporter]?
-    /// Which tier these bytes are. Self-host stamps its configured tier; Firebase (casual-only
-    /// backup) stamps "casual". Part of the installed-catalog identity so switching tiers at the
-    /// same version still re-downloads (see `CatalogUpdater.ensureLatest`). Absent in legacy JSON.
+    /// Which tier these bytes are — both the self-hosted NAS and the R2 backup stamp their own
+    /// configured tier (the backup carries all three, unlike the old casual-only Firebase copy).
+    /// Part of the installed-catalog identity so switching tiers at the same version still
+    /// re-downloads (see `CatalogUpdater.ensureLatest`). Absent in legacy JSON.
     let tier: String?
 
     init(version: Int, path: String, sha256: String, sizeBytes: Int, generatedAt: String,
@@ -59,11 +60,13 @@ extension CatalogRemote {
 }
 
 enum AppConfig {
-    /// The org's GCP policy blocks public-read GCS buckets, so the catalog can't be served from
-    /// `storage.googleapis.com` directly. It's instead served publicly via the Firebase Storage
-    /// rules layer (project `hobby-tcg`), which is fronted by the Firebase Storage REST/download
-    /// endpoint rather than a raw bucket URL — see `HTTPCatalogRemote.downloadURL`.
-    static let catalogBaseURL = URL(string: "https://firebasestorage.googleapis.com/v0/b/hobby-tcg.firebasestorage.app/o")!
+    /// The R2 backup origin, read through a Cloudflare Worker that verifies a Firebase App Check
+    /// token. Serves the SAME object layout and the SAME tiered manifest as the NAS, which is why
+    /// one remote type serves both. Its auth chain is deliberately independent of the NAS's, so a
+    /// fresh install can still authenticate here while the NAS is down.
+    ///
+    /// ⚠️ Shipped builds pin this hostname. Changing it strands every install that has it.
+    static let backupBaseURL = URL(string: "https://backupthetin.reyes.ai")!
 
     /// External sponsorship page. Opened in Safari — donations are NEVER processed in-app, and
     /// nothing is unlocked by them, which is what keeps the "Support" affordance App Store-
@@ -156,47 +159,3 @@ enum AppConfig {
     }
 }
 
-struct HTTPCatalogRemote: CatalogRemote {
-    let baseURL: URL
-    var session: URLSession = .shared
-
-    func fetchManifest() async throws -> CatalogManifest {
-        let m = try JSONDecoder().decode(CatalogManifest.self, from: try await get("catalog/manifest.json"))
-        // Firebase is the casual-only backup; stamp it so tier-identity checks are correct.
-        return m.tier == nil ? m.withTier(CatalogTier.casual.rawValue) : m
-    }
-
-    func fetchData(path: String) async throws -> Data {
-        try await get(path)
-    }
-
-    func fetchData(path: String, onBytes: @escaping @Sendable (Int) -> Void) async throws -> Data {
-        try await get(path, onBytes: onBytes)
-    }
-
-    /// Builds a Firebase Storage download URL for object `path`, per the Firebase Storage REST
-    /// API: `<base>/<percent-encoded-object-path>?alt=media`. The object path must collapse to a
-    /// single path segment — every `/` in it is percent-encoded to `%2F` — and `alt=media` makes
-    /// the endpoint return raw bytes instead of metadata JSON.
-    static func downloadURL(base: URL, path: String) -> URL? {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        guard let enc = path.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
-        return URL(string: "\(base.absoluteString)/\(enc)?alt=media")
-    }
-
-    private func get(_ path: String,
-                     onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
-        guard let url = Self.downloadURL(base: baseURL, path: path) else { throw CatalogError.badResponse }
-        let request = await StorageAuth.authorizedRequest(url: url)
-        let (data, response): (Data, URLResponse)
-        if let onBytes {
-            (data, response) = try await session.dataReportingProgress(for: request, onBytes: onBytes)
-        } else {
-            (data, response) = try await session.data(for: request)
-        }
-        guard let http = response as? HTTPURLResponse else { throw CatalogError.badResponse }
-        guard http.statusCode == 200 else { throw CatalogError.httpStatus(http.statusCode) }
-        return data
-    }
-}
