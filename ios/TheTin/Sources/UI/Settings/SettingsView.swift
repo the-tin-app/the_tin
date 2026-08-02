@@ -9,6 +9,9 @@ struct SettingsView: View {
     let pack: ScannerPackModel
     @State private var model = SettingsModel()
     @State private var confirmingClear = false
+    #if DEBUG
+    @State private var confirmingCatalogWipe = false
+    #endif
     @State private var confirmingPackDelete = false
     @State private var confirmingPackCellular = false
     @State private var restoreCandidate: BackupSnapshot?
@@ -82,6 +85,17 @@ struct SettingsView: View {
             } message: {
                 Text("You're not on Wi-Fi. This may count against your data plan — you can pause and resume anytime.")
             }
+            #if DEBUG
+            .confirmationDialog("Delete the installed catalog and re-download it?",
+                                isPresented: $confirmingCatalogWipe, titleVisibility: .visible) {
+                Button("Delete & re-download", role: .destructive) {
+                    Task { await app.debugDeleteCatalogAndRedownload() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Your collection, wishlist, set goals and scanner pack aren't affected.")
+            }
+            #endif
             .confirmationDialog(manualRestoreTitle, isPresented: $confirmingRestore,
                                 titleVisibility: .visible) {
                 Button("Replace collection", role: .destructive) {
@@ -619,10 +633,14 @@ struct SettingsView: View {
             Toggle("Simulate primary outage", isOn: Binding(
                 get: { AppConfig.simulatePrimaryOutage },
                 set: { AppConfig.simulatePrimaryOutage = $0 }))
+            Button("Delete catalog & re-download", role: .destructive) {
+                confirmingCatalogWipe = true
+            }
+            .disabled(app.catalogDownloadProgress != nil)
         } header: {
             Text("Debug")
         } footer: {
-            Text("Forces the self-hosted origin to fail so the backup origin can be tested. Debug builds only.")
+            Text("Forces the self-hosted origin to fail so the backup origin can be tested. \"Delete catalog & re-download\" wipes the installed catalog and pulls a fresh one, honoring the outage switch above. Debug builds only.")
         }
     }
     #endif

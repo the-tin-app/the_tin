@@ -28,6 +28,23 @@ final class AppModelTests: XCTestCase {
         func fetchData(path: String) async throws -> Data { throw CatalogError.httpStatus(500) }
     }
 
+    /// Serves `inner` once (the initial install), then fails every call after — simulates "the
+    /// server that installed the catalog originally is down by the time we try to re-download."
+    /// Isolates the delete step of `debugDeleteCatalogAndRedownload` from its redownload: with no
+    /// fallback configured, the second `ensureLatestWithFailover` call is guaranteed to fail, so
+    /// whatever is on disk afterward reflects the delete alone.
+    private final class OnceThenDeadRemote: CatalogRemote {
+        private let inner: CatalogRemote
+        private var manifestCalls = 0
+        init(inner: CatalogRemote) { self.inner = inner }
+        func fetchManifest() async throws -> CatalogManifest {
+            manifestCalls += 1
+            if manifestCalls > 1 { throw CatalogError.httpStatus(503) }
+            return try await inner.fetchManifest()
+        }
+        func fetchData(path: String) async throws -> Data { try await inner.fetchData(path: path) }
+    }
+
     func testFirstRunDownloadsCatalogAndBecomesReady() async throws {
         let model = AppModel(remote: try stubRemoteWithFixture(), primarySource: .selfHosted, paths: tempPaths(),
                              makeRepository: { _ in InMemoryCollectionRepository() },
@@ -465,6 +482,59 @@ final class AppModelTests: XCTestCase {
         await model.start()
         XCTAssertEqual(model.phase, .ready)
         XCTAssertEqual(model.activeSource, .selfHosted)
+    }
+
+    // MARK: - DEBUG delete-catalog-&-redownload button
+
+    /// Isolates the DELETE half of `debugDeleteCatalogAndRedownload` from its redownload: the
+    /// primary installs successfully once (so there's a real catalog on disk to wipe), then goes
+    /// dead with no fallback configured, so the redownload it triggers is guaranteed to fail.
+    /// Whatever remains on disk afterward is exactly what the delete step left — proving the
+    /// wipe happened rather than being masked by a successful reinstall.
+    func testDeleteCatalogAndRedownloadRemovesInstalledCatalogEvenWhenRedownloadFails() async throws {
+        let paths = tempPaths()
+        let remote = OnceThenDeadRemote(inner: try stubRemoteWithFixture())
+        let model = AppModel(remote: remote, primarySource: .selfHosted, paths: paths, skipFirebase: true)
+        await model.start()
+        XCTAssertEqual(model.phase, .ready)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.databaseURL.path))
+        XCTAssertNotNil(CatalogUpdater(remote: remote, paths: paths).installedState())
+
+        await model.debugDeleteCatalogAndRedownload()
+
+        XCTAssertNil(CatalogUpdater(remote: remote, paths: paths).installedState())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.databaseURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.stateURL.path))
+    }
+
+    /// The end-to-end disaster-recovery scenario the button exists for: wipe the installed
+    /// catalog, flip the outage switch on, and confirm the redownload it triggers is served
+    /// entirely by the R2 backup — not just probed, actually downloaded and installed.
+    func testDeleteCatalogAndRedownloadHonoursSimulatedOutage() async throws {
+        AppConfig.simulatePrimaryOutage = false
+        let primary = try originRemoteWithFixture(authorize: Authorizers.appAttest(StubSession()))
+        let backup = try originRemoteWithFixture()
+        let paths = tempPaths()
+        let model = AppModel(remote: primary, fallback: backup, primarySource: .selfHosted,
+                             paths: paths, skipFirebase: true)
+        await model.start()
+        XCTAssertEqual(model.phase, .ready)
+        XCTAssertEqual(model.activeSource, .selfHosted)
+        // start() also fires an unstructured `backgroundRefresh()` (see the same wait in
+        // testPrimaryBlipDoesNotDowngradeAndRecoveryStillUpdates above) — drain it BEFORE
+        // flipping the outage flag, or it can still be mid-flight when the flag flips and race
+        // debugDeleteCatalogAndRedownload's own download for the same catalog-incoming.sqlite.
+        for _ in 0..<200 where model.lastRefreshCheck == nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        AppConfig.simulatePrimaryOutage = true
+        await model.debugDeleteCatalogAndRedownload()
+
+        XCTAssertEqual(model.phase, .ready) // stays put — no full-screen state flip for this action
+        XCTAssertEqual(model.activeSource, .backup)
+        XCTAssertNotNil(CatalogUpdater(remote: backup, paths: paths).installedState())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.databaseURL.path))
     }
 }
 

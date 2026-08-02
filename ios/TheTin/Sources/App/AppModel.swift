@@ -480,4 +480,38 @@ final class AppModel {
     func backgroundCatalogUpdate() async -> Bool {
         (try? await ensureLatestWithFailover()) != nil
     }
+
+    #if DEBUG
+    /// DEBUG-only: wipe the installed catalog and run a normal `ensureLatestWithFailover`, so a
+    /// disaster-recovery test can prove a fresh DOWNLOAD — not just the outage toggle's probe —
+    /// is served entirely by the R2 backup. Reuses the same funnel `backgroundRefresh` does: the
+    /// download toast (`catalogDownloadProgress`) and `CatalogActivity` log both behave exactly
+    /// as they do for a real update, and `reopenStore()` (invoked inside the funnel on install)
+    /// re-points the live store at the new file.
+    ///
+    /// Drops the live handle FIRST, same ordering as `ScannerPackModel.deletePack` /
+    /// `FingerprintUpdater.deleteInstalledPack`: a `CatalogStore` holds the sqlite open, and
+    /// deleting the file out from under it leaves readers on an unlinked inode. Only the catalog
+    /// artifact and its state file are touched — the collection, wishlist, set goals, backups
+    /// and scanner pack live under different paths.
+    func debugDeleteCatalogAndRedownload() async {
+        try? store?.close()
+        let fm = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            try? fm.removeItem(at: URL(fileURLWithPath: paths.databaseURL.path + suffix))
+        }
+        try? fm.removeItem(at: paths.stateURL)
+        catalogState = nil
+        activeSource = nil
+
+        defer { catalogDownloadProgress = nil }
+        let onProgress: @MainActor @Sendable (Double) -> Void = { [weak self] fraction in
+            guard let self else { return }
+            let current = self.catalogDownloadProgress ?? -0.01
+            if Int(fraction * 100) > Int(current * 100) { self.catalogDownloadProgress = fraction }
+        }
+        _ = try? await ensureLatestWithFailover(onProgress: onProgress)
+        catalogState = updater.installedState()
+    }
+    #endif
 }
