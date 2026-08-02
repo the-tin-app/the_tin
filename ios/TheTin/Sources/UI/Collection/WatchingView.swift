@@ -103,7 +103,9 @@ struct WatchingView: View {
                             if let usd = drop.marketUsd {
                                 Text(usd, format: .currency(code: "USD")).monospacedDigit()
                             }
-                            Text(HuntRow.deltaLabel(drop.pct7d))
+                            // Always a real drop here (past DiscoverConstants.dealsMaxPct7d),
+                            // so this can never be the flat case.
+                            Text(HuntRow.delta(drop.pct7d).text)
                                 .font(.caption).foregroundStyle(.green)
                         }
                     }

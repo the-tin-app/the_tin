@@ -1322,9 +1322,15 @@ struct CollectionView: View {
 
     /// What the cards you care about have been doing. Sits under Wanted because it is about the
     /// same cards — the wishlist is the list, this is the news.
+    /// ⚠️ **No count, deliberately.** This row is not a container of N things — the screen behind
+    /// it shows hunts, wishlist drops and grail trends, three different subsets that change on
+    /// their own. Any single number is either wrong or just repeats Wanted's. It shipped briefly
+    /// with `wants.wanted.count`, which read as 72 beside Wanted's 74 (Wanted also counts set
+    /// goals) and meant nothing to anyone. The dot carries "there's something new here", which
+    /// is the only thing this row needs to say.
     private func watchingLink(_ wants: WantsModel) -> some View {
         pinnedLink(title: "Watching", systemImage: "binoculars", tint: .teal,
-                   count: wants.wanted.count, route: WatchingRoute(),
+                   count: nil, route: WatchingRoute(),
                    dot: WatchingModel.hasUnseen(asOf: model.priceAsOf,
                                                 lastSeen: watchingLastSeenAsOf))
     }
@@ -1337,8 +1343,10 @@ struct CollectionView: View {
     }
 
     /// The pinned rows under the dividers — same shape, so they read as a pair.
+    /// `count` is optional: a row that isn't a container of countable things omits it rather
+    /// than showing a number that means nothing (see `watchingLink`).
     private func pinnedLink<V: Hashable>(title: String, systemImage: String, tint: Color,
-                                         count: Int, route: V, dot: Bool = false) -> some View {
+                                         count: Int?, route: V, dot: Bool = false) -> some View {
         HStack {
             Image(systemName: systemImage).foregroundStyle(tint)
             Text(title)
@@ -1347,7 +1355,9 @@ struct CollectionView: View {
                     .accessibilityLabel("New since you last looked")
             }
             Spacer()
-            Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
+            if let count {
+                Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
+            }
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)

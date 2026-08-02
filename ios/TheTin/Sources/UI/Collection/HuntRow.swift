@@ -39,8 +39,10 @@ struct HuntRow: View {
                     HStack(spacing: 6) {
                         Text(hunt.minCondition.floorLabel)
                         if let delta7d {
-                            Text(Self.deltaLabel(delta7d))
-                                .foregroundStyle(delta7d < 0 ? .green : .red)
+                            let d = Self.delta(delta7d)
+                            Text(d.text)
+                                .foregroundStyle(d.isFlat ? AnyShapeStyle(.secondary)
+                                                 : AnyShapeStyle(delta7d < 0 ? .green : .red))
                         }
                     }
                     .font(.caption).foregroundStyle(.secondary)
@@ -59,10 +61,25 @@ struct HuntRow: View {
         .padding(.vertical, 4)
     }
 
-    /// "↓14% this week" / "↑3% this week". Whole percent — a tenth of a percent on a weekly
-    /// move is noise dressed as precision.
-    static func deltaLabel(_ pct: Double) -> String {
-        "\(pct < 0 ? "↓" : "↑")\(Int((abs(pct) * 100).rounded()))% this week"
+    /// A weekly move, and whether it rounds to nothing.
+    ///
+    /// ⚠️ **The flat threshold must match the DISPLAY precision.** This renders whole percent,
+    /// so anything under 0.5% shows as "0%" — and an arrow plus a colour beside "0%" claims a
+    /// direction the number itself denies. Shipped that way for a few hours on 2026-08-01 and
+    /// read as broken on a card that had barely moved. `DeltaBadge` has the same rule with a
+    /// tighter bound (0.0005) because it shows one decimal; the bound follows the format, not
+    /// the other way round.
+    struct Delta {
+        let text: String
+        /// True when the move rounds to zero at this precision — render it neutral, not green.
+        let isFlat: Bool
+    }
+
+    /// "↓14% this week" / "↑3% this week" / "unchanged this week".
+    static func delta(_ pct: Double) -> Delta {
+        let whole = Int((abs(pct) * 100).rounded())
+        guard whole > 0 else { return Delta(text: "unchanged this week", isFlat: true) }
+        return Delta(text: "\(pct < 0 ? "↓" : "↑")\(whole)% this week", isFlat: false)
     }
 
     /// The eBay hunt URL for one row. Static and value-only — no store, no view state — so the

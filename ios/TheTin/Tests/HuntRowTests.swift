@@ -67,9 +67,25 @@ final class HuntRowTests: XCTestCase {
 
     /// Direction and whole percent. Shared by the Hunting row and Watching's drops section, so
     /// the two cannot phrase the same number differently.
-    func testDeltaLabelReadsDirectionAndWholePercent() {
-        XCTAssertEqual(HuntRow.deltaLabel(-0.1449), "↓14% this week")
-        XCTAssertEqual(HuntRow.deltaLabel(0.034), "↑3% this week")
+    func testDeltaReadsDirectionAndWholePercent() {
+        XCTAssertEqual(HuntRow.delta(-0.1449).text, "↓14% this week")
+        XCTAssertEqual(HuntRow.delta(0.034).text, "↑3% this week")
+        XCTAssertFalse(HuntRow.delta(-0.1449).isFlat)
+    }
+
+    /// ⚠️ A move that rounds to 0% must not carry an arrow or a colour. Shipped briefly showing
+    /// "↓0% this week" in green on a card that had barely moved — the arrow claimed a direction
+    /// the number itself denied. The flat threshold follows the DISPLAY precision: this renders
+    /// whole percent, so anything under 0.5% is flat.
+    func testAMoveThatRoundsToZeroIsFlatAndNeutral() {
+        for pct in [-0.004, 0.004, 0.0, -0.0001] {
+            let d = HuntRow.delta(pct)
+            XCTAssertTrue(d.isFlat, "\(pct) should be flat")
+            XCTAssertEqual(d.text, "unchanged this week")
+        }
+        // …and 0.5% rounds up to 1%, so it is a real move again.
+        XCTAssertFalse(HuntRow.delta(-0.005).isFlat)
+        XCTAssertEqual(HuntRow.delta(-0.005).text, "↓1% this week")
     }
 
     /// The floor rose to 0.35 on 2026-08-01 after a hand count against live eBay. Pinned at the
