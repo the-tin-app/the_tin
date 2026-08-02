@@ -94,6 +94,24 @@ describe("splitTiers", () => {
   });
 });
 
+/** Builds a minimal source sqlite in its own temp dir and returns its path. Mirrors the schema
+ *  used by the `publishTiers` describe block's beforeEach above. */
+function seedDb(): string {
+  const dir = mkdtempSync(join(tmpdir(), "publish-tiers-seed-"));
+  const sourcePath = join(dir, "source.sqlite");
+  const db = new Database(sourcePath);
+  db.exec(`
+    CREATE TABLE card(id TEXT PRIMARY KEY, name TEXT);
+    CREATE TABLE price_history(card_id TEXT, date TEXT, raw_usd REAL);
+    CREATE TABLE price_history_cond(card_id TEXT, condition TEXT, date TEXT, usd REAL);
+    CREATE TABLE graded_history(card_id TEXT, grade TEXT, date TEXT, usd REAL);
+    INSERT INTO card VALUES ('c1','Pikachu');
+    INSERT INTO price_history VALUES ('c1','2026-07-01',1.5);
+  `);
+  db.close();
+  return sourcePath;
+}
+
 class MemStore implements StoragePort {
   files = new Map<string, Buffer>();
   async save(path: string, data: Buffer) { this.files.set(path, Buffer.from(data)); }
@@ -153,5 +171,63 @@ describe("publishTiers", () => {
     await publishTiers({ sourceDbPath: sourcePath, version: 8, nasDir: join(dir, "nas"),
       firebaseStorage: fb, now: new Date("2026-07-12T00:00:00Z"), publishToFirebase: false });
     expect(fb.files.size).toBe(0);
+  });
+});
+
+describe("publishTiers → R2", () => {
+  /** Records every save in call order — order is the assertion that matters most here. */
+  function recorder() {
+    const calls: { path: string; bytes: number; contentType: string }[] = [];
+    return {
+      calls,
+      port: { save: async (path: string, data: Buffer, contentType: string) => {
+        calls.push({ path, bytes: data.length, contentType });
+      } } as StoragePort,
+    };
+  }
+
+  it("uploads all three tiers and the tiered manifest under catalog/", async () => {
+    const r = recorder();
+    const dir = mkdtempSync(join(tmpdir(), "pub-"));
+    await publishTiers({
+      sourceDbPath: seedDb(), version: 42, nasDir: dir,
+      firebaseStorage: r.port, now: new Date(), publishToFirebase: false, r2: r.port,
+    });
+    const paths = r.calls.map((c) => c.path);
+    expect(paths).toContain("catalog/casual-v42.sqlite.gz");
+    expect(paths).toContain("catalog/average-v42.sqlite.gz");
+    expect(paths).toContain("catalog/expert-v42.sqlite.gz");
+    expect(paths).toContain("catalog/manifest.json");
+  });
+
+  it("uploads the manifest LAST — a manifest naming absent objects strands every client", async () => {
+    const r = recorder();
+    const dir = mkdtempSync(join(tmpdir(), "pub-"));
+    await publishTiers({
+      sourceDbPath: seedDb(), version: 42, nasDir: dir,
+      firebaseStorage: r.port, now: new Date(), publishToFirebase: false, r2: r.port,
+    });
+    expect(r.calls[r.calls.length - 1].path).toBe("catalog/manifest.json");
+  });
+
+  it("uploads the SAME bytes that were written to the NAS", async () => {
+    const r = recorder();
+    const dir = mkdtempSync(join(tmpdir(), "pub-"));
+    const m = await publishTiers({
+      sourceDbPath: seedDb(), version: 42, nasDir: dir,
+      firebaseStorage: r.port, now: new Date(), publishToFirebase: false, r2: r.port,
+    });
+    const uploaded = r.calls.find((c) => c.path === "catalog/expert-v42.sqlite.gz")!;
+    expect(uploaded.bytes).toBe(m.tiers.expert.sizeBytes);
+  });
+
+  it("does not touch R2 when no port is supplied", async () => {
+    const r = recorder();
+    const dir = mkdtempSync(join(tmpdir(), "pub-"));
+    await publishTiers({
+      sourceDbPath: seedDb(), version: 42, nasDir: dir,
+      firebaseStorage: r.port, now: new Date(), publishToFirebase: false,
+    });
+    expect(r.calls).toEqual([]);
   });
 });
