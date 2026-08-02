@@ -119,6 +119,15 @@ enum AppConfig {
     /// available from Settings and the Scan tab — dismissing silences the nudge, not the feature.
     static let scannerPromptDismissedKey = "scannerPromptDismissed"
 
+    /// The catalog price date (`yyyy-MM-dd`) the user last saw on the Watching screen. Drives
+    /// the Tin row's dot via `WatchingModel.hasUnseen`; written when the screen loads, so
+    /// visiting is what clears it. A date rather than a count because, with no event log, a
+    /// count would be permanent state that never cleared.
+    static var watchingLastSeenAsOf: String? {
+        get { UserDefaults.standard.string(forKey: "watchingLastSeenAsOf") }
+        set { UserDefaults.standard.set(newValue, forKey: "watchingLastSeenAsOf") }
+    }
+
     /// Scanner mode: false = stage each lock as a draft for the tin (default), true = just show
     /// the card and stage nothing. Persisted because which one you want is a property of how
     /// you're using the app today — cataloguing a box at home vs. asking "what is this?" in a

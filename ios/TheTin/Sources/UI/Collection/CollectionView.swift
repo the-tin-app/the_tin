@@ -814,7 +814,10 @@ struct CollectionView: View {
                     // which is what this branch is about — but it isn't empty, and hiding what
                     // you do own behind a "your tin is empty" screen would read as data loss.
                     sealedSection
-                    if let wants, !wants.wanted.isEmpty { wishlistLink(wants).tinRow() }
+                    if let wants, !wants.wanted.isEmpty {
+                        wishlistLink(wants).tinRow()
+                        watchingLink(wants).tinRow()
+                    }
                 } else {
                     header.tinRow()
                     everythingRow.tinRow()
@@ -829,6 +832,10 @@ struct CollectionView: View {
                     newDividerRow.tinRow()
                     sealedSection
                     if let wants { wishlistLink(wants).tinRow() }
+                    // Gated on a non-empty wishlist even here, unlike Wanted: with nothing
+                    // hearted the screen has nothing to say, and a row that opens an empty
+                    // screen is the same broken promise the trade row avoids below.
+                    if let wants, !wants.wanted.isEmpty { watchingLink(wants).tinRow() }
                     // Not on the empty branch: with no entries there is nothing to trade, so the
                     // row would only be a promise the tin can't keep — same rule as the wishlist.
                     tradeLink.tinRow()
@@ -977,6 +984,11 @@ struct CollectionView: View {
         .navigationDestination(for: WantedRoute.self) { _ in
             if let wants {
                 WantedView(store: store, wants: wants, collection: model, goals: goals)
+            }
+        }
+        .navigationDestination(for: WatchingRoute.self) { _ in
+            if let wants {
+                WatchingView(store: store, wants: wants)
             }
         }
         .navigationDestination(for: TradeRoute.self) { _ in
@@ -1300,6 +1312,15 @@ struct CollectionView: View {
                    count: wants.wanted.count + (goals?.setIds.count ?? 0), route: WantedRoute())
     }
 
+    /// What the cards you care about have been doing. Sits under Wanted because it is about the
+    /// same cards — the wishlist is the list, this is the news.
+    private func watchingLink(_ wants: WantsModel) -> some View {
+        pinnedLink(title: "Watching", systemImage: "binoculars", tint: .teal,
+                   count: wants.wanted.count, route: WatchingRoute(),
+                   dot: WatchingModel.hasUnseen(asOf: model.priceAsOf,
+                                                lastSeen: AppConfig.watchingLastSeenAsOf))
+    }
+
     /// The other half of the wishlist: what you'll give up. Sits beside it because "hunting" and
     /// "trading" are the same conversation at a meetup.
     private var tradeLink: some View {
@@ -1309,10 +1330,14 @@ struct CollectionView: View {
 
     /// The pinned rows under the dividers — same shape, so they read as a pair.
     private func pinnedLink<V: Hashable>(title: String, systemImage: String, tint: Color,
-                                         count: Int, route: V) -> some View {
+                                         count: Int, route: V, dot: Bool = false) -> some View {
         HStack {
             Image(systemName: systemImage).foregroundStyle(tint)
             Text(title)
+            if dot {
+                Circle().fill(.tint).frame(width: 7, height: 7)
+                    .accessibilityLabel("New since you last looked")
+            }
             Spacer()
             Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)

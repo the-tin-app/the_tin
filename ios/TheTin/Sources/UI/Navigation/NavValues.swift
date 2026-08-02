@@ -15,6 +15,9 @@ extension CardID: Identifiable { var id: String { raw } }
 /// used by real collection groups, to avoid a navigationDestination type collision).
 struct WantedRoute: Hashable {}
 
+/// Route to the Watching screen: what the cards you said you care about have been doing.
+struct WatchingRoute: Hashable {}
+
 /// Route to a stream's immersive "See all" page (destination added in Task 13).
 struct StreamRoute: Hashable { let kind: DiscoverModel.StreamKind }
 
