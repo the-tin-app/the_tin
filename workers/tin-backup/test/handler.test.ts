@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { handle, type Env } from "../src/index";
+import handler, { handle, type Env } from "../src/index";
 
 const env = { BUCKET: {} as any, FIREBASE_PROJECT_NUMBER: "1", FIREBASE_APP_ID: "app" } satisfies Env;
 const yes = async () => true;
@@ -57,5 +57,15 @@ describe("handle", () => {
     const req = new Request("https://x/catalog/manifest.json", { headers: { "X-Firebase-AppCheck": "ok" } });
     const res = await handle(req, { ...env, BUCKET: bucketWith({ "catalog/manifest.json": "{}" }) }, yes);
     expect(res.status).toBe(200);
+  });
+});
+
+describe("default export (the runtime's actual fetch contract)", () => {
+  it("401s, not 500s, when invoked with the runtime's 3-arg fetch(req, env, ctx)", async () => {
+    // Stand-in ExecutionContext, matching what workerd actually passes as arg 3.
+    const ctx = { waitUntil() {}, passThroughOnException() {} };
+    const req = new Request("https://x/catalog/manifest.json", { headers: { "X-Firebase-AppCheck": "garbage" } });
+    const res = await (handler.fetch as any)(req, { ...env, BUCKET: bucketWith({}) }, ctx);
+    expect(res.status).toBe(401);
   });
 });

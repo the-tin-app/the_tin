@@ -43,4 +43,4 @@ export async function handle(
   });
 }
 
-export default { fetch: handle };
+export default { fetch: (req: Request, env: Env) => handle(req, env) };
