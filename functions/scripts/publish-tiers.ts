@@ -165,18 +165,39 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
   }
 }
 
-const RETENTION_DAYS = 45;
+const RETENTION_DAYS = 45;   // expert ONLY — see pruneOldArtifacts
+const KEEP_VERSIONS = 3;     // casual/average — pure rollback material, never read back
 
-/** Delete tier artifacts older than RETENTION_DAYS (mtime) — the delta lookback only needs 40
- *  days back — but never a file the just-written manifest references. Returns deleted names. */
+/** Prune published tier artifacts, and never one the just-written manifest references.
+ *
+ *  Retention is asymmetric on purpose. `expert-v*` is not a backup — it is the price-delta
+ *  ledger: computePriceDeltas ATTACHes prior expert artifacts aged 0.5–3d, 5–10d and 25–40d
+ *  (see pickLookbackArtifact), so pruning it by version count silently empties pct_7d and
+ *  pct_30d — no error, just blank Movers. Age is the only correct rule there.
+ *  casual/average are read by nothing but a human doing a rollback, so 3 versions is plenty.
+ *  Returns deleted names. */
 export function pruneOldArtifacts(catalogDir: string, manifest: NasManifest, now: Date): string[] {
   const keep = new Set(Object.values(manifest.tiers).map((t) => t.path));
-  const deleted: string[] = [];
+  const byTier = new Map<string, { f: string; v: number }[]>();
   for (const f of readdirSync(catalogDir)) {
-    if (!/^(casual|average|expert)-v\d+\.sqlite\.gz$/.test(f) || keep.has(f)) continue;
-    if ((now.getTime() - statSync(join(catalogDir, f)).mtimeMs) / DAY_MS > RETENTION_DAYS) {
-      unlinkSync(join(catalogDir, f));
-      deleted.push(f);
+    const m = /^(casual|average|expert)-v(\d+)\.sqlite\.gz$/.exec(f);
+    if (!m || keep.has(f)) continue;
+    byTier.set(m[1], [...(byTier.get(m[1]) ?? []), { f, v: Number(m[2]) }]);
+  }
+
+  const deleted: string[] = [];
+  const drop = (f: string) => { unlinkSync(join(catalogDir, f)); deleted.push(f); };
+
+  for (const [tier, files] of byTier) {
+    if (tier === "expert") {
+      for (const { f } of files) {
+        if ((now.getTime() - statSync(join(catalogDir, f)).mtimeMs) / DAY_MS > RETENTION_DAYS) drop(f);
+      }
+    } else {
+      // Newest version first. The manifest's own copy was excluded above and counts as one of
+      // the KEEP_VERSIONS, so KEEP_VERSIONS - 1 survive from this list.
+      files.sort((a, b) => b.v - a.v);
+      for (const { f } of files.slice(KEEP_VERSIONS - 1)) drop(f);
     }
   }
   return deleted;
