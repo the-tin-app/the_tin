@@ -281,7 +281,7 @@ private struct FundingBanner: ViewModifier {
                         OfflineBanner(asOf: model.catalogState?.priceAsOf ?? (try? store.priceAsOf()) ?? nil)
                     }
                     if model.reducedData {
-                        ReducedDataBanner()
+                        ReducedDataBanner(installedTier: model.catalogState?.tier)
                     }
                     FundingBar(funding: model.funding)
                 }
@@ -468,13 +468,23 @@ private struct UndoToast: View {
     }
 }
 
-/// Shown while the installed catalog is a poorer tier than the one the user picked (the
-/// casual-only backup source bootstrapped it) — otherwise missing history/grades read as a bug.
+/// Shown while the installed catalog is a poorer tier than the one the user picked — e.g. a tier
+/// switch that didn't finish, or a legacy install that predates the current choice. Every backup
+/// origin (R2 included) now carries all three tiers, so this is never a "which server answered"
+/// problem — otherwise missing history/grades would read as a bug rather than a state.
 private struct ReducedDataBanner: View {
+    /// `AppModel.catalogState?.tier`, the raw tier string of what's actually installed.
+    let installedTier: String?
+
+    private var tierTitle: String? {
+        installedTier.flatMap { CatalogTier(rawValue: $0)?.title }
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "externaldrive.badge.icloud")
-            Text("Backup card data — price history unavailable")
+            Text(tierTitle.map { "Showing \($0) card data — switch it in Settings" }
+                 ?? "Showing a smaller catalog than you chose — switch it in Settings")
         }
         .font(.caption.bold())
         .padding(.vertical, 6).frame(maxWidth: .infinity)

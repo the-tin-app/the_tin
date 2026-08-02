@@ -1,12 +1,13 @@
 import Foundation
 
-/// `CatalogRemote` backed by the self-hosted `catalog-server`. Adapts the server's tiered manifest
-/// to the single-artifact `CatalogManifest` by selecting the configured `tier`, so `CatalogUpdater`
-/// needs no changes. Every call carries an App Attest Bearer token; a 401 refreshes the token and
-/// retries the same request once.
-struct SelfHostedCatalogRemote: CatalogRemote {
+/// `CatalogRemote` for an origin serving our manifest contract — the self-hosted `catalog-server`
+/// (App Attest) or the R2 backup (App Check), which serve the same object layout and manifest
+/// shape and differ only in `authorize`. Adapts the tiered manifest to the single-artifact
+/// `CatalogManifest` by selecting the configured `tier`, so `CatalogUpdater` needs no changes.
+/// Every call is authorized; a 401 re-authorizes (with `refresh: true`) and retries once.
+struct OriginCatalogRemote: CatalogRemote {
     let baseURL: URL
-    let session: SessionProvider
+    let authorize: RequestAuthorizer
     var http: HTTPClient = URLSessionHTTPClient()
     var tier: String = AppConfig.catalogTier
 
@@ -45,21 +46,21 @@ struct SelfHostedCatalogRemote: CatalogRemote {
         try await get(path, onBytes: onBytes)
     }
 
-    /// GET `<baseURL>/catalog/<path>` with the Bearer token; on 401 refresh + retry once.
+    /// GET `<baseURL>/catalog/<path>`; on 401 re-authorize once and retry.
     private func get(_ path: String,
                      onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
-        do { return try await send(path, token: try await session.authToken(), onBytes: onBytes) }
+        do { return try await send(path, refresh: false, onBytes: onBytes) }
         catch CatalogError.httpStatus(401) {
-            return try await send(path, token: try await session.refreshedToken(), onBytes: onBytes)
+            return try await send(path, refresh: true, onBytes: onBytes)
         }
     }
 
-    private func send(_ path: String, token: String,
+    private func send(_ path: String, refresh: Bool,
                       onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
         let url = baseURL.appendingPathComponent("catalog").appendingPathComponent(path)
         var req = URLRequest(url: url)
         req.timeoutInterval = AppConfig.selfHostTimeout
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        try await authorize(&req, refresh)
         let (data, response) = if let onBytes {
             try await http.send(req, onBytes: onBytes)
         } else {

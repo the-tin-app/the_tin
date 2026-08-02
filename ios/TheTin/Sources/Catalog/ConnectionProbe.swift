@@ -12,8 +12,8 @@ struct ConnectionStatus: Equatable {
     var selfHostVersion: Int?
     /// Download size per tier key ("casual"/"average"/"expert"), from the NAS manifest.
     var tierSizes: [String: Int] = [:]
-    var firebaseReachable = false
-    var firebaseVersion: Int?
+    var backupReachable = false
+    var backupVersion: Int?
 }
 
 extension AppModel {
@@ -41,9 +41,9 @@ extension AppModel {
             }
         }
 
-        if let m = try? await HTTPCatalogRemote(baseURL: AppConfig.catalogBaseURL).fetchManifest() {
-            s.firebaseReachable = true
-            s.firebaseVersion = m.version
+        if let m = try? await AppModel.backupRemote().fetchManifest() {
+            s.backupReachable = true
+            s.backupVersion = m.version
         }
 
         return s

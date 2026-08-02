@@ -11,7 +11,7 @@ final class AppModel {
         case failed(String)
     }
 
-    enum CatalogSource: String { case selfHosted, firebase }
+    enum CatalogSource: String { case selfHosted, backup }
     enum TierChange: Equatable { case idle, downloading, done, failed(String) }
 
     private(set) var phase: Phase = .launching
@@ -142,7 +142,10 @@ final class AppModel {
     private var wantsRepositoryInstance: WantsRepository?
 
     private var remote: CatalogRemote
-    private let fallbackRemote: CatalogRemote?
+    private var fallbackRemote: CatalogRemote?
+    /// Which source `remote` actually is — can't be recovered by sniffing its type any more,
+    /// since the self-hosted and backup remotes are both `OriginCatalogRemote` now.
+    private let primarySource: CatalogSource
     private let paths: CatalogPaths
     private let makeRepository: (String) -> CollectionRepository
     private let skipFirebase: Bool // unit tests exercise catalog flow without Firebase
@@ -150,29 +153,37 @@ final class AppModel {
     private let now: () -> Date // injectable clock for deterministic funding tests
     private var updater: CatalogUpdater { CatalogUpdater(remote: remote, paths: paths) }
 
-    /// The self-hosted NAS catalog remote (App Attest identity), or nil when no self-host URL is
-    /// configured. Firebase serves as the operation-level fallback — see `ensureLatestWithFailover`.
-    nonisolated static func selfHostedRemote() -> SelfHostedCatalogRemote? {
+    /// The self-hosted NAS remote (App Attest identity), or nil when no self-host URL is configured.
+    nonisolated static func selfHostedRemote() -> OriginCatalogRemote? {
         guard let url = AppConfig.selfHostBaseURL else { return nil }
         let session = AppAttestSessionProvider(baseURL: url, attestor: DeviceCheckAttestor(),
                                                http: URLSessionHTTPClient(), keys: KeychainStore())
-        return SelfHostedCatalogRemote(baseURL: url, session: session, http: URLSessionHTTPClient())
+        return OriginCatalogRemote(baseURL: url, authorize: Authorizers.appAttest(session),
+                                   http: URLSessionHTTPClient())
     }
 
-    /// Production wiring: self-host primary (if configured) with Firebase as the operation-level
-    /// fallback, else Firebase-only. Failover is atomic per operation — a catalog update runs
-    /// entirely against one source (manifest + artifact together), never mixing the two sources'
-    /// version-specific artifact paths.
+    /// The R2 backup origin (App Check identity) — same contract, independent auth chain.
+    nonisolated static func backupRemote() -> OriginCatalogRemote {
+        OriginCatalogRemote(baseURL: AppConfig.backupBaseURL, authorize: Authorizers.appCheck(),
+                            http: URLSessionHTTPClient())
+    }
+
+    /// Production wiring: NAS primary (if configured) with R2 as the operation-level fallback.
+    /// Failover is atomic per operation — a catalog update runs entirely against one origin
+    /// (manifest + artifact together), never mixing two origins' version-specific artifact paths.
+    /// Exactly TWO sources, deliberately: a third is how that invariant gets broken.
     @MainActor static func makeDefault(skipFirebase: Bool) -> AppModel {
-        let firebase = HTTPCatalogRemote(baseURL: AppConfig.catalogBaseURL)
+        let backup = backupRemote()
         if let selfHosted = selfHostedRemote() {
-            return AppModel(remote: selfHosted, fallback: firebase, skipFirebase: skipFirebase)
+            return AppModel(remote: selfHosted, fallback: backup,
+                            primarySource: .selfHosted, skipFirebase: skipFirebase)
         }
-        return AppModel(remote: firebase, skipFirebase: skipFirebase)
+        return AppModel(remote: backup, primarySource: .backup, skipFirebase: skipFirebase)
     }
 
-    init(remote: CatalogRemote = HTTPCatalogRemote(baseURL: AppConfig.catalogBaseURL),
+    init(remote: CatalogRemote,
          fallback: CatalogRemote? = nil,
+         primarySource: CatalogSource,
          paths: CatalogPaths = .default(),
          makeRepository: @escaping (String) -> CollectionRepository = { _ in LocalCollectionRepository() },
          skipFirebase: Bool = false,
@@ -180,6 +191,7 @@ final class AppModel {
          now: @escaping () -> Date = { Date() }) {
         self.remote = remote
         self.fallbackRemote = fallback
+        self.primarySource = primarySource
         self.paths = paths
         self.makeRepository = makeRepository
         self.skipFirebase = skipFirebase
@@ -213,13 +225,13 @@ final class AppModel {
     private func updateFromPrimaryOrFallback(
         onProgress: (@MainActor @Sendable (Double) -> Void)? = nil
     ) async throws -> CatalogUpdateOutcome {
-        let primaryName = remote is SelfHostedCatalogRemote ? "self-hosted" : "backup"
+        let primaryName = primarySource == .selfHosted ? "self-hosted" : "backup"
         do {
             let outcome = try await CatalogUpdater(remote: remote, paths: paths)
                 .ensureLatest(onProgress: onProgress)
             // A successful primary fetch means its manifest (and, for self-host, the App Attest
             // session token) round-tripped — this line is how we confirm the NAS path is live.
-            activeSource = remote is SelfHostedCatalogRemote ? .selfHosted : .firebase
+            activeSource = primarySource
             Self.catalogLog.notice("catalog: primary \(primaryName, privacy: .public) served \(String(describing: outcome), privacy: .public)")
             if case .installed = outcome { CatalogActivity.record("\(primaryName): \(describe(outcome))") }
             return outcome
@@ -229,12 +241,12 @@ final class AppModel {
                 CatalogActivity.record("\(primaryName) failed (\(shortError(error))), no backup configured")
                 throw error
             }
-            Self.catalogLog.notice("catalog: primary \(primaryName, privacy: .public) failed (\(String(describing: error), privacy: .public)) — falling back to Firebase")
+            Self.catalogLog.notice("catalog: primary \(primaryName, privacy: .public) failed (\(String(describing: error), privacy: .public)) — falling back to backup")
             do {
                 let outcome = try await CatalogUpdater(remote: fallbackRemote, paths: paths)
                     .ensureLatest(onProgress: onProgress)
-                activeSource = .firebase
-                Self.catalogLog.notice("catalog: fallback Firebase served \(String(describing: outcome), privacy: .public)")
+                activeSource = .backup
+                Self.catalogLog.notice("catalog: fallback backup served \(String(describing: outcome), privacy: .public)")
                 CatalogActivity.record("self-hosted failed (\(shortError(error))) → backup: \(describe(outcome))")
                 return outcome
             } catch let fallbackError {
@@ -256,9 +268,11 @@ final class AppModel {
         String(String(describing: error).prefix(80))
     }
 
-    /// True when the installed catalog is a poorer tier than the one the user chose — e.g. the
-    /// casual-only Firebase backup bootstrapped the install while the NAS was unreachable. Drives
-    /// the "backup card data" banner so missing history/grades read as a state, not a bug.
+    /// True when the installed catalog is a poorer tier than the one the user chose — e.g. an
+    /// older install (or a legacy untiered manifest) bootstrapped before the current tier was
+    /// picked. Drives the "backup card data" banner so missing history/grades read as a state,
+    /// not a bug. The R2 backup carries all three tiers now, so this no longer fires just because
+    /// the NAS was unreachable.
     var reducedData: Bool {
         guard let installed = CatalogTier(rawValue: catalogState?.tier ?? ""),
               let chosen = CatalogTier(rawValue: currentTier),
@@ -346,18 +360,30 @@ final class AppModel {
 
     func retry() async { await start() }
 
-    /// User picked a different data tier in Settings. Persist it, rebuild the NAS remote so it
-    /// fetches the new tier, re-download immediately, and reopen the live store on the new bytes.
+    /// User picked a different data tier in Settings. Persist it, rebuild the NAS and R2 remotes
+    /// so both fetch the new tier, re-download immediately, and reopen the live store on the new
+    /// bytes. Rebuilding only `remote` and leaving `fallbackRemote` on the pre-switch tier would
+    /// have the backup ask for the old tier, get a manifest stamped with it, fail the
+    /// `unwantedTier` guard in `CatalogUpdater`, and report a false "isn't available from the
+    /// backup source" — the backup carries every tier, it just never got asked for the right one.
     func setTier(_ tier: CatalogTier) async {
         guard tier.rawValue != AppConfig.catalogTier else { return }
         AppConfig.catalogTier = tier.rawValue
         currentTier = tier.rawValue
+        // Both remotes bake in `tier` at construction (`OriginCatalogRemote.tier`), so a switch
+        // has to rebuild whichever ones are real NAS/R2 remotes. `fallbackRemote` is gated on its
+        // OWN current type rather than reusing the self-host guard verbatim: production always
+        // pairs a real self-hosted `remote` with a real R2 `fallbackRemote` (`makeDefault` builds
+        // both together), so this rebuilds exactly when the reviewer's fix requires — but a test
+        // fake fallback (no tier concept, and no App Check identity to authorize with) is left
+        // alone rather than replaced by a live R2 remote that can only fail in-process.
         if let fresh = Self.selfHostedRemote() { remote = fresh }
+        if fallbackRemote is OriginCatalogRemote { fallbackRemote = Self.backupRemote() }
         tierChange = .downloading
         do {
             _ = try await ensureLatestWithFailover() // installs + reopens the live store in one funnel
-            // The Firebase fallback only serves casual — a "successful" update there can install a
-            // different tier than the one just picked. Say so instead of claiming success.
+            // The backup source could still install a different tier than the one just picked
+            // (e.g. a stale manifest at the same version). Say so instead of claiming success.
             if let installed = catalogState?.tier, installed != tier.rawValue {
                 let name = CatalogTier(rawValue: installed)?.title ?? installed
                 tierChange = .failed("\(tier.title) isn't available from the backup source — showing \(name) data for now.")
@@ -422,7 +448,7 @@ final class AppModel {
         await backgroundRefresh()
     }
 
-    /// New catalog versions and daily price deltas, applied quietly behind a ready UI.
+    /// New catalog versions, applied quietly behind a ready UI.
     private func backgroundRefresh() async {
         guard store != nil else { return }
         lastRefreshCheck = now()
@@ -435,22 +461,13 @@ final class AppModel {
             if Int(fraction * 100) > Int(current * 100) { self.catalogDownloadProgress = fraction }
         }
         _ = try? await ensureLatestWithFailover(onProgress: onProgress)
-        guard let store else { return }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        let today = formatter.string(from: Date())
-        let yesterday = formatter.string(from: Date().addingTimeInterval(-86_400))
-        // Price deltas are a Firebase-only resource (the NAS publishes none) and best-effort.
-        let priceUpdater = CatalogUpdater(remote: fallbackRemote ?? remote, paths: paths)
-        await priceUpdater.refreshPrices(store: store, dates: [yesterday, today])
         catalogState = updater.installedState()
     }
 
     // MARK: Background tasks (BGTaskScheduler entry points — see BackgroundRefresh.swift)
 
     /// Cheap manifest check for the BGAppRefreshTask: is there a newer catalog (or a pending
-    /// tier switch) to download? Primary source only — the Firebase fallback exists for
+    /// tier switch) to download? Primary source only — the backup fallback exists for
     /// downloads, not polling. Any fetch failure just means "not now".
     func hasNewerCatalog() async -> Bool {
         guard let manifest = try? await remote.fetchManifest() else { return false }
