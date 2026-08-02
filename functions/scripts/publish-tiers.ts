@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { publishCatalog, StoragePort } from "../src/pipeline/publish";
 import { getStorage } from "firebase-admin/storage";
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
+import { AwsClient } from "aws4fetch";
 
 // Only these two tables are ever physically dropped: they are the only tables the iOS app never
 // queries (verified against ios/TCGApp/Sources/**). Every other table the app reads stays present.
@@ -214,6 +215,9 @@ export interface NasManifest {
 export async function publishTiers(opts: {
   sourceDbPath: string; version: number; nasDir: string;
   firebaseStorage: StoragePort; now: Date; publishToFirebase: boolean;
+  /** Optional R2 backup origin. Receives the SAME bytes and the SAME tiered layout as the NAS —
+   *  that identical layout is what lets the iOS client use one remote implementation for both. */
+  r2?: StoragePort;
 }): Promise<NasManifest> {
   const catalogDir = join(opts.nasDir, "catalog");
   mkdirSync(catalogDir, { recursive: true });
@@ -228,10 +232,12 @@ export async function publishTiers(opts: {
 
   const { casualPath, averagePath, expertPath } = splitTiers(opts.sourceDbPath, join(opts.nasDir, "_work"));
 
+  const uploads: { path: string; gz: Buffer }[] = [];
   const writeTier = (tier: string, dbPath: string): TierEntry => {
     const gz = gzipSync(readFileSync(dbPath));
     const path = `${tier}-v${opts.version}.sqlite.gz`;
     writeFileSync(join(catalogDir, path), gz);
+    uploads.push({ path, gz });
     return { path, sha256: createHash("sha256").update(gz).digest("hex"), sizeBytes: gz.length };
   };
 
@@ -245,6 +251,14 @@ export async function publishTiers(opts: {
     },
   };
   writeFileSync(join(catalogDir, "manifest.json"), JSON.stringify(manifest));
+
+  // R2 backup origin. Artifacts FIRST, manifest LAST — a manifest naming objects that are not
+  // served yet strands every client that reads it (same rule as the fingerprint parts publish).
+  if (opts.r2) {
+    for (const u of uploads) await opts.r2.save(`catalog/${u.path}`, u.gz, "application/gzip");
+    await opts.r2.save("catalog/manifest.json", Buffer.from(JSON.stringify(manifest)), "application/json");
+    console.log(`  r2: uploaded ${uploads.length} tier(s) + manifest for v${opts.version}`);
+  }
 
   // Firebase backup: casual tier only, via the unchanged publishCatalog() (flat manifest + flat
   // catalog-vN.sqlite.gz). It gzips the SAME casual sqlite with the same deterministic gzip, so its
@@ -276,20 +290,54 @@ class BucketStorage implements StoragePort {
   }
 }
 
+/** R2 over its S3-compatible API. Objects here are <5 GB, so a plain signed PUT is enough and no
+ *  multipart machinery is needed. */
+export class R2Storage implements StoragePort {
+  private readonly client: AwsClient;
+  constructor(
+    private readonly accountId: string,
+    private readonly bucket: string,
+    accessKeyId: string,
+    secretAccessKey: string,
+  ) {
+    this.client = new AwsClient({ accessKeyId, secretAccessKey, service: "s3", region: "auto" });
+  }
+
+  async save(path: string, data: Buffer, contentType: string) {
+    const url = `https://${this.accountId}.r2.cloudflarestorage.com/${this.bucket}/${path}`;
+    const res = await this.client.fetch(url, {
+      method: "PUT", body: data, headers: { "content-type": contentType },
+    });
+    if (!res.ok) throw new Error(`R2 PUT ${path} failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+function r2FromEnv(): R2Storage | undefined {
+  const { R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
+  if (!R2_ACCOUNT_ID || !R2_BUCKET || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) return undefined;
+  return new R2Storage(R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY);
+}
+
 async function main() {
   const [sourceDbPath, versionArg, nasDir] = process.argv.slice(2);
   const publishToFirebase = process.argv.includes("--firebase");
   if (!sourceDbPath || !versionArg || !nasDir) {
-    console.error("usage: publish-tiers.ts <sourceDbPath> <version> <nasDir> [--firebase]");
+    console.error("usage: publish-tiers.ts <sourceDbPath> <version> <nasDir> [--firebase] [--r2]");
     process.exit(1);
   }
   if (publishToFirebase && !BUCKET) {
     console.error("--firebase requires FIREBASE_STORAGE_BUCKET (e.g. <project>.firebasestorage.app)");
     process.exit(1);
   }
+  const publishToR2 = process.argv.includes("--r2");
+  const r2 = publishToR2 ? r2FromEnv() : undefined;
+  if (publishToR2 && !r2) {
+    console.error("--r2 requires R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY");
+    process.exit(1);
+  }
   const m = await publishTiers({
     sourceDbPath, version: Number(versionArg), nasDir,
-    firebaseStorage: new BucketStorage(), now: new Date(), publishToFirebase,
+    firebaseStorage: new BucketStorage(), now: new Date(), publishToFirebase, r2,
   });
   for (const tier of ["casual", "average", "expert"] as const) {
     const e = m.tiers[tier];
