@@ -4,8 +4,8 @@
   "compatibility_date": "2026-08-02",
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "tin-artifacts" }],
   "vars": {
-    "FIREBASE_PROJECT_NUMBER": "REPLACE_WITH_GCM_SENDER_ID",
-    "FIREBASE_APP_ID": "REPLACE_WITH_GOOGLE_APP_ID"
+    "FIREBASE_PROJECT_NUMBER": "309630708573",
+    "FIREBASE_APP_ID": "1:309630708573:ios:6906a3000898331f6a16b4"
   },
   "routes": [{ "pattern": "backupthetin.reyes.ai", "custom_domain": true }]
 }
