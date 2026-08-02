@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
 import { verifyAppCheckToken } from "../src/appCheck";
 import type { Env } from "../src/index";
 
@@ -23,6 +23,16 @@ async function sign(payload: object, header: object = { alg: "RS256", typ: "JWT"
 
 /** Stub fetch that always answers with our locally generated JWKS. */
 const jwksFetch = (async () => new Response(JSON.stringify(jwks))) as unknown as typeof fetch;
+
+/** Same stub, but counts how many times it was actually called — for pinning fetch counts. */
+function countingJwksFetch() {
+  let calls = 0;
+  const fn = (async () => {
+    calls++;
+    return new Response(JSON.stringify(jwks));
+  }) as unknown as typeof fetch;
+  return { fetch: fn, count: () => calls };
+}
 
 const validPayload = () => ({
   iss: `https://firebaseappcheck.googleapis.com/${PROJECT}`,
@@ -84,5 +94,63 @@ describe("verifyAppCheckToken", () => {
   it("rejects when the JWKS has no matching kid", async () => {
     const t = await sign(validPayload(), { alg: "RS256", typ: "JWT", kid: "other" });
     expect(await verifyAppCheckToken(t, env, jwksFetch)).toBe(false);
+  });
+});
+
+// Each case here needs a cold module (cache = null, no prior forced refetch), because the
+// counts asserted only mean anything against a fresh isolate. vi.resetModules() + a dynamic
+// re-import gets a clean copy of the module-scope cache and throttle timestamp.
+describe("verifyAppCheckToken — JWKS refetch throttling (finding 1)", () => {
+  it("does a cold fetch plus exactly one forced refetch on an unrecognized kid", async () => {
+    vi.resetModules();
+    const { verifyAppCheckToken: verify } = await import("../src/appCheck");
+    const { fetch: fn, count } = countingJwksFetch();
+
+    const t = await sign(validPayload(), { alg: "RS256", typ: "JWT", kid: "nope-1" });
+    expect(await verify(t, env, fn)).toBe(false);
+    expect(count()).toBe(2); // 1 cold-cache fetch + 1 forced refetch
+  });
+
+  it("does the same for a different unrecognized kid (guards the ?? against becoming a loop)", async () => {
+    vi.resetModules();
+    const { verifyAppCheckToken: verify } = await import("../src/appCheck");
+    const { fetch: fn, count } = countingJwksFetch();
+
+    const t = await sign(validPayload(), { alg: "RS256", typ: "JWT", kid: "nope-2" });
+    expect(await verify(t, env, fn)).toBe(false);
+    expect(count()).toBe(2);
+  });
+
+  it("does not force a second refetch within the throttle window", async () => {
+    vi.resetModules();
+    const { verifyAppCheckToken: verify } = await import("../src/appCheck");
+    const { fetch: fn, count } = countingJwksFetch();
+
+    const t1 = await sign(validPayload(), { alg: "RS256", typ: "JWT", kid: "nope-a" });
+    expect(await verify(t1, env, fn)).toBe(false);
+    expect(count()).toBe(2);
+
+    // A second, distinct unrecognized kid arrives immediately after — still inside the
+    // 5-minute floor, so this must add zero fetches, and must still fail closed (a rejection,
+    // not a bypass) rather than silently retrying.
+    const t2 = await sign(validPayload(), { alg: "RS256", typ: "JWT", kid: "nope-b" });
+    expect(await verify(t2, env, fn)).toBe(false);
+    expect(count()).toBe(2);
+  });
+
+  it("still verifies a legitimate token after an unrecognized-kid miss", async () => {
+    vi.resetModules();
+    const { verifyAppCheckToken: verify } = await import("../src/appCheck");
+    const { fetch: fn, count } = countingJwksFetch();
+
+    const bad = await sign(validPayload(), { alg: "RS256", typ: "JWT", kid: "nope-c" });
+    expect(await verify(bad, env, fn)).toBe(false);
+    expect(count()).toBe(2);
+
+    // The happy path is served from the cache the cold fetch already populated — the throttle
+    // must not touch it, so no additional fetch and a true result.
+    const good = await sign(validPayload());
+    expect(await verify(good, env, fn)).toBe(true);
+    expect(count()).toBe(2);
   });
 });

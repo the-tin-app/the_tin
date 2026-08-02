@@ -2,10 +2,15 @@ import type { Env } from "./index";
 
 const JWKS_URL = "https://firebaseappcheck.googleapis.com/v1/jwks";
 const JWKS_TTL_MS = 60 * 60 * 1000;
+// Google rotates keys on an hourly scale, so this doesn't hurt the refetch's actual purpose —
+// it only stops an attacker-controlled `kid` from turning into an unmetered fetch amplifier
+// (a well-formed-but-unsigned header reaches the refetch before the signature is ever checked).
+const FORCED_REFETCH_FLOOR_MS = 5 * 60 * 1000;
 
 // ponytail: module-scope cache, so it lives as long as the isolate and no KV is involved.
 // Worst case a cold isolate makes one extra subrequest.
 let cache: { keys: any[]; at: number } | null = null;
+let lastForcedRefetchAt = 0;
 
 function b64urlToBytes(s: string): Uint8Array {
   const pad = s.replace(/-/g, "+").replace(/_/g, "/");
@@ -19,6 +24,14 @@ function jsonPart(s: string): any {
 
 async function jwks(fetchFn: typeof fetch, force: boolean): Promise<any[]> {
   if (!force && cache && Date.now() - cache.at < JWKS_TTL_MS) return cache.keys;
+  if (force) {
+    // Floor the forced path only: an unrecognised kid needs no valid signature to reach here,
+    // so without this an unauthenticated caller converts request volume 1:1 into subrequests
+    // against Google — and a Google-side throttle then fails every legitimate request closed.
+    // A second miss inside the window is still a real rejection, just without a wasted refetch.
+    if (cache && Date.now() - lastForcedRefetchAt < FORCED_REFETCH_FLOOR_MS) return cache.keys;
+    lastForcedRefetchAt = Date.now();
+  }
   const res = await fetchFn(JWKS_URL);
   if (!res.ok) throw new Error(`jwks ${res.status}`);
   const keys = ((await res.json()) as { keys: any[] }).keys ?? [];
