@@ -14,7 +14,10 @@ settings:
     # stretched-but-native iPhone layout is a respectable thing to ship, and a second layout is a
     # maintenance cost forever.
     TARGETED_DEVICE_FAMILY: "1,2"
-    MARKETING_VERSION: 0.1.0
+    # The App Store version. Train 1.0 closed for new build submissions the moment v1.0 went
+    # READY_FOR_SALE, so every upload from build 27 on must carry something higher — this is now
+    # load-bearing, not decorative. Bump it for each App Store release.
+    MARKETING_VERSION: 1.0.1
     CURRENT_PROJECT_VERSION: 1
 packages:
   GRDB:
@@ -81,6 +84,12 @@ targets:
         # Reference the build setting instead of a baked literal so deploy-testflight.sh's
         # per-run CURRENT_PROJECT_VERSION=<n> override actually reaches the bundle.
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Same reason, and it fixes a real trap: without this key XcodeGen writes its OWN default
+        # of "1.0" into the generated Info.plist, which is why MARKETING_VERSION appeared to be a
+        # dead setting — nothing wired it to the bundle. Editing the generated plist by hand does
+        # not work either, because deploy-testflight.sh runs `xcodegen generate` first and
+        # overwrites it. Bump MARKETING_VERSION above; this carries it through.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         UILaunchScreen: {}
         # Lets a .csv be sent to The Tin from Files, AirDrop or a share sheet. Without this the
         # app declares no document types at all, so a exported collection showed "no apps
@@ -167,6 +176,10 @@ targets:
       properties:
         CFBundleDisplayName: The Tin
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Must MATCH the host app's version or the upload is rejected — an extension may not
+        # differ from the app that contains it. Without this key XcodeGen writes its own "1.0"
+        # default here, which silently diverges the moment the app's version moves.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
