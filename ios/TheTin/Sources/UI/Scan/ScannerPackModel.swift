@@ -74,12 +74,10 @@ final class ScannerPackModel {
     /// Convenience wiring used by the app (tests inject their own doubles). The pack is served
     /// from the self-hosted NAS only (App Attest, alongside the catalog under `/fingerprint/`).
     ///
-    /// **No backup origin, by decision (2026-07-24).** Unlike the catalog — mirrored to R2
-    /// because even its largest tier is well under 100 MB — the pack is ~500 MB, and mirroring it
-    /// costs real money to back up an artifact an order of magnitude smaller. It was never
-    /// actually mirrored to Firebase Storage either (`fingerprint/` doesn't exist in that
-    /// bucket), so the fallback this replaces could only ever fail: it turned a clear "download
-    /// failed" into a doubled timeout.
+    /// **This used to have no fallback at all, by decision (2026-07-24)** — the pack was never
+    /// mirrored anywhere, so a fallback could only ever fail and turned a clear "download failed"
+    /// into a doubled timeout. That reasoning was sound; what changed is that the pack now has a
+    /// real backup (R2, zero egress — the exact fact that killed the original trade).
     static func live(catalogStore: CatalogStore, network: NetworkMonitor) -> ScannerPackModel {
         ScannerPackModel(
             updater: FingerprintUpdater(remote: liveRemote(), paths: .default()),
@@ -90,11 +88,16 @@ final class ScannerPackModel {
             network: network)
     }
 
+    /// ...serves the pack from the self-hosted NAS, with the R2 backup origin behind it.
     private static func liveRemote() -> FingerprintRemote {
-        guard let url = AppConfig.selfHostBaseURL else { return UnavailableFingerprintRemote() }
+        let backup = OriginFingerprintRemote(baseURL: AppConfig.backupBaseURL,
+                                             authorize: Authorizers.appCheck())
+        guard let url = AppConfig.selfHostBaseURL else { return backup }
         let session = AppAttestSessionProvider(baseURL: url, attestor: DeviceCheckAttestor(),
                                                http: URLSessionHTTPClient(), keys: KeychainStore())
-        return OriginFingerprintRemote(baseURL: url, authorize: Authorizers.appAttest(session))
+        return FailoverFingerprintRemote(
+            primary: OriginFingerprintRemote(baseURL: url, authorize: Authorizers.appAttest(session)),
+            fallback: backup)
     }
 
     // MARK: Status

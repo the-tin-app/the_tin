@@ -50,6 +50,30 @@ enum TestPixelBuffer {
     }
 }
 
+/// Always throws — the down-origin fixture for `FailoverFingerprintRemote` tests.
+struct FailingFingerprintRemote: FingerprintRemote {
+    func fetchManifest() async throws -> FingerprintManifest { throw CatalogError.httpStatus(500) }
+    func fetchPartsManifest() async throws -> FingerprintPartsManifest { throw CatalogError.httpStatus(500) }
+    func fetchData(path: String) async throws -> Data { throw CatalogError.httpStatus(500) }
+}
+
+/// Serves a minimal parts manifest stamped with `version` — just enough for failover tests to
+/// tell which origin answered, without needing a real pack fixture.
+struct StubPartsFingerprintRemote: FingerprintRemote {
+    let version: Int
+    func fetchManifest() async throws -> FingerprintManifest {
+        FingerprintManifest(version: version, path: "fingerprint/fingerprints-v\(version).sqlite.gz",
+                            sha256: "", sizeBytes: 0, generatedAt: "", fpVersion: 1,
+                            codebookHash: FingerprintConstants.codebookSHA256, canonicalW: 660, canonicalH: 920)
+    }
+    func fetchPartsManifest() async throws -> FingerprintPartsManifest {
+        FingerprintPartsManifest(version: version, partSize: 4096, parts: [], sha256: "",
+                                 sizeBytes: 0, generatedAt: "", fpVersion: 1,
+                                 codebookHash: FingerprintConstants.codebookSHA256, canonicalW: 660, canonicalH: 920)
+    }
+    func fetchData(path: String) async throws -> Data { Data() }
+}
+
 enum FingerprintTestSupport {
     /// Copies the shipped `fingerprints-fixture.sqlite` fixture to a scratch temp path
     /// and opens it — GRDB needs a writable-location DB file, not a bundle resource URL.

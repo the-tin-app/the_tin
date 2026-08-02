@@ -194,6 +194,31 @@ final class FingerprintPartsUpdaterTests: XCTestCase {
         XCTAssertNil(updater.downloadState())
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.incomingURL.path))
     }
+
+    // MARK: Failover — see FailoverFingerprintRemote
+
+    func testPackFailoverUsesTheBackupWhenThePrimaryFails() async throws {
+        let primary = FailingFingerprintRemote()
+        let backup = StubPartsFingerprintRemote(version: 3)
+        let remote = FailoverFingerprintRemote(primary: primary, fallback: backup)
+        let manifest = try await remote.fetchPartsManifest()
+        XCTAssertEqual(manifest.version, 3)
+    }
+
+    func testPackFailoverPrefersThePrimary() async throws {
+        let primary = StubPartsFingerprintRemote(version: 3)
+        let backup = FailingFingerprintRemote()
+        let remote = FailoverFingerprintRemote(primary: primary, fallback: backup)
+        let manifest = try await remote.fetchPartsManifest()
+        XCTAssertEqual(manifest.version, 3)
+    }
+
+    func testPackFailoverPropagatesTheBackupsErrorWhenBothFail() async {
+        let remote = FailoverFingerprintRemote(primary: FailingFingerprintRemote(),
+                                               fallback: FailingFingerprintRemote())
+        do { _ = try await remote.fetchPartsManifest(); XCTFail("expected a throw") }
+        catch { /* expected — one honest retryable error, not a swallowed nil */ }
+    }
 }
 
 /// Collects `onProgress` callbacks, which arrive on the main actor from detached hops.
