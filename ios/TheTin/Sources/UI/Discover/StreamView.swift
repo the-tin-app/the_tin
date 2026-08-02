@@ -88,7 +88,14 @@ struct StreamView: View {
         VStack(spacing: 16) {
             Spacer(minLength: 0)
             CardImageView(card: card, quality: "high")
-                .frame(maxWidth: .infinity)
+                // ⚠️ Capped, not `maxWidth: .infinity`. A card has a fixed aspect ratio, so an
+                // uncapped width sets the HEIGHT — on an iPad the ~1080pt container made the
+                // card ~1400pt tall, overflowing the screen with the top cut off and only the
+                // name and price visible below it. iPhone never showed it (~430pt container
+                // lands the card at ~350×490). 420 is the same cap `CardDetailView` uses for
+                // its art, so a card is the same size in both places. Found on iPad 2026-08-01.
+                .frame(maxWidth: 420)
+                .frame(maxWidth: .infinity)   // …then re-centre in the page
                 .padding(.horizontal, 40)
                 .overlay(alignment: .topTrailing) { heart(for: card) }
                 .contentShape(Rectangle())
