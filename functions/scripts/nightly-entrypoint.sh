@@ -6,7 +6,7 @@
 #   PPT_PAID (or PPT_API_KEY / PPT_BUSINESS)   — PPT Business API key
 # Optional:
 #   FIREBASE_STORAGE_BUCKET         — your Firebase Storage bucket (<project>.firebasestorage.app);
-#                                      used for image mirroring and the casual-tier backup
+#                                      used for the casual-tier catalog backup
 #   GOOGLE_APPLICATION_CREDENTIALS  — path to a scoped Firebase service-account key JSON;
 #                                      when set (with the bucket), publish-tiers.ts also pushes
 #                                      the casual tier backup to Firebase Storage (--firebase)

@@ -22,8 +22,6 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { getStorage } from "firebase-admin/storage";
-import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { buildCatalog } from "../src/pipeline/catalog";
 import { publishCatalog, StoragePort } from "../src/pipeline/publish";
 import { loadScenes } from "../src/pipeline/connectedArt";
@@ -32,7 +30,6 @@ import { PptClient, CreditBudget, parseCreditBudget } from "../src/upstream/ppt"
 import type { PptPrice } from "../src/upstream/ppt";
 import { resolvePptSetName } from "../src/pipeline/ppt-setmap";
 import { computeFills } from "../src/pipeline/ppt-enrich";
-import { mirrorImage, ImageStore } from "../src/pipeline/image-mirror";
 import type { FlatCard, FlatSet } from "./flatten-cards-db";
 import { pptPrintingName } from "./flatten-cards-db";
 import Database from "better-sqlite3";
@@ -59,23 +56,6 @@ class LocalStorage implements StoragePort {
     writeFileSync(full, data);
     console.log(`  wrote ${path} (${data.length.toLocaleString()} bytes)`);
   }
-}
-
-// Firebase Storage bucket holding the mirrored card images (set to your own project's bucket).
-const BUCKET = process.env.FIREBASE_STORAGE_BUCKET;
-function firebaseImageStore(): ImageStore {
-  if (!BUCKET) throw new Error("FIREBASE_STORAGE_BUCKET must be set (e.g. <project>.firebasestorage.app) — required for image mirroring when PPT enrichment runs");
-  if (getApps().length === 0) initializeApp({ credential: applicationDefault(), storageBucket: BUCKET });
-  const bucket = getStorage().bucket();
-  return {
-    exists: async (p) => (await bucket.file(p).exists())[0],
-    // Save PRIVATE: no public ACL (the bucket is uniform-bucket-level-access; a legacy ACL
-    // insert fails, and PPT-sourced assets must NOT be public). Read access is gated by
-    // storage.rules (auth) + App Check, exactly like the catalog.
-    save: async (p, data, contentType) => { await bucket.file(p).save(data, { contentType }); },
-    // Auth-gated Firebase download endpoint (App Check + auth enforced), NOT the public GCS URL.
-    downloadUrl: (p) => `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o/${encodeURIComponent(p)}?alt=media`,
-  };
 }
 
 async function fetchJson(url: string): Promise<any> {
@@ -226,7 +206,6 @@ async function main() {
     try {
       console.log(`[3b] PPT enrichment: filling gap images + prices…`);
       const client = new PptClient(pptKey, new CreditBudget(parseCreditBudget(process.env.PPT_DAILY_CREDIT_BUDGET, 20000)));
-      const store = firebaseImageStore();
       const pptSets = await client.getAllSets();
       let imgFilled = 0, priceFilled = 0, setsDone = 0, setsSkipped = 0;
 
@@ -270,21 +249,13 @@ async function main() {
           gaps.map((c) => ({ id: c.id, localId: c.localId, name: c.name, hasImage: c.imageBase != null, hasPrice: c.rawUsd != null || c.rawEur != null })),
           pptCards,
         );
-        // Prices fill instantly (in-memory); collect image-mirror jobs to run concurrently.
-        const imageJobs: { c: (typeof gaps)[number]; url: string }[] = [];
+        // Prices + image URLs both fill in-memory. PPT hands us a PUBLIC tcgplayer-cdn URL —
+        // store it directly (no self-hosting/mirror; sealed products hotlink the same CDN).
         for (const c of gaps) {
           const fill = fills.get(c.id);
           if (!fill) continue;
           if (fill.rawUsd != null && c.rawUsd == null) { c.rawUsd = fill.rawUsd; priceFilled++; }
-          if (fill.imageUrl && c.imageBase == null) imageJobs.push({ c, url: fill.imageUrl });
-        }
-        // Mirror images to OUR bucket (no PPT rate limit) with bounded concurrency for speed.
-        const CONC = 20;
-        for (let i = 0; i < imageJobs.length; i += CONC) {
-          await Promise.all(imageJobs.slice(i, i + CONC).map(async ({ c, url }) => {
-            try { c.imageUrl = await mirrorImage(c.id, url, store); imgFilled++; }
-            catch (e) { console.error(`  image mirror failed for ${c.id}: ${(e as Error).message}`); }
-          }));
+          if (fill.imageUrl && c.imageBase == null) { c.imageUrl = fill.imageUrl; imgFilled++; }
         }
         // Record this set's fills + mark done — durable resume point (persisted after each set).
         for (const c of gaps) {
@@ -298,9 +269,9 @@ async function main() {
         writeFileSync(fillsFile, JSON.stringify(savedFills));
         writeFileSync(doneFile, JSON.stringify([...doneSets]));
         setsDone++;
-        console.log(`  [${setsDone}] ${setId} (${pptSet.name}): ${imageJobs.length} imgs → ${imgFilled} mirrored · ${priceFilled} prices (this run)`);
+        console.log(`  [${setsDone}] ${setId} (${pptSet.name}): ${imgFilled} imgs · ${priceFilled} prices (this run)`);
       }
-      console.log(`  PPT enrichment: ${imgFilled} images mirrored · ${priceFilled} prices filled · ${setsDone} sets · ${setsSkipped} unmapped`);
+      console.log(`  PPT enrichment: ${imgFilled} image URLs · ${priceFilled} prices filled · ${setsDone} sets · ${setsSkipped} unmapped`);
     } catch (e) {
       // Enrichment is best-effort: any failure here (including getAllSets()) must not abort the
       // build. Log and fall through to publish the raw catalog without enrichment.
