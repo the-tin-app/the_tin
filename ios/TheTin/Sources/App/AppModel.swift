@@ -142,7 +142,7 @@ final class AppModel {
     private var wantsRepositoryInstance: WantsRepository?
 
     private var remote: CatalogRemote
-    private let fallbackRemote: CatalogRemote?
+    private var fallbackRemote: CatalogRemote?
     /// Which source `remote` actually is — can't be recovered by sniffing its type any more,
     /// since the self-hosted and backup remotes are both `OriginCatalogRemote` now.
     private let primarySource: CatalogSource
@@ -360,13 +360,25 @@ final class AppModel {
 
     func retry() async { await start() }
 
-    /// User picked a different data tier in Settings. Persist it, rebuild the NAS remote so it
-    /// fetches the new tier, re-download immediately, and reopen the live store on the new bytes.
+    /// User picked a different data tier in Settings. Persist it, rebuild the NAS and R2 remotes
+    /// so both fetch the new tier, re-download immediately, and reopen the live store on the new
+    /// bytes. Rebuilding only `remote` and leaving `fallbackRemote` on the pre-switch tier would
+    /// have the backup ask for the old tier, get a manifest stamped with it, fail the
+    /// `unwantedTier` guard in `CatalogUpdater`, and report a false "isn't available from the
+    /// backup source" — the backup carries every tier, it just never got asked for the right one.
     func setTier(_ tier: CatalogTier) async {
         guard tier.rawValue != AppConfig.catalogTier else { return }
         AppConfig.catalogTier = tier.rawValue
         currentTier = tier.rawValue
+        // Both remotes bake in `tier` at construction (`OriginCatalogRemote.tier`), so a switch
+        // has to rebuild whichever ones are real NAS/R2 remotes. `fallbackRemote` is gated on its
+        // OWN current type rather than reusing the self-host guard verbatim: production always
+        // pairs a real self-hosted `remote` with a real R2 `fallbackRemote` (`makeDefault` builds
+        // both together), so this rebuilds exactly when the reviewer's fix requires — but a test
+        // fake fallback (no tier concept, and no App Check identity to authorize with) is left
+        // alone rather than replaced by a live R2 remote that can only fail in-process.
         if let fresh = Self.selfHostedRemote() { remote = fresh }
+        if fallbackRemote is OriginCatalogRemote { fallbackRemote = Self.backupRemote() }
         tierChange = .downloading
         do {
             _ = try await ensureLatestWithFailover() // installs + reopens the live store in one funnel
@@ -436,7 +448,7 @@ final class AppModel {
         await backgroundRefresh()
     }
 
-    /// New catalog versions and daily price deltas, applied quietly behind a ready UI.
+    /// New catalog versions, applied quietly behind a ready UI.
     private func backgroundRefresh() async {
         guard store != nil else { return }
         lastRefreshCheck = now()
@@ -449,15 +461,6 @@ final class AppModel {
             if Int(fraction * 100) > Int(current * 100) { self.catalogDownloadProgress = fraction }
         }
         _ = try? await ensureLatestWithFailover(onProgress: onProgress)
-        guard let store else { return }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        let today = formatter.string(from: Date())
-        let yesterday = formatter.string(from: Date().addingTimeInterval(-86_400))
-        // Price deltas are a backup-only resource (the NAS publishes none) and best-effort.
-        let priceUpdater = CatalogUpdater(remote: fallbackRemote ?? remote, paths: paths)
-        await priceUpdater.refreshPrices(store: store, dates: [yesterday, today])
         catalogState = updater.installedState()
     }
 

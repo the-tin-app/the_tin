@@ -335,22 +335,95 @@ final class AppModelTests: XCTestCase {
 
     // MARK: - R2 backup source labelling (Task 7)
 
+    /// Pin `AppConfig.catalogTier` in BOTH directions: several tests in this section depend on
+    /// its value at `AppModel` construction (`currentTier` snapshots it in a property
+    /// initializer), and a persisted UserDefaults key must never leak into a different test on
+    /// the NEXT run.
+    private var savedCatalogTierForBackupTests: String!
+
+    override func setUpWithError() throws {
+        savedCatalogTierForBackupTests = AppConfig.catalogTier
+    }
+
+    override func tearDownWithError() throws {
+        AppConfig.catalogTier = savedCatalogTierForBackupTests
+    }
+
+    /// Manifest+HTTP fake that actually serves the NAS/R2 tiered SHAPE through a REAL
+    /// `OriginCatalogRemote` — unlike `StubRemote` (a plain `CatalogRemote` fake, never an
+    /// `OriginCatalogRemote`), which cannot reproduce the type-sniff bug below: sniffing on a
+    /// `StubRemote` primary always lands on the "not OriginCatalogRemote" branch regardless of
+    /// whether the sniff is present, so it can never fail either way. Only a primary that IS an
+    /// `OriginCatalogRemote` — the exact shape both the self-host AND R2-primary-only production
+    /// paths use — can distinguish "explicit `primarySource`" from "sniffed by type".
+    private struct FixtureOriginHTTP: HTTPClient {
+        let manifestJSON: Data
+        let artifactGz: Data
+        func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            let body = req.url?.lastPathComponent == "manifest.json" ? manifestJSON : artifactGz
+            return (body, HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        func send(_ req: URLRequest, onBytes: @escaping @Sendable (Int) -> Void) async throws -> (Data, HTTPURLResponse) {
+            try await send(req)
+        }
+    }
+
+    private func originRemoteWithFixture(tier: String = "expert") throws -> OriginCatalogRemote {
+        let sqlite = try Data(contentsOf: URL(fileURLWithPath: try FixtureCatalog.copyToTemp()))
+        let gz = try sqlite.gzipped()
+        let sha = SHA256.hash(data: gz).map { String(format: "%02x", $0) }.joined()
+        let entry = "{\"path\":\"fixture-v1.sqlite.gz\",\"sha256\":\"\(sha)\",\"sizeBytes\":\(gz.count)}"
+        let manifestJSON = Data("""
+        {"version":1,"generatedAt":"2026-07-04T09:00:00.000Z",
+         "tiers":{"casual":\(entry),"average":\(entry),"expert":\(entry)}}
+        """.utf8)
+        let http = FixtureOriginHTTP(manifestJSON: manifestJSON, artifactGz: gz)
+        return OriginCatalogRemote(baseURL: URL(string: "https://backup.example")!,
+                                   authorize: { _, _ in }, http: http, tier: tier)
+    }
+
     func testFallbackIsLabelledBackupNotSelfHosted() async throws {
-        // Both remotes are now the same TYPE (OriginCatalogRemote), so a type-sniff would
-        // mislabel the source. Only the explicit `primarySource` can tell them apart.
-        let model = AppModel(remote: DeadRemote(),
-                             fallback: try stubRemoteWithFixture(version: 30, tier: "expert"),
+        // The type-sniff this task removed lived on the PRIMARY-SUCCESS line
+        // (`remote is OriginCatalogRemote ? .selfHosted : <the old fallback label>`), not the
+        // fallback branch — a fallback-branch test sets `.backup` as a literal and never
+        // exercises the sniff at all
+        // (proven by mutation: restoring the sniff on the primary line left the OLD version of
+        // this test green — 14/14 passed). Pin it with a SUCCEEDING primary that both IS an
+        // `OriginCatalogRemote` (the only way a surviving sniff can misfire) and is explicitly
+        // `.backup` — the exact shape `makeDefault`'s no-self-host branch builds
+        // (`backupRemote()` IS an `OriginCatalogRemote`), where a surviving sniff would mislabel
+        // a pure-R2 session "Self-hosted" and hide the backup footer.
+        let model = AppModel(remote: try originRemoteWithFixture(), primarySource: .backup,
                              paths: tempPaths(), skipFirebase: true)
         await model.start()
         XCTAssertEqual(model.activeSource, .backup)
     }
 
+    /// Negative control for the test below: proves `reducedData` CAN be true, so a `false` result
+    /// there is actually discriminating rather than unsatisfiable for every tier (as it was when
+    /// this test asserted `expert`, the maximum of `CatalogTier.allCases`, against every possible
+    /// `currentTier`). If a casual stamp ever reappears on the backup — the exact bug the old,
+    /// now-deleted bucket-REST fallback's "untiered ⇒ casual" default used to cause — this fails.
+    func testCasualBackupTriggersReducedDataBanner() async throws {
+        AppConfig.catalogTier = CatalogTier.expert.rawValue
+        let model = AppModel(remote: DeadRemote(),
+                             fallback: try stubRemoteWithFixture(version: 30, tier: "casual"),
+                             paths: tempPaths(), skipFirebase: true)
+        await model.start()
+        XCTAssertEqual(model.catalogState?.tier, "casual")
+        XCTAssertTrue(model.reducedData)
+    }
+
     func testBackupServesTheUsersOwnTierNotCasual() async throws {
-        // The whole point of putting all three tiers on R2: failover must not degrade the tier.
+        // The whole point of putting all three tiers on R2: failover must install the tier the
+        // user actually chose, not silently downgrade it — pinned against the exact tier chosen
+        // rather than an unfalsifiable "reducedData is false" check.
+        AppConfig.catalogTier = CatalogTier.expert.rawValue
         let model = AppModel(remote: DeadRemote(),
                              fallback: try stubRemoteWithFixture(version: 30, tier: "expert"),
                              paths: tempPaths(), skipFirebase: true)
         await model.start()
+        XCTAssertEqual(model.catalogState?.tier, "expert")
         XCTAssertFalse(model.reducedData)
     }
 }
