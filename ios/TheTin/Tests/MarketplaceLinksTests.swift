@@ -58,13 +58,16 @@ extension MarketplaceLinksTests {
                         "lot", "bundle", "playtest", "orica", "metal", "sticker",
                         "fan art", "fanart",
                         "keychain", "magnet", "novelty", "jumbo", "display", "wooden",
-                        "gold foil"])
+                        "gold foil",
+                        "korean", "japanese", "chinese", "german", "french", "italian",
+                        "spanish", "portuguese", "indonesian", "thai", "russian"])
         let q = try nkw(MarketplaceLinks.ebayHunt(name: "Charizard", setName: "Base Set",
                                                   number: "4", total: "102", maxUsd: nil))
         XCTAssertEqual(q, "Charizard 4/102 Base Set -proxy -repro -reproduction -custom -fake "
                         + "-digital -lot -bundle -playtest -orica -metal -sticker "
                         + "-\"fan art\" -fanart -keychain -magnet -novelty -jumbo -display "
-                        + "-wooden -\"gold foil\"")
+                        + "-wooden -\"gold foil\" -korean -japanese -chinese -german -french "
+                        + "-italian -spanish -portuguese -indonesian -thai -russian")
     }
 
     /// A phrase negative must reach eBay QUOTED. Bare `-fan art` is parsed as `-fan AND art`:

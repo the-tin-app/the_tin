@@ -789,6 +789,14 @@ struct CollectionView: View {
     /// divider. Set only from the first alert's destructive button.
     @State private var destroyingGroup: CardGroup?
     @State private var searchText = ""
+    /// The price date last seen on Watching, driving that row's dot.
+    ///
+    /// ⚠️ `@AppStorage`, NOT `AppConfig.watchingLastSeenAsOf`. The value was always written
+    /// correctly; a plain `UserDefaults` read is invisible to SwiftUI, so this list never
+    /// re-rendered to notice and the dot survived visiting the screen. It only appeared to work
+    /// when something *else* invalidated the view — adding a hunt mutates the `@Observable`
+    /// wants model, which is exactly the case it was first tested with (2026-08-01).
+    @AppStorage("watchingLastSeenAsOf") private var watchingLastSeenAsOf: String?
     @State private var editingEntry: CollectionEntry?
     @State private var editingSealed: SealedEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1318,7 +1326,7 @@ struct CollectionView: View {
         pinnedLink(title: "Watching", systemImage: "binoculars", tint: .teal,
                    count: wants.wanted.count, route: WatchingRoute(),
                    dot: WatchingModel.hasUnseen(asOf: model.priceAsOf,
-                                                lastSeen: AppConfig.watchingLastSeenAsOf))
+                                                lastSeen: watchingLastSeenAsOf))
     }
 
     /// The other half of the wishlist: what you'll give up. Sits beside it because "hunting" and

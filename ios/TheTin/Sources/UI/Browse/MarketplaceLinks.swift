@@ -36,6 +36,21 @@ enum MarketplaceLinks {
         // jumbo, and a "gold foil display card". They are not cards, they clear every filter
         // above, and being cheap they sort to the very top of a cheapest-first search.
         "keychain", "magnet", "novelty", "jumbo", "display", "wooden", "gold foil",
+        // Non-English printings. Observed 2026-08-01: a hunt for Charmander 168 (151, IR) opened
+        // on the KOREAN card — same set, same number, correct in every other respect, and it
+        // cleared every filter above.
+        //
+        // ⚠️ This is the ONE class of junk a keyword can catch, and the exception to the rule
+        // above it. Counterfeits and mislabelled reprints are invisible to keywords because the
+        // dishonest listing uses the same words as the honest one — but a Korean card is *sold
+        // as* a Korean card, so the seller says so. That is why price is the only defence there
+        // and a word works here.
+        //
+        // The catalog is English-only today, so an English hunt is the only kind there is. When
+        // the Japanese catalogue lands this list stops being right for every card and the
+        // exclusions have to follow the card's own language, not a constant.
+        "korean", "japanese", "chinese", "german", "french", "italian", "spanish", "portuguese",
+        "indonesian", "thai", "russian",
     ]
 
     /// The `total` to hand `ebayHunt`, from a set's **printed** total (`CatalogStore.printedTotal`,

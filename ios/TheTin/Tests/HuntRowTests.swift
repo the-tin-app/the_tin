@@ -84,4 +84,29 @@ final class HuntRowTests: XCTestCase {
         let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
         XCTAssertEqual(items.first { $0.name == "_udlo" }?.value, "297.50")
     }
+
+    /// A hunt for Charmander 168 (151) opened on the KOREAN card on 2026-08-01 — same set, same
+    /// number, correct in every other respect. The catalog is English-only, so a non-English
+    /// printing is never what the hunt meant. Unlike counterfeits, sellers DO say "Korean", so
+    /// a keyword works here where it cannot work there.
+    func testHuntExcludesNonEnglishPrintings() throws {
+        let url = try XCTUnwrap(HuntRow.huntURL(card: card(number: "168", name: "Charmander"),
+                                                entry: hunting(target: 300),
+                                                setName: "151", printedTotal: 165))
+        let q = try nkw(url)
+        for language in ["korean", "japanese", "chinese", "german"] {
+            XCTAssertTrue(q.contains("-\(language)"), "missing -\(language) in: \(q)")
+        }
+    }
+
+    /// The collision rule still applies: a negative whose every word is a required positive
+    /// would cancel the whole query. A Japanese-set hunt must not exclude "japanese".
+    func testALanguageInTheSetNameIsNotExcluded() throws {
+        let url = try XCTUnwrap(HuntRow.huntURL(card: card(number: "1", name: "Japanese Promo"),
+                                                entry: hunting(target: 50),
+                                                setName: nil, printedTotal: nil))
+        let q = try nkw(url)
+        XCTAssertFalse(q.contains("-japanese"), "would cancel every result: \(q)")
+        XCTAssertTrue(q.contains("-korean"), q)
+    }
 }
