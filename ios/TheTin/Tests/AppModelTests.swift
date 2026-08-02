@@ -29,7 +29,7 @@ final class AppModelTests: XCTestCase {
     }
 
     func testFirstRunDownloadsCatalogAndBecomesReady() async throws {
-        let model = AppModel(remote: try stubRemoteWithFixture(), paths: tempPaths(),
+        let model = AppModel(remote: try stubRemoteWithFixture(), primarySource: .selfHosted, paths: tempPaths(),
                              makeRepository: { _ in InMemoryCollectionRepository() },
                              skipFirebase: true)
         await model.start()
@@ -45,7 +45,7 @@ final class AppModelTests: XCTestCase {
             func fetchManifest() async throws -> CatalogManifest { throw CatalogError.httpStatus(500) }
             func fetchData(path: String) async throws -> Data { throw CatalogError.httpStatus(500) }
         }
-        let model = AppModel(remote: DeadRemote(), paths: tempPaths(),
+        let model = AppModel(remote: DeadRemote(), primarySource: .selfHosted, paths: tempPaths(),
                              makeRepository: { _ in InMemoryCollectionRepository() },
                              skipFirebase: true)
         await model.start()
@@ -56,7 +56,7 @@ final class AppModelTests: XCTestCase {
 
     func testSecondRunOpensInstalledCatalogWithoutNetwork() async throws {
         let paths = tempPaths()
-        let good = AppModel(remote: try stubRemoteWithFixture(), paths: paths,
+        let good = AppModel(remote: try stubRemoteWithFixture(), primarySource: .selfHosted, paths: paths,
                             makeRepository: { _ in InMemoryCollectionRepository() },
                             skipFirebase: true)
         await good.start()
@@ -66,7 +66,7 @@ final class AppModelTests: XCTestCase {
             func fetchManifest() async throws -> CatalogManifest { throw URLError(.notConnectedToInternet) }
             func fetchData(path: String) async throws -> Data { throw URLError(.notConnectedToInternet) }
         }
-        let offline = AppModel(remote: DeadRemote(), paths: paths,
+        let offline = AppModel(remote: DeadRemote(), primarySource: .selfHosted, paths: paths,
                                makeRepository: { _ in InMemoryCollectionRepository() },
                                skipFirebase: true)
         await offline.start()
@@ -80,14 +80,14 @@ final class AppModelTests: XCTestCase {
     /// until the next launch (the 2026-07-14 morning-after-nightly bug).
     func testMidSessionInstallReopensStoreAndServesData() async throws {
         let paths = tempPaths()
-        let first = AppModel(remote: try stubRemoteWithFixture(), paths: paths,
+        let first = AppModel(remote: try stubRemoteWithFixture(), primarySource: .selfHosted, paths: paths,
                              makeRepository: { _ in InMemoryCollectionRepository() },
                              skipFirebase: true)
         await first.start()
         XCTAssertEqual(first.catalogState?.version, 1)
 
         // Next launch: opens installed v1 offline-first, then backgroundRefresh finds v2.
-        let model = AppModel(remote: try stubRemoteWithFixture(version: 2), paths: paths,
+        let model = AppModel(remote: try stubRemoteWithFixture(version: 2), primarySource: .selfHosted, paths: paths,
                              makeRepository: { _ in InMemoryCollectionRepository() },
                              skipFirebase: true)
         await model.start()
@@ -109,7 +109,7 @@ final class AppModelTests: XCTestCase {
 
         // Install v14 "average" — the fixture as-is, which has price_history rows.
         let seed = AppModel(remote: try stubRemoteWithFixture(version: 14, tier: "average"),
-                            paths: paths,
+                            primarySource: .selfHosted, paths: paths,
                             makeRepository: { _ in InMemoryCollectionRepository() },
                             skipFirebase: true)
         await seed.start()
@@ -130,7 +130,7 @@ final class AppModelTests: XCTestCase {
         // Relaunch with the primary dead: the whole refresh falls back to casual v14.
         let toggle = ToggleRemote()
         var nowValue = Date()
-        let model = AppModel(remote: toggle, fallback: casual, paths: paths,
+        let model = AppModel(remote: toggle, fallback: casual, primarySource: .selfHosted, paths: paths,
                              makeRepository: { _ in InMemoryCollectionRepository() },
                              skipFirebase: true, now: { nowValue })
         await model.start()
@@ -183,12 +183,12 @@ final class AppModelTests: XCTestCase {
     /// closed handle (the 2026-07-16 dead Discover tab).
     func testMidSessionInstallKeepsStoreInstanceAlive() async throws {
         let paths = tempPaths()
-        let first = AppModel(remote: try stubRemoteWithFixture(), paths: paths,
+        let first = AppModel(remote: try stubRemoteWithFixture(), primarySource: .selfHosted, paths: paths,
                              makeRepository: { _ in InMemoryCollectionRepository() },
                              skipFirebase: true)
         await first.start()
 
-        let model = AppModel(remote: try stubRemoteWithFixture(version: 2), paths: paths,
+        let model = AppModel(remote: try stubRemoteWithFixture(version: 2), primarySource: .selfHosted, paths: paths,
                              makeRepository: { _ in InMemoryCollectionRepository() },
                              skipFirebase: true)
         await model.start()
@@ -208,7 +208,7 @@ final class AppModelTests: XCTestCase {
         let paths = tempPaths()
         let remote = try stubRemoteWithFixture(version: 1)
         var nowValue = Date()
-        let model = AppModel(remote: remote, paths: paths,
+        let model = AppModel(remote: remote, primarySource: .selfHosted, paths: paths,
                              makeRepository: { _ in InMemoryCollectionRepository() },
                              skipFirebase: true, now: { nowValue })
         await model.start()
@@ -260,7 +260,7 @@ final class AppModelTests: XCTestCase {
     func testFundingSnapshotSurfacesAsProgress() async throws {
         let funding = FundingSnapshot(state: .yellow, fundedPct: 0.62, monthlyGoalCents: 15_000,
                                        raisedCents: 9_300, updatedAt: "2026-07-05T11:00:00.000Z")
-        let model = AppModel(remote: try stubRemote(funding: funding), paths: tempPaths(),
+        let model = AppModel(remote: try stubRemote(funding: funding), primarySource: .selfHosted, paths: tempPaths(),
                              makeRepository: { _ in InMemoryCollectionRepository() },
                              skipFirebase: true, now: { self.fixedNow })
         await model.start()
@@ -275,7 +275,7 @@ final class AppModelTests: XCTestCase {
     func testCatalogUpdateFailsOverToFallbackSource() async throws {
         // Primary source throws for the whole update; the Firebase fallback serves it.
         let model = AppModel(remote: DeadRemote(), fallback: try stubRemoteWithFixture(),
-                             paths: tempPaths(), skipFirebase: true)
+                             primarySource: .selfHosted, paths: tempPaths(), skipFirebase: true)
         await model.start()
         XCTAssertEqual(model.phase, .ready)
     }
@@ -283,7 +283,7 @@ final class AppModelTests: XCTestCase {
     func testPrimarySuccessDoesNotConsultFallback() async throws {
         // Primary serves; the fallback is a DeadRemote that would fail if consulted.
         let model = AppModel(remote: try stubRemoteWithFixture(), fallback: DeadRemote(),
-                             paths: tempPaths(), skipFirebase: true)
+                             primarySource: .selfHosted, paths: tempPaths(), skipFirebase: true)
         await model.start()
         XCTAssertEqual(model.phase, .ready)
     }
@@ -305,7 +305,7 @@ final class AppModelTests: XCTestCase {
         let selfHost = OriginCatalogRemote(baseURL: URL(string: "https://apithetin.reyes.ai")!,
                                            authorize: Authorizers.appAttest(StubSession()), http: FailHTTP(), tier: "average")
         let model = AppModel(remote: selfHost, fallback: try stubRemoteWithFixture(),
-                             paths: tempPaths(), skipFirebase: true)
+                             primarySource: .selfHosted, paths: tempPaths(), skipFirebase: true)
         await model.start()
         XCTAssertEqual(model.phase, .ready)
     }
@@ -321,7 +321,7 @@ final class AppModelTests: XCTestCase {
                                            authorize: Authorizers.appAttest(StubSession()), http: FailHTTP(), tier: "average")
         let model = AppModel(remote: selfHost,
                              fallback: try stubRemoteWithFixture(tier: CatalogTier.casual.rawValue),
-                             paths: tempPaths(), skipFirebase: true)
+                             primarySource: .selfHosted, paths: tempPaths(), skipFirebase: true)
         await model.start()
         XCTAssertEqual(model.catalogState?.tier, "casual")
 
@@ -408,7 +408,7 @@ final class AppModelTests: XCTestCase {
         AppConfig.catalogTier = CatalogTier.expert.rawValue
         let model = AppModel(remote: DeadRemote(),
                              fallback: try stubRemoteWithFixture(version: 30, tier: "casual"),
-                             paths: tempPaths(), skipFirebase: true)
+                             primarySource: .selfHosted, paths: tempPaths(), skipFirebase: true)
         await model.start()
         XCTAssertEqual(model.catalogState?.tier, "casual")
         XCTAssertTrue(model.reducedData)
@@ -421,7 +421,7 @@ final class AppModelTests: XCTestCase {
         AppConfig.catalogTier = CatalogTier.expert.rawValue
         let model = AppModel(remote: DeadRemote(),
                              fallback: try stubRemoteWithFixture(version: 30, tier: "expert"),
-                             paths: tempPaths(), skipFirebase: true)
+                             primarySource: .selfHosted, paths: tempPaths(), skipFirebase: true)
         await model.start()
         XCTAssertEqual(model.catalogState?.tier, "expert")
         XCTAssertFalse(model.reducedData)

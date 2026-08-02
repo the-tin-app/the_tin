@@ -75,8 +75,9 @@ enum AppConfig {
     static let supportURL = URL(string: "https://github.com/sponsors/the-tin-app")!
 
     /// Self-hosted `catalog-server` (Cloudflare Tunnel hostname). Non-nil ⇒ the failover composite
-    /// tries the NAS first and falls back to Firebase; a wrong/undeployed host just fast-fails to
-    /// Firebase. Confirmed against the deployed tunnel route (see the client design spec).
+    /// tries the NAS first and falls back to the R2 backup origin; a wrong/undeployed host just
+    /// fast-fails to the backup. Confirmed against the deployed tunnel route (see the client design
+    /// spec).
     ///
     /// DEBUG builds attest in the App Attest *development* environment, which the production server
     /// (APP_ATTEST_ENVIRONMENT=production) rejects. Point a debug build at a development-environment
@@ -91,7 +92,8 @@ enum AppConfig {
         return URL(string: "https://apithetin.reyes.ai")
     }()
 
-    /// Per-request timeout on every self-host call; on expiry the composite falls back to Firebase.
+    /// Per-request timeout on every self-host call; on expiry the composite falls back to the R2
+    /// backup origin.
     static let selfHostTimeout: TimeInterval = 5
 
     /// Which catalog tier the self-hosted client downloads: "casual" | "average" | "expert".

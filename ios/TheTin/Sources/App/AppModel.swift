@@ -181,9 +181,9 @@ final class AppModel {
         return AppModel(remote: backup, primarySource: .backup, skipFirebase: skipFirebase)
     }
 
-    init(remote: CatalogRemote = backupRemote(),
+    init(remote: CatalogRemote,
          fallback: CatalogRemote? = nil,
-         primarySource: CatalogSource = .selfHosted,
+         primarySource: CatalogSource,
          paths: CatalogPaths = .default(),
          makeRepository: @escaping (String) -> CollectionRepository = { _ in LocalCollectionRepository() },
          skipFirebase: Bool = false,
