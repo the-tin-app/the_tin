@@ -188,10 +188,7 @@ struct HTTPCatalogRemote: CatalogRemote {
     private func get(_ path: String,
                      onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
         guard let url = Self.downloadURL(base: baseURL, path: path) else { throw CatalogError.badResponse }
-        var request = URLRequest(url: url)
-        if let token = await StorageAuth.appCheckToken(forcingRefresh: false) {
-            request.setValue(token, forHTTPHeaderField: "X-Firebase-AppCheck")
-        }
+        let request = await StorageAuth.authorizedRequest(url: url)
         let (data, response): (Data, URLResponse)
         if let onBytes {
             (data, response) = try await session.dataReportingProgress(for: request, onBytes: onBytes)

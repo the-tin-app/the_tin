@@ -38,9 +38,9 @@ struct OriginFingerprintRemote: FingerprintRemote {
     private func send(_ path: String, refresh: Bool,
                       onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
         let url = baseURL.appendingPathComponent(path)
-        var req = URLRequest(url: url)
         // The pack is ~500 MB; the catalog's 5 s per-request timeout would abort mid-download. Let
         // the SDK-less transfer run to completion (the Scan gate shows a progress bar).
+        var req = URLRequest(url: url)
         try await authorize(&req, refresh)
         let (data, response) = if let onBytes {
             try await http.send(req, onBytes: onBytes)
