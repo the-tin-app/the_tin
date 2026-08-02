@@ -27,6 +27,9 @@ import Observation
 
     struct DropItem: Identifiable {
         let card: CardRecord
+        /// ⚠️ Needed to tell one Charizard from another. A name alone is not identifying — a
+        /// wishlist can hold three cards called Charizard and the row has to say which dropped.
+        let setName: String?
         let targetUsd: Double?
         let marketUsd: Double?
         let pct7d: Double
@@ -42,6 +45,7 @@ import Observation
 
     struct GrailItem: Identifiable {
         let card: CardRecord
+        let setName: String?
         let marketUsd: Double?
         let trend: Trend
         var id: String { card.id }
@@ -144,7 +148,8 @@ import Observation
             dropIds.compactMap { id in pct7d(id).map { (id, $0) } })
         drops = Self.rankedDrops(pct7dById: dropPcts).compactMap { id in
             guard let card = cardsById[id], let pct = dropPcts[id] else { return nil }
-            return DropItem(card: card, targetUsd: entries[id]?.targetUsd,
+            return DropItem(card: card, setName: setsById[card.setId]?.name,
+                            targetUsd: entries[id]?.targetUsd,
                             marketUsd: prices[id], pct7d: pct)
         }
 
@@ -153,7 +158,8 @@ import Observation
             guard let card = cardsById[id],
                   let t = Self.trend(weeklyUsd: (histories[id] ?? []).map(\.value))
             else { return nil }
-            return GrailItem(card: card, marketUsd: prices[id], trend: t)
+            return GrailItem(card: card, setName: setsById[card.setId]?.name,
+                             marketUsd: prices[id], trend: t)
         }
         .sorted { abs($0.trend.pct) > abs($1.trend.pct) }
 
