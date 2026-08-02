@@ -205,12 +205,23 @@ final class FingerprintPartsUpdaterTests: XCTestCase {
         XCTAssertEqual(manifest.version, 3)
     }
 
+    /// Both origins succeed here, with DISTINGUISHABLE values — a throwing fallback (as in the
+    /// test above) can't tell "primary wins" from "whichever origin isn't throwing wins", and a
+    /// reviewer proved that by inverting the try-order and getting a green suite. Version 3 vs.
+    /// 99, and distinct bytes, are what actually pin the primary as the one that must answer.
     func testPackFailoverPrefersThePrimary() async throws {
-        let primary = StubPartsFingerprintRemote(version: 3)
-        let backup = FailingFingerprintRemote()
+        let primary = StubPartsFingerprintRemote(version: 3, data: Data("primary-bytes".utf8))
+        let backup = StubPartsFingerprintRemote(version: 99, data: Data("backup-bytes".utf8))
         let remote = FailoverFingerprintRemote(primary: primary, fallback: backup)
-        let manifest = try await remote.fetchPartsManifest()
+
+        let manifest = try await remote.fetchManifest()
         XCTAssertEqual(manifest.version, 3)
+
+        let partsManifest = try await remote.fetchPartsManifest()
+        XCTAssertEqual(partsManifest.version, 3)
+
+        let data = try await remote.fetchData(path: "irrelevant")
+        XCTAssertEqual(data, Data("primary-bytes".utf8))
     }
 
     func testPackFailoverPropagatesTheBackupsErrorWhenBothFail() async {
@@ -218,6 +229,39 @@ final class FingerprintPartsUpdaterTests: XCTestCase {
                                                fallback: FailingFingerprintRemote())
         do { _ = try await remote.fetchPartsManifest(); XCTFail("expected a throw") }
         catch { /* expected — one honest retryable error, not a swallowed nil */ }
+    }
+
+    /// The streaming override forwards `onBytes`, not just the returned `Data` — without this,
+    /// a regression that drops the override (falling through to the protocol default, which
+    /// forwards to the non-streaming `fetchData`) still passes every other test here: the bytes
+    /// come back correct, only the progress bar silently stops moving mid-download.
+    func testPackFailoverStreamsProgressFromTheFallbackWhenThePrimaryFails() async throws {
+        let backupBytes = Data("backup-bytes".utf8)
+        let remote = FailoverFingerprintRemote(primary: FailingFingerprintRemote(),
+                                               fallback: StubPartsFingerprintRemote(version: 3, data: backupBytes))
+        let box = ByteCountBox()
+
+        let data = try await remote.fetchData(path: "irrelevant") { box.append($0) }
+
+        XCTAssertEqual(data, backupBytes)
+        let reported = box.all()
+        XCTAssertFalse(reported.isEmpty, "onBytes must fire on the fallback, not be silently dropped")
+        XCTAssertEqual(reported.last, backupBytes.count)
+    }
+}
+
+/// Collects streamed byte counts from an `onBytes` callback under test.
+private final class ByteCountBox: @unchecked Sendable {
+    private var values: [Int] = []
+    private let lock = NSLock()
+
+    func append(_ v: Int) {
+        lock.lock(); defer { lock.unlock() }
+        values.append(v)
+    }
+    func all() -> [Int] {
+        lock.lock(); defer { lock.unlock() }
+        return values
     }
 }
 

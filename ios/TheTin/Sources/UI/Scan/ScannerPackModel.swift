@@ -72,7 +72,8 @@ final class ScannerPackModel {
     }
 
     /// Convenience wiring used by the app (tests inject their own doubles). The pack is served
-    /// from the self-hosted NAS only (App Attest, alongside the catalog under `/fingerprint/`).
+    /// from the self-hosted NAS (App Attest, alongside the catalog under `/fingerprint/`), with
+    /// the R2 backup (App Check) behind it — see `liveRemote()`.
     ///
     /// **This used to have no fallback at all, by decision (2026-07-24)** — the pack was never
     /// mirrored anywhere, so a fallback could only ever fail and turned a clear "download failed"

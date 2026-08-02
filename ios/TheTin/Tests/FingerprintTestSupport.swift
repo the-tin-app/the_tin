@@ -57,10 +57,11 @@ struct FailingFingerprintRemote: FingerprintRemote {
     func fetchData(path: String) async throws -> Data { throw CatalogError.httpStatus(500) }
 }
 
-/// Serves a minimal parts manifest stamped with `version` — just enough for failover tests to
-/// tell which origin answered, without needing a real pack fixture.
+/// Serves a minimal parts manifest stamped with `version`, and `data` from `fetchData` — enough
+/// for failover tests to tell which origin answered, without needing a real pack fixture.
 struct StubPartsFingerprintRemote: FingerprintRemote {
     let version: Int
+    var data: Data = Data()
     func fetchManifest() async throws -> FingerprintManifest {
         FingerprintManifest(version: version, path: "fingerprint/fingerprints-v\(version).sqlite.gz",
                             sha256: "", sizeBytes: 0, generatedAt: "", fpVersion: 1,
@@ -71,7 +72,14 @@ struct StubPartsFingerprintRemote: FingerprintRemote {
                                  sizeBytes: 0, generatedAt: "", fpVersion: 1,
                                  codebookHash: FingerprintConstants.codebookSHA256, canonicalW: 660, canonicalH: 920)
     }
-    func fetchData(path: String) async throws -> Data { Data() }
+    func fetchData(path: String) async throws -> Data { data }
+    /// Streams like a real origin would — needed so a failover test can observe that progress
+    /// callbacks actually fire on the fallback path, not just that the bytes come back correct.
+    func fetchData(path: String, onBytes: @escaping @Sendable (Int) -> Void) async throws -> Data {
+        onBytes(data.count / 2)
+        onBytes(data.count)
+        return data
+    }
 }
 
 enum FingerprintTestSupport {
