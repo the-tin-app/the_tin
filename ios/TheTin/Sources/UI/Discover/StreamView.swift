@@ -24,16 +24,19 @@ struct StreamView: View {
     @State private var wantBump = 0 // bumped on each double-tap to fire the haptic
     @State private var sharing: SharePayload?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(StreamDensity.storageKey) private var densityRaw = StreamDensity.one.rawValue
+
+    private var density: StreamDensity { StreamDensity(rawValue: densityRaw) ?? .one }
 
     var body: some View {
         Group {
             if let pager, !pager.cards.isEmpty {
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 0) {
-                        ForEach(Array(pager.cards.enumerated()), id: \.offset) { index, card in
-                            page(for: card)
+                        ForEach(0..<density.pageCount(cardCount: pager.cards.count), id: \.self) { pageIndex in
+                            pageContent(pager: pager, page: pageIndex)
                                 .containerRelativeFrame([.horizontal, .vertical])
-                                .id(index)
+                                .id(pageIndex)
                         }
                     }
                     .scrollTargetLayout()
@@ -52,6 +55,7 @@ struct StreamView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar { densityToggle }
         .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
         .task {
             if pager == nil {
@@ -63,10 +67,88 @@ struct StreamView: View {
         .onChange(of: currentIndex) {
             guard let i = currentIndex, let pager else { return }
             prefetchAround(i)
-            if i >= pager.cards.count - 3 {
+            // Load-more in PAGES: at 2×2 "three cards from the end" is under one screen of
+            // warning and the deck runs dry mid-swipe.
+            if i >= density.pageCount(cardCount: pager.cards.count) - 3 {
                 Task { await pager.loadNextPage(); prefetchAround(i) }
             }
         }
+    }
+
+    /// Switching density remaps the scroll position so the card you were looking at stays on
+    /// screen — see `StreamDensity.remapPage`. Written as an explicit toggle rather than a
+    /// Picker: two states don't earn a segmented control in a nav bar.
+    @ToolbarContentBuilder private var densityToggle: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                let old = density
+                let next: StreamDensity = old == .one ? .four : .one
+                if let i = currentIndex { currentIndex = next.remapPage(i, from: old) }
+                densityRaw = next.rawValue
+            } label: {
+                // Shows the layout you'd switch TO, which is the thing the button does.
+                Image(systemName: density == .one ? StreamDensity.four.symbol
+                                                  : StreamDensity.one.symbol)
+            }
+            .accessibilityLabel(density == .one ? "Show a grid" : "Show one card")
+        }
+    }
+
+    @ViewBuilder
+    private func pageContent(pager: StreamPager, page: Int) -> some View {
+        let range = density.cardRange(page: page, cardCount: pager.cards.count)
+        if density == .one, let card = pager.cards[range].first {
+            self.page(for: card)
+        } else {
+            gridPage(cards: Array(pager.cards[range]))
+        }
+    }
+
+    /// A grid page. ⚠️ The cell art is capped for the same reason the 1-up card is: a card's
+    /// aspect ratio means an uncapped width sets the HEIGHT, and two rows of ~500pt-wide cells
+    /// on an iPad would be ~1400pt tall and overflow exactly as the 1-up card did. 240 keeps two
+    /// rows plus their labels inside the shortest page we ship (iPhone, ~850pt usable).
+    @ViewBuilder
+    private func gridPage(cards: [CardRecord]) -> some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(maximum: 240), spacing: 16,
+                                                         alignment: .top),
+                                     count: density.columns),
+                      spacing: 16) {
+                ForEach(cards) { card in gridCell(card) }
+            }
+            .padding(.horizontal, 20)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// One cell. A real `NavigationLink`, not a tap gesture — it resolves on whichever stack
+    /// pushed the deck (`DiscoverView` registers `CardID` for both entry points), and VoiceOver
+    /// gets a link rather than an invisible gesture. Same shape as `SetDetailView`'s grid.
+    ///
+    /// Detail-on-single-tap exists only at this density: in 1-up the single tap is deliberately
+    /// left to the deck's pan, which is why `Card details` is a real button there.
+    ///
+    /// ⚠️ `highPriorityGesture`, not `onTapGesture` — a plain tap gesture on a NavigationLink
+    /// loses to the link and the double tap never fires. The cost, accepted knowingly: the
+    /// single tap now waits out the double-tap window before the push begins.
+    @ViewBuilder
+    private func gridCell(_ card: CardRecord) -> some View {
+        NavigationLink(value: CardID(raw: card.id)) {
+            VStack(spacing: 4) {
+                CardImageView(card: card, quality: "high")
+                    .overlay(alignment: .topTrailing) { heart(for: card) }
+                Text(card.name).font(.caption).lineLimit(1)
+                PriceLabel(value: try? store.price(cardId: card.id)?.rawUsd)
+            }
+        }
+        .buttonStyle(.plain)
+        .highPriorityGesture(TapGesture(count: 2).onEnded {
+            wants?.toggle(card.id)
+            wantBump += 1
+        })
+        .cardQuickActions(card: card, wants: nil, collection: collection, store: store)
     }
 
     /// Set name for the share link's `?set=` (the web preview renders it under the card name).
@@ -74,12 +156,18 @@ struct StreamView: View {
         (try? store.set(id: card.setId))?.name
     }
 
-    /// Warm the next several cards' high-res art so it's cached before the swipe reaches them.
-    private func prefetchAround(_ index: Int) {
+    /// Warm the next couple of PAGES of art so it's cached before the swipe reaches them.
+    ///
+    /// ⚠️ Page-denominated, and shallow on purpose. This used to be `index + 5` when a page was
+    /// one card; at 2×2 that same constant would put 20 images in flight against an
+    /// `ImageCache.maxConcurrentDownloads` of 4 on an A10 — the axis the Connections jetsam
+    /// crash lived on. Denser pages also hold your attention longer, so they need *less*
+    /// lookahead, not more.
+    private func prefetchAround(_ page: Int) {
         guard let pager else { return }
-        let end = min(index + 5, pager.cards.count)
-        guard index < end else { return }
-        let urls = pager.cards[index..<end].compactMap { $0.imageURL(quality: "high") }
+        let range = density.prefetchRange(page: page, cardCount: pager.cards.count)
+        guard !range.isEmpty else { return }
+        let urls = pager.cards[range].compactMap { $0.imageURL(quality: "high") }
         prefetcher.prefetch(urls)
     }
 
