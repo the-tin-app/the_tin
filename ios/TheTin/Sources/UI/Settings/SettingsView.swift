@@ -38,6 +38,9 @@ struct SettingsView: View {
         dataSection
         printoutSection
         storageSection
+        #if DEBUG
+        debugSection
+        #endif
     }
 
     var body: some View {
@@ -607,6 +610,22 @@ struct SettingsView: View {
             Button("Clear image cache", role: .destructive) { confirmingClear = true }
         }
     }
+
+    // MARK: Debug
+
+    #if DEBUG
+    private var debugSection: some View {
+        Section {
+            Toggle("Simulate primary outage", isOn: Binding(
+                get: { AppConfig.simulatePrimaryOutage },
+                set: { AppConfig.simulatePrimaryOutage = $0 }))
+        } header: {
+            Text("Debug")
+        } footer: {
+            Text("Forces the self-hosted origin to fail so the backup origin can be tested. Debug builds only.")
+        }
+    }
+    #endif
 }
 
 /// One backend's reachability: label, one-line detail, and a colored dot (gray until probed).

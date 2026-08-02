@@ -340,13 +340,20 @@ final class AppModelTests: XCTestCase {
     /// initializer), and a persisted UserDefaults key must never leak into a different test on
     /// the NEXT run.
     private var savedCatalogTierForBackupTests: String!
+    /// `simulatePrimaryOutage` is a persisted UserDefaults flag, same as `scanLookUpMode` — reset
+    /// in BOTH directions or a run that leaves it ON strands every later test that touches a real
+    /// `Authorizers.appAttest` primary.
+    private var savedSimulatePrimaryOutage: Bool!
 
     override func setUpWithError() throws {
         savedCatalogTierForBackupTests = AppConfig.catalogTier
+        savedSimulatePrimaryOutage = AppConfig.simulatePrimaryOutage
+        AppConfig.simulatePrimaryOutage = false
     }
 
     override func tearDownWithError() throws {
         AppConfig.catalogTier = savedCatalogTierForBackupTests
+        AppConfig.simulatePrimaryOutage = savedSimulatePrimaryOutage
     }
 
     /// Manifest+HTTP fake that actually serves the NAS/R2 tiered SHAPE through a REAL
@@ -368,7 +375,9 @@ final class AppModelTests: XCTestCase {
         }
     }
 
-    private func originRemoteWithFixture(tier: String = "expert") throws -> OriginCatalogRemote {
+    private func originRemoteWithFixture(tier: String = "expert",
+                                         authorize: @escaping RequestAuthorizer = { _, _ in }
+    ) throws -> OriginCatalogRemote {
         let sqlite = try Data(contentsOf: URL(fileURLWithPath: try FixtureCatalog.copyToTemp()))
         let gz = try sqlite.gzipped()
         let sha = SHA256.hash(data: gz).map { String(format: "%02x", $0) }.joined()
@@ -379,7 +388,7 @@ final class AppModelTests: XCTestCase {
         """.utf8)
         let http = FixtureOriginHTTP(manifestJSON: manifestJSON, artifactGz: gz)
         return OriginCatalogRemote(baseURL: URL(string: "https://backup.example")!,
-                                   authorize: { _, _ in }, http: http, tier: tier)
+                                   authorize: authorize, http: http, tier: tier)
     }
 
     func testFallbackIsLabelledBackupNotSelfHosted() async throws {
@@ -425,6 +434,37 @@ final class AppModelTests: XCTestCase {
         await model.start()
         XCTAssertEqual(model.catalogState?.tier, "expert")
         XCTAssertFalse(model.reducedData)
+    }
+
+    // MARK: - DEBUG simulate-primary-outage switch
+
+    /// The switch only bites inside `Authorizers.appAttest`, so the primary here must be a REAL
+    /// `OriginCatalogRemote` authorized that way (not the `{ _, _ in }` no-op the other fixture
+    /// tests use) — otherwise the flag has nothing to intercept and this could pass for the wrong
+    /// reason. Both origins are otherwise healthy: the whole point is that the switch alone is
+    /// what routes the update to the backup.
+    func testSimulatePrimaryOutageFailsOverToBackup() async throws {
+        AppConfig.simulatePrimaryOutage = true
+        let primary = try originRemoteWithFixture(authorize: Authorizers.appAttest(StubSession()))
+        let backup = try originRemoteWithFixture()
+        let model = AppModel(remote: primary, fallback: backup, primarySource: .selfHosted,
+                             paths: tempPaths(), skipFirebase: true)
+        await model.start()
+        XCTAssertEqual(model.phase, .ready)
+        XCTAssertEqual(model.activeSource, .backup)
+    }
+
+    /// Negative control for the test above: same two healthy origins, switch OFF. Without this,
+    /// an implementation that always fails over (or ignores the flag) would still pass the ON test.
+    func testSimulatePrimaryOutageOffServesPrimary() async throws {
+        AppConfig.simulatePrimaryOutage = false
+        let primary = try originRemoteWithFixture(authorize: Authorizers.appAttest(StubSession()))
+        let backup = try originRemoteWithFixture()
+        let model = AppModel(remote: primary, fallback: backup, primarySource: .selfHosted,
+                             paths: tempPaths(), skipFirebase: true)
+        await model.start()
+        XCTAssertEqual(model.phase, .ready)
+        XCTAssertEqual(model.activeSource, .selfHosted)
     }
 }
 
