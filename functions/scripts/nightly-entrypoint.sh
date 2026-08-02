@@ -135,8 +135,8 @@ if ! PPT_MINUTE_LIMIT="${PPT_MINUTE_LIMIT:-400}" \
   exit 0
 fi
 
-# --- 6. publish tiers to the NAS (+ Firebase casual backup if creds are present) ---
-step "6/7 publish-tiers (NAS + optional Firebase)"
+# --- 6. publish tiers to the NAS (+ Firebase casual backup, + R2 backup origin, if creds present) ---
+step "6/7 publish-tiers (NAS + optional Firebase + optional R2)"
 FIREBASE_FLAG=""
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] && [ -n "${FIREBASE_STORAGE_BUCKET:-}" ]; then
   echo "[nightly] GOOGLE_APPLICATION_CREDENTIALS + FIREBASE_STORAGE_BUCKET set — will also push casual tier to Firebase"
@@ -144,7 +144,18 @@ if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] && [ -n "${FIREBASE_STORAGE_BUCK
 else
   echo "[nightly] GOOGLE_APPLICATION_CREDENTIALS / FIREBASE_STORAGE_BUCKET not both set — Firebase backup SKIPPED"
 fi
-npx tsx scripts/publish-tiers.ts ".seed-output/catalog-v$NEXT_VERSION.sqlite" "$NEXT_VERSION" "$NAS_DIR" $FIREBASE_FLAG
+# R2 backup origin: all three tiers + the tiered manifest, read by the app through a Cloudflare
+# Worker. Gated on all four vars because publish-tiers.ts EXITS 1 on `--r2` without them — an
+# ungated flag would fail the whole nightly on any host that hasn't been given R2 credentials.
+R2_FLAG=""
+if [ -n "${R2_ACCOUNT_ID:-}" ] && [ -n "${R2_BUCKET:-}" ] \
+   && [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ]; then
+  echo "[nightly] R2_* set — will also publish all three tiers to R2 bucket $R2_BUCKET"
+  R2_FLAG="--r2"
+else
+  echo "[nightly] R2_* not all set — R2 backup origin SKIPPED"
+fi
+npx tsx scripts/publish-tiers.ts ".seed-output/catalog-v$NEXT_VERSION.sqlite" "$NEXT_VERSION" "$NAS_DIR" $FIREBASE_FLAG $R2_FLAG
 echo "[nightly] NAS manifest now: $(cat "$CATALOG_DIR/manifest.json")"
 
 # --- 7. re-merge the funding + supporters blocks into the manifest the server just started
