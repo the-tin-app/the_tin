@@ -128,9 +128,20 @@ function stripHtml(s: string): string {
  * Group → set id, voted by the products we already resolve. A set is claimed by at most one
  * group (the one with the most evidence), so an overlapping group can't steal it.
  */
+export interface GroupDecision {
+  groupId: number;
+  products: number;
+  matched: number;
+  topSet: string | null;
+  share: number;
+  /** Why this group produced no cards. `null` when it was accepted. */
+  rejected: "no-matches" | "too-few-matches" | "ambiguous" | "lost-to-better-group" | null;
+}
+
 export function mapGroupsToSets(
   groups: { groupId: number; products: TcgcsvProduct[] }[],
   setByTcgplayerId: Map<number, string>,
+  decisions?: GroupDecision[],
 ): Map<number, string> {
   const best = new Map<string, { groupId: number; matched: number }>();
   for (const g of groups) {
@@ -142,15 +153,25 @@ export function mapGroupsToSets(
       votes.set(setId, (votes.get(setId) ?? 0) + 1);
       matched++;
     }
-    if (matched < MIN_MATCHED_PRODUCTS) continue;
     let top = "", topN = 0;
     for (const [setId, n] of votes) if (n > topN) { top = setId; topN = n; }
-    if (topN / matched < MIN_DOMINANT_SHARE) continue;
+    const share = matched ? topN / matched : 0;
+    const d: GroupDecision = {
+      groupId: g.groupId, products: g.products.length, matched,
+      topSet: top || null, share: Number(share.toFixed(3)),
+      rejected: matched === 0 ? "no-matches"
+              : matched < MIN_MATCHED_PRODUCTS ? "too-few-matches"
+              : share < MIN_DOMINANT_SHARE ? "ambiguous" : null,
+    };
+    decisions?.push(d);
+    if (d.rejected) continue;
     const cur = best.get(top);
     if (!cur || topN > cur.matched) best.set(top, { groupId: g.groupId, matched: topN });
   }
   const out = new Map<number, string>();
   for (const [setId, { groupId }] of best) out.set(groupId, setId);
+  // A group that voted credibly but lost its set to a better-evidenced group.
+  if (decisions) for (const d of decisions) if (!d.rejected && !out.has(d.groupId)) d.rejected = "lost-to-better-group";
   return out;
 }
 
@@ -170,10 +191,16 @@ export interface SynthesizeResult {
   /** setId → how many cards were added, for the build log. */
   addedBySet: Map<string, number>;
   skippedForeignDenominator: number;
+  /** Per-group mapping outcome, for the diagnostic sidecar. */
+  decisions: GroupDecision[];
+  /** Products dropped for a foreign denominator, with enough to judge the call by eye. */
+  rejects: { setId: string; number: string; name: string; productId: number }[];
 }
 
 export function synthesizeMissingCards(input: SynthesizeInput): SynthesizeResult {
-  const groupSets = mapGroupsToSets(input.groups, input.setByTcgplayerId);
+  const decisions: GroupDecision[] = [];
+  const rejects: { setId: string; number: string; name: string; productId: number }[] = [];
+  const groupSets = mapGroupsToSets(input.groups, input.setByTcgplayerId, decisions);
   const cards: SynthesizedCard[] = [];
   const addedBySet = new Map<string, number>();
   let skippedForeignDenominator = 0;
@@ -191,7 +218,11 @@ export function synthesizeMissingCards(input: SynthesizeInput): SynthesizeResult
       const raw = ext["Number"];
       const keys = numberKeys(raw);
       if (keys.size === 0) continue;
-      if (!denominatorFits(raw, totals.total, totals.printedTotal)) { skippedForeignDenominator++; continue; }
+      if (!denominatorFits(raw, totals.total, totals.printedTotal)) {
+        skippedForeignDenominator++;
+        rejects.push({ setId, number: raw ?? "", name: p.name, productId: p.productId });
+        continue;
+      }
       if ([...keys].some((k) => taken.has(k))) continue;
       for (const k of keys) taken.add(k);
 
@@ -224,7 +255,7 @@ export function synthesizeMissingCards(input: SynthesizeInput): SynthesizeResult
       addedBySet.set(setId, (addedBySet.get(setId) ?? 0) + 1);
     }
   }
-  return { cards, addedBySet, skippedForeignDenominator };
+  return { cards, addedBySet, skippedForeignDenominator, decisions, rejects };
 }
 
 /**

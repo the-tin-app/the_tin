@@ -243,9 +243,10 @@ async function main() {
     const dexByName = new Map<string, number>();
     for (const [id, name] of pokemonNames) if (!dexByName.has(name.toLowerCase())) dexByName.set(name.toLowerCase(), id);
 
-    const { cards: added, addedBySet, skippedForeignDenominator } = synthesizeMissingCards({
+    const result = synthesizeMissingCards({
       groups: await loadProductsByGroup(), setByTcgplayerId, numbersBySet, setTotals, dexByName,
     });
+    const { cards: added, addedBySet, skippedForeignDenominator } = result;
     meta.cards.push(...added);
     // The set's own total came from the same stale TCGdex record, so it can now under-count
     // what the set holds — the app would render "63 / 60". Raise it to what we actually have.
@@ -255,8 +256,42 @@ async function main() {
       const n = countBySet.get(s.id) ?? 0;
       if (n > (s.official ?? 0)) s.official = n;
     }
-    console.log(`  +${added.length} cards across ${addedBySet.size} sets (${skippedForeignDenominator} reprints numbered by another set, skipped)`);
-    for (const [setId, n] of [...addedBySet].sort((a, b) => b[1] - a[1])) console.log(`     ${setId}: +${n}`);
+    // Every decision goes to a sidecar next to the artifact. If a card is wrong or missing
+    // tomorrow, this answers "which group claimed that set, on how much evidence, and what
+    // was rejected" WITHOUT re-running a ~217-request sweep or guessing from the log.
+    mkdirSync(outDir, { recursive: true });
+    const sidecar = join(outDir, `tcgcsv-fill-v${version}.json`);
+    writeFileSync(sidecar, JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      version,
+      summary: {
+        added: added.length,
+        sets: Object.fromEntries([...addedBySet].sort((a, b) => b[1] - a[1])),
+        skippedForeignDenominator,
+        groupsAccepted: result.decisions.filter((d) => !d.rejected).length,
+        groupsRejected: result.decisions.filter((d) => d.rejected).length,
+      },
+      cards: added.map((c) => ({
+        id: c.id, name: c.name, localId: c.localId, setId: c.setId,
+        tcgplayerId: c.tcgplayerIds[0], hp: c.hp, types: c.types, rarity: c.rarity,
+        attacks: c.attacks.map((a) => a.name), dexId: c.dexId,
+      })),
+      groupDecisions: result.decisions.sort((a, b) => b.matched - a.matched),
+      foreignDenominatorRejects: result.rejects,
+    }, null, 1));
+
+    console.log(`[tcgcsv-fill] +${added.length} cards across ${addedBySet.size} sets`);
+    for (const [setId, n] of [...addedBySet].sort((a, b) => b[1] - a[1])) console.log(`[tcgcsv-fill]   ${setId}: +${n}`);
+    for (const c of added) console.log(`[tcgcsv-fill]   card ${c.id} "${c.name}" tcgplayer=${c.tcgplayerIds[0]}`);
+    console.log(`[tcgcsv-fill] groups: ${result.decisions.filter((d) => !d.rejected).length} accepted, `
+      + `${result.decisions.filter((d) => d.rejected).length} rejected `
+      + `(${result.decisions.filter((d) => d.rejected === "too-few-matches").length} too-few-matches, `
+      + `${result.decisions.filter((d) => d.rejected === "ambiguous").length} ambiguous)`);
+    console.log(`[tcgcsv-fill] ${skippedForeignDenominator} products skipped: printed denominator belongs to another set`);
+    console.log(`[tcgcsv-fill] full decision log: ${sidecar}`);
+    // A sudden jump means an upstream shape change, not 400 new Pokémon cards. Loud, not fatal:
+    // the guards are conservative and a wrong SKIP is cheaper than a wrong PUBLISH.
+    if (added.length > 200) console.log(`[tcgcsv-fill] ⚠️ UNUSUALLY LARGE (${added.length}) — expected ~22; inspect ${sidecar} before trusting this catalog`);
   } catch (e) {
     // Best-effort, exactly like PPT enrichment: a tcgcsv outage must not stop the nightly.
     console.error(`⚠️ tcgcsv card fill failed (${(e as Error).message}) — publishing without it`);
