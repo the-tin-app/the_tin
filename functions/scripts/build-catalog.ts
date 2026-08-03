@@ -30,6 +30,7 @@ import { PptClient, CreditBudget, parseCreditBudget } from "../src/upstream/ppt"
 import type { PptPrice } from "../src/upstream/ppt";
 import { resolvePptSetName } from "../src/pipeline/ppt-setmap";
 import { computeFills } from "../src/pipeline/ppt-enrich";
+import { synthesizeMissingCards, numberKeys, type TcgcsvProduct } from "../src/pipeline/tcgcsv-cards";
 import type { FlatCard, FlatSet } from "./flatten-cards-db";
 import { pptPrintingName } from "./flatten-cards-db";
 import Database from "better-sqlite3";
@@ -143,6 +144,58 @@ async function loadEurMap(): Promise<Map<number, number>> {
   return eur;
 }
 
+// ---- Products (tcgcsv): per-group product lists, for cards TCGdex doesn't have ----
+// Same cache discipline as the price sweep, but a separate marker: product lists change far
+// less often than prices, and the two sweeps must not invalidate each other. Runs in BOTH
+// modes — export mode skips the PRICE sweep, but a missing card is missing either way.
+async function loadProductsByGroup(): Promise<{ groupId: number; products: TcgcsvProduct[] }[]> {
+  mkdirSync(tcgcsvDir, { recursive: true });
+  const markerFile = join(tcgcsvDir, "products-last-updated.txt");
+  const groupsFile = join(tcgcsvDir, "groups.json");
+
+  const remoteUpdated = (await fetchText("https://tcgcsv.com/last-updated.txt")).trim();
+  const cachedUpdated = existsSync(markerFile) ? readFileSync(markerFile, "utf8").trim() : "";
+  const fresh = cachedUpdated === remoteUpdated;
+
+  let groups: any[];
+  if (fresh && existsSync(groupsFile)) {
+    groups = JSON.parse(readFileSync(groupsFile, "utf8")).results ?? [];
+  } else {
+    const g = await fetchJson(`https://tcgcsv.com/tcgplayer/${TCGCSV_CATEGORY}/groups`);
+    writeFileSync(groupsFile, JSON.stringify(g));
+    groups = g.results ?? [];
+    await sleep(120);
+  }
+
+  const out: { groupId: number; products: TcgcsvProduct[] }[] = [];
+  let fetched = 0, failed = 0;
+  for (const grp of groups) {
+    const gid = grp.groupId;
+    const file = join(tcgcsvDir, `products-${gid}.json`);
+    let results: any[];
+    if (fresh && existsSync(file)) {
+      results = JSON.parse(readFileSync(file, "utf8")).results ?? [];
+    } else {
+      try {
+        const data = await fetchJson(`https://tcgcsv.com/tcgplayer/${TCGCSV_CATEGORY}/${gid}/products`);
+        writeFileSync(file, JSON.stringify(data));
+        results = data.results ?? [];
+        fetched++;
+      } catch (e) {
+        // One unreachable group must not fail the build — it only costs that group's new cards.
+        console.error(`  products fetch failed for group ${gid}: ${(e as Error).message}`);
+        failed++;
+        results = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")).results ?? [] : [];
+      }
+      await sleep(120); // politeness, same as the price sweep
+    }
+    out.push({ groupId: gid, products: results });
+  }
+  writeFileSync(markerFile, remoteUpdated);
+  console.log(`  tcgcsv products: ${groups.length} groups (${fetched} fetched now, ${failed} failed)`);
+  return out;
+}
+
 // ---- Images (datas.json): 1 request, existence manifest ----
 async function loadImageManifest(): Promise<any> {
   const file = join(feedsDir, "datas.json");
@@ -166,7 +219,6 @@ async function main() {
 
   const pokedex: Record<string, string> = JSON.parse(readFileSync(join(__dirname, "../data/pokedex.json"), "utf8"));
   const pokemonNames = new Map<number, string>(Object.entries(pokedex).map(([k, v]) => [Number(k), v]));
-  const dexByCard = new Map<string, number[]>(meta.cards.map((c) => [c.id, c.dexId ?? []]));
 
   console.log(`[2] loading price + image feeds…${exportDir ? " (raw/graded/sealed/pop from PPT export)" : ""}`);
   // Export mode: raw USD comes from the PPT cards export (applied after buildCatalog), so skip the
@@ -174,6 +226,43 @@ async function main() {
   const usd = exportDir ? new Map<number, number>() : await loadUsdMap();
   const [eur, datas] = [await loadEurMap(), await loadImageManifest()];
   const enImages = datas.en ?? {};
+
+  // [2b] Cards TCGdex has never published. The card universe was TCGdex-only, so a card it
+  // lacks could never appear however well-priced it was upstream — that is how MEP 046-054
+  // stayed missing while TCGplayer had them. Additive only: nothing existing is touched.
+  console.log(`[2b] checking tcgcsv for cards TCGdex doesn't have…`);
+  try {
+    const setByTcgplayerId = new Map<number, string>();
+    for (const c of meta.cards) for (const t of c.tcgplayerIds) if (!setByTcgplayerId.has(t)) setByTcgplayerId.set(t, c.setId);
+    const numbersBySet = new Map<string, Set<string>>();
+    for (const c of meta.cards) {
+      if (!numbersBySet.has(c.setId)) numbersBySet.set(c.setId, new Set());
+      for (const k of numberKeys(c.localId)) numbersBySet.get(c.setId)!.add(k);
+    }
+    const setTotals = new Map(meta.sets.map((s) => [s.id, { total: s.official, printedTotal: s.printedTotal }]));
+    const dexByName = new Map<string, number>();
+    for (const [id, name] of pokemonNames) if (!dexByName.has(name.toLowerCase())) dexByName.set(name.toLowerCase(), id);
+
+    const { cards: added, addedBySet, skippedForeignDenominator } = synthesizeMissingCards({
+      groups: await loadProductsByGroup(), setByTcgplayerId, numbersBySet, setTotals, dexByName,
+    });
+    meta.cards.push(...added);
+    // The set's own total came from the same stale TCGdex record, so it can now under-count
+    // what the set holds — the app would render "63 / 60". Raise it to what we actually have.
+    const countBySet = new Map<string, number>();
+    for (const c of meta.cards) countBySet.set(c.setId, (countBySet.get(c.setId) ?? 0) + 1);
+    for (const s of meta.sets) {
+      const n = countBySet.get(s.id) ?? 0;
+      if (n > (s.official ?? 0)) s.official = n;
+    }
+    console.log(`  +${added.length} cards across ${addedBySet.size} sets (${skippedForeignDenominator} reprints numbered by another set, skipped)`);
+    for (const [setId, n] of [...addedBySet].sort((a, b) => b[1] - a[1])) console.log(`     ${setId}: +${n}`);
+  } catch (e) {
+    // Best-effort, exactly like PPT enrichment: a tcgcsv outage must not stop the nightly.
+    console.error(`⚠️ tcgcsv card fill failed (${(e as Error).message}) — publishing without it`);
+  }
+
+  const dexByCard = new Map<string, number[]>(meta.cards.map((c) => [c.id, c.dexId ?? []]));
 
   console.log(`[3] assembling catalog input (joining prices + images)…`);
   const sets: TcgdexSet[] = meta.sets.map((s) => ({
