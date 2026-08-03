@@ -2,7 +2,7 @@
 Usage: python scripts/build_twins.py --catalog PATH/catalog.sqlite \
     --images .cache/images --out .fp-output/twins.json"""
 import argparse, json, os, sqlite3, cv2
-from fpcore import twins
+from fpcore import build, twins
 
 def gray(images_dir, cid):
     p = os.path.join(images_dir, f"{cid}.webp")
@@ -20,7 +20,7 @@ def main():
     con = sqlite3.connect(args.catalog)
     pools = {}
     for cid, num, name in con.execute(
-        "SELECT id, number, lower(name) FROM card WHERE image_base IS NOT NULL"):
+        f"SELECT id, number, lower(name) FROM card WHERE {build.FINGERPRINTABLE_WHERE}"):
         pools.setdefault((num, name), []).append(cid)
     con.close()
     out = []
