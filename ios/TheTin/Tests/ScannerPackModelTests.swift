@@ -89,6 +89,34 @@ final class ScannerPackModelTests: XCTestCase {
         XCTAssertEqual(pack.installedVersion, 1)
     }
 
+    /// An update must not take the scanner away. The Scan tab decides between the live viewfinder
+    /// and the first-install download wall on `isScannerUsable`, so if this goes false mid-update
+    /// a user with a perfectly good pack loses camera scanning for the whole ~568 MB transfer —
+    /// which is precisely what `updateAvailable` exists to avoid.
+    @MainActor
+    func testScannerStaysUsableThroughoutAnUpdate() async throws {
+        // Parts format, because that is the only format the NAS serves.
+        let env = try FingerprintUpdaterTestEnv.makeParts(version: 1)
+        _ = try await env.updater.ensureLatest()
+        let (v2, files) = FingerprintUpdaterTestEnv.partsManifest(version: 2, sqlite: env.sqlite,
+                                                                  partSize: 4096)
+        env.remote.partsManifest = v2
+        for (path, data) in files { env.remote.files[path] = data }
+        let pack = try makePack(env: env)
+        await pack.refresh()
+        XCTAssertTrue(pack.updateAvailable)
+        XCTAssertTrue(pack.isScannerUsable, "installed pack must be live before the update starts")
+
+        pack.startDownload()
+        XCTAssertTrue(pack.isDownloading)
+        XCTAssertTrue(pack.isScannerUsable, "the installed pack must keep serving mid-download")
+        await pack.waitForDownload()
+
+        XCTAssertTrue(pack.isScannerUsable, "and after the swap, against the new pack")
+        XCTAssertEqual(pack.installedVersion, 2)
+        XCTAssertFalse(pack.updateAvailable)
+    }
+
     /// The DEBUG rehearsal switch: rewinding the recorded version must reproduce the case above
     /// exactly — update offered, pack file still on disk and still serving the scanner. If it ever
     /// deleted or invalidated the pack it would be testing a first-install, not an update.

@@ -54,6 +54,9 @@ final class ScannerPackModel {
     /// Consulted directly rather than through a SwiftUI `onChange`: the auto-pause must not
     /// depend on a view being on screen or on observation timing.
     private let network: NetworkMonitor?
+    /// Which installed version `matcher`/`index` were built against, so a re-check can skip the
+    /// rebuild. nil means "nothing usable built".
+    private var builtVersion: Int?
     private var downloadTask: Task<Void, Never>?
     private var networkWatch: Task<Void, Never>?
     /// Set when the user explicitly accepted a metered download ("Download now" / "Resume
@@ -104,6 +107,16 @@ final class ScannerPackModel {
     // MARK: Status
 
     var isDownloading: Bool { if case .downloading = phase { return true }; return false }
+
+    /// Whether camera scanning can run *right now*, which is not the same question as `phase`.
+    ///
+    /// An update downloads into a separate incoming file and only swaps at the end, so the
+    /// installed pack keeps serving the matcher for the whole transfer — the open sqlite handle
+    /// survives the swap by reading the old inode, the same mechanic `deletePack()` guards
+    /// against. The Scan tab used to switch on `phase` alone, so `.downloading` replaced a
+    /// perfectly good live scanner with the first-install download wall for ~568 MB. That
+    /// contradicted the entire reason `updateAvailable` exists.
+    var isScannerUsable: Bool { matcher != nil && index != nil }
 
     var isPaused: Bool { if case .paused = phase { return true }; return false }
 
@@ -285,6 +298,7 @@ final class ScannerPackModel {
         // out from under it would leave the scanner reading a unlinked inode.
         matcher = nil
         index = nil
+        builtVersion = nil
         updater.deleteInstalledPack()
         installedVersion = nil
         installedBytes = nil
@@ -306,14 +320,21 @@ final class ScannerPackModel {
     /// the caller can degrade to `.unavailable` instead of crashing or stranding the UI in a
     /// permanently-loading `.ready` state.
     private func buildScanDependencies() {
+        // Already built against this exact pack — reopening the sqlite and rebuilding the whole
+        // CandidateIndex is far too expensive to repeat on a freshness re-check, and `refresh()`
+        // now runs on every Settings visit and every Scan tab appearance rather than once per
+        // cold launch. On an A10 that rebuild is the difference between a tab switch and a stall.
+        if matcher != nil, index != nil, builtVersion == installedVersion { return }
         do {
             let store = try makeStore(paths.databaseURL.path)
             let codebook = try makeCodebook()
             matcher = try Matcher(store: store, codebook: codebook)
             index = try CandidateIndex(store: catalogStore)
+            builtVersion = installedVersion
         } catch {
             matcher = nil
             index = nil
+            builtVersion = nil
         }
     }
 

@@ -32,15 +32,26 @@ struct ScanTabContainer: View {
     /// a re-render mid-scan needs nothing more than a toast. Diagnosed on an iPad, 2026-07-27.
     @State private var model: ScanModel?
     @State private var reviewingStaged = false
+    @State private var confirmingUpdateOverCellular = false
 
     var body: some View {
         content
             .navigationTitle("Scan")
             .navigationBarTitleDisplayMode(.inline)
+            // Re-check on arrival, so the update banner appears on a running app rather than
+            // only after a cold launch. Cheap: `refresh()` reuses an already-built matcher.
+            .task { await pack.refresh() }
             .sheet(isPresented: $reviewingStaged) {
                 NavigationStack {
                     StagingReviewView(staging: staging, collection: collection, store: store, wants: wants)
                 }
+            }
+            .confirmationDialog("Download over cellular?", isPresented: $confirmingUpdateOverCellular,
+                                titleVisibility: .visible) {
+                Button("Download now") { pack.startDownload(allowingExpensive: true) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You're not on Wi-Fi. This may count against your data plan — you can pause and resume anytime, and the scanner keeps working meanwhile.")
             }
     }
 
@@ -48,8 +59,13 @@ struct ScanTabContainer: View {
     /// the cards you took straight into it. Without this, a user who never downloads the ~500 MB
     /// pack has their traded-for cards sitting safely on disk with no surface anywhere in the app.
     @ViewBuilder private var content: some View {
-        if case .ready = pack.phase {
-            packContent
+        if pack.isScannerUsable {
+            // Any banner here sits ABOVE the live viewfinder rather than replacing it: with a
+            // working pack installed there is never a reason to take the camera away.
+            VStack(spacing: 0) {
+                packUpdateBanner
+                packContent.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else if staging.drafts.isEmpty {
             packContent
         } else {
@@ -58,6 +74,52 @@ struct ScanTabContainer: View {
                 packContent.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    /// Tells you a newer pack exists, on the one screen where it matters — the scanner is the
+    /// only thing the pack affects, and Settings was previously the only place that said so.
+    ///
+    /// Not shown while the transfer runs: that is the toast's job, and it follows you out of the
+    /// tab. Shown while PAUSED, though, or a parked update would be unresumable from here.
+    @ViewBuilder private var packUpdateBanner: some View {
+        if case .paused(_, let reason) = pack.phase {
+            banner(title: reason == .cellular ? "Update paused — you're on cellular"
+                                              : "Scanner update paused",
+                   caption: "Your progress is saved.",
+                   action: reason == .cellular ? "Resume anyway" : "Resume") {
+                pack.startDownload(allowingExpensive: reason == .cellular)
+            }
+        } else if pack.updateAvailable, !pack.isDownloading {
+            banner(title: "New scanner pack available",
+                   caption: newPackCaption,
+                   action: "Update") {
+                if network.isExpensive { confirmingUpdateOverCellular = true } else { pack.startDownload() }
+            }
+        }
+    }
+
+    /// Names the cost, because tapping this spends a few hundred MB. `publishedBytes` is nil only
+    /// when the manifest hasn't been read this launch, so it degrades to the honest vaguer line.
+    private var newPackCaption: String {
+        guard let bytes = pack.publishedBytes else { return "Scans more cards. Best on Wi-Fi." }
+        let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        return "Scans more cards. \(size), best on Wi-Fi."
+    }
+
+    private func banner(title: String, caption: String, action: String,
+                        perform: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.down.circle").imageScale(.large).foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.bold())
+                Text(caption).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button(action, action: perform)
+                .buttonStyle(.borderedProminent).controlSize(.small)
+        }
+        .padding(.horizontal).padding(.vertical, 10)
+        .background(.thinMaterial)
     }
 
     private var stagedBanner: some View {
@@ -83,10 +145,15 @@ struct ScanTabContainer: View {
             TinLoadingView(label: "Preparing scanner…").task { await pack.refresh() }
         case .notInstalled:
             ScannerPackSetupView(pack: pack, isExpensive: network.isExpensive)
-        case .downloading(let progress):
+        // The download wall belongs to a FIRST install only. With a usable pack installed the
+        // transfer is an update running alongside it, so the viewfinder stays and the toast
+        // reports progress — `isScannerUsable` is checked before the phase for exactly that.
+        case .downloading(let progress) where !pack.isScannerUsable:
             ScannerPackProgressView(pack: pack, progress: progress, paused: nil)
-        case .paused(let progress, let reason):
+        case .paused(let progress, let reason) where !pack.isScannerUsable:
             ScannerPackProgressView(pack: pack, progress: progress, paused: reason)
+        case .downloading, .paused:
+            liveScanner
         case .unavailable(let msg):
             VStack(spacing: 12) {
                 ContentUnavailableView("Scanner unavailable", systemImage: "camera.metering.unknown",
@@ -95,17 +162,21 @@ struct ScanTabContainer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
-            if let model {
-                ScanView(model: model, staging: staging,
-                         collection: collection, store: store, source: source, wants: wants)
-            } else if let matcher = pack.matcher, let index = pack.index {
-                // Assigned from a task rather than built in the branch above: `body` must not
-                // construct it (see `model`), and `CardDetector`'s CIContext is not free enough
-                // to mint and throw away on every re-render.
-                TinLoadingView().task { model = makeScanModel(matcher, index: index) }
-            } else {
-                TinLoadingView()
-            }
+            liveScanner
+        }
+    }
+
+    @ViewBuilder private var liveScanner: some View {
+        if let model {
+            ScanView(model: model, staging: staging,
+                     collection: collection, store: store, source: source, wants: wants)
+        } else if let matcher = pack.matcher, let index = pack.index {
+            // Assigned from a task rather than built in the branch above: `body` must not
+            // construct it (see `model`), and `CardDetector`'s CIContext is not free enough
+            // to mint and throw away on every re-render.
+            TinLoadingView().task { model = makeScanModel(matcher, index: index) }
+        } else {
+            TinLoadingView()
         }
     }
 
@@ -178,8 +249,14 @@ struct ScannerPackProgressView: View {
     var body: some View {
         VStack(spacing: 14) {
             ProgressView(value: progress.fraction).frame(maxWidth: 260)
-            Text(progress.byteSummary)
-                .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                // Same reason as the toast: a bar at a hard 0 looks stalled, and on a slow link
+                // the first bytes of a ~568 MB pack can be a long wait.
+                .opacity(progress.bytesDone > 0 ? 1 : 0.35)
+            HStack(spacing: 7) {
+                if progress.bytesDone == 0, paused == nil { ProgressView().controlSize(.mini) }
+                Text(progress.bytesDone > 0 ? progress.byteSummary : "Starting…")
+                    .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+            }
 
             if let paused {
                 Text(paused == .cellular

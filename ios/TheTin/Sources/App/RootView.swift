@@ -158,7 +158,10 @@ private struct MainTabView: View {
                                  pack: pack, network: model.network, staging: staging)
                     .fundingBanner(model: model, store: store, pack: pack)
             }
-            .appToasts(model: model, pack: pack, showsScannerToast: false)
+            // Shown here only when the Scan tab is NOT already showing the full-screen download
+            // wall — i.e. an update over a working pack, where the viewfinder stays live and the
+            // toast is the only progress on screen. A first install would double up.
+            .appToasts(model: model, pack: pack, showsScannerToast: pack.isScannerUsable)
             .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
             .tag(Tab.scan)
         }
@@ -316,7 +319,9 @@ private struct AppToasts: ViewModifier {
                     // Follows the user out of the Scan tab — the whole point of hoisting the
                     // download is that they can walk away from it.
                     if showsScannerToast, case .downloading(let p) = pack.phase {
-                        UpdateToast(label: "Setting up scanner… \(p.byteSummary)",
+                        // "Setting up" is a lie once a pack is installed and scanning — that
+                        // transfer is an update running behind a scanner that already works.
+                        UpdateToast(label: "\(pack.isScannerUsable ? "Updating" : "Setting up") scanner… \(p.byteSummary)",
                                     progress: p.fraction)
                     }
                 }
@@ -381,17 +386,26 @@ private struct UpdateToast: View {
     let label: String
     let progress: Double
 
+    /// Nothing has landed yet. A determinate bar pinned at 0% reads as a stalled download, and on
+    /// a slow link the pack's first chunk is minutes away — so say "working" instead of "0%".
+    private var isIndeterminate: Bool { progress <= 0 }
+
     var body: some View {
         VStack(spacing: 7) {
             HStack {
                 Text(label)
                 Spacer()
-                Text(progress.formatted(.percent.precision(.fractionLength(0))))
-                    .monospacedDigit()
+                if isIndeterminate {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Text(progress.formatted(.percent.precision(.fractionLength(0))))
+                        .monospacedDigit()
+                }
             }
             .font(.caption.weight(.semibold))
             ProgressView(value: progress)
                 .animation(reduceMotion ? nil : .linear(duration: 0.2), value: progress)
+                .opacity(isIndeterminate ? 0.35 : 1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
