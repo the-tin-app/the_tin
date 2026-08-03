@@ -191,7 +191,11 @@ async function loadProductsByGroup(): Promise<{ groupId: number; products: Tcgcs
     }
     out.push({ groupId: gid, products: results });
   }
-  writeFileSync(markerFile, remoteUpdated);
+  // Only mark the cache good when EVERY group came back. Writing the marker after a partial
+  // sweep would freeze a transient 5xx in as an empty group until tcgcsv's last-updated moves —
+  // a set would quietly stop gaining cards and nothing in tomorrow's log would say why.
+  if (failed === 0) writeFileSync(markerFile, remoteUpdated);
+  else console.log(`  tcgcsv products: ${failed} group(s) failed — NOT marking cache fresh, next run refetches`);
   console.log(`  tcgcsv products: ${groups.length} groups (${fetched} fetched now, ${failed} failed)`);
   return out;
 }
