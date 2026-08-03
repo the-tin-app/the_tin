@@ -59,6 +59,11 @@ struct SettingsView: View {
             }
             .task {
                 await model.refresh()
+                // Without this, Settings reports whatever the pack looked like at cold launch:
+                // `pack.refresh()` ran once in RootView's `.task` and nowhere else, so a pack
+                // published while the app was running never showed up here however many times
+                // you opened this screen. That is "I looked and saw nothing".
+                await pack.refresh()
                 await model.probeConnections(app: app)
                 await app.backup?.refreshStatus()
             }
