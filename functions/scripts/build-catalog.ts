@@ -191,7 +191,11 @@ async function loadProductsByGroup(): Promise<{ groupId: number; products: Tcgcs
     }
     out.push({ groupId: gid, products: results });
   }
-  writeFileSync(markerFile, remoteUpdated);
+  // Only mark the cache good when EVERY group came back. Writing the marker after a partial
+  // sweep would freeze a transient 5xx in as an empty group until tcgcsv's last-updated moves —
+  // a set would quietly stop gaining cards and nothing in tomorrow's log would say why.
+  if (failed === 0) writeFileSync(markerFile, remoteUpdated);
+  else console.log(`  tcgcsv products: ${failed} group(s) failed — NOT marking cache fresh, next run refetches`);
   console.log(`  tcgcsv products: ${groups.length} groups (${fetched} fetched now, ${failed} failed)`);
   return out;
 }
@@ -259,8 +263,11 @@ async function main() {
     // Every decision goes to a sidecar next to the artifact. If a card is wrong or missing
     // tomorrow, this answers "which group claimed that set, on how much evidence, and what
     // was rejected" WITHOUT re-running a ~217-request sweep or guessing from the log.
-    mkdirSync(outDir, { recursive: true });
-    const sidecar = join(outDir, `tcgcsv-fill-v${version}.json`);
+    // NOT outDir: the nightly runs with --rm and does not mount .seed-output, so a sidecar
+    // written there is destroyed the moment the run ends — which is exactly when it is wanted.
+    // .cache IS a persistent docker volume (catalog-pipeline-cache), so it survives.
+    mkdirSync(cacheDir, { recursive: true });
+    const sidecar = join(cacheDir, `tcgcsv-fill-v${version}.json`);
     writeFileSync(sidecar, JSON.stringify({
       generatedAt: new Date().toISOString(),
       version,
