@@ -89,6 +89,25 @@ final class ScannerPackModelTests: XCTestCase {
         XCTAssertEqual(pack.installedVersion, 1)
     }
 
+    /// The DEBUG rehearsal switch: rewinding the recorded version must reproduce the case above
+    /// exactly — update offered, pack file still on disk and still serving the scanner. If it ever
+    /// deleted or invalidated the pack it would be testing a first-install, not an update.
+    @MainActor
+    func testDebugRewindOffersAnUpdateWithoutTouchingThePack() async throws {
+        let env = try FingerprintUpdaterTestEnv.make(version: 2)
+        _ = try await env.updater.ensureLatest()
+        let bytes = try Data(contentsOf: env.paths.databaseURL)
+        let pack = try makePack(env: env)
+
+        pack.debugRewindInstalledVersion()
+        await pack.refresh()
+
+        XCTAssertEqual(pack.installedVersion, 1, "recorded version must drop by one")
+        XCTAssertTrue(pack.updateAvailable, "the server's v2 must now read as newer")
+        XCTAssertEqual(pack.phase, .ready, "the installed pack keeps serving the scanner")
+        XCTAssertEqual(try Data(contentsOf: env.paths.databaseURL), bytes, "pack file must be untouched")
+    }
+
     /// The opposite case: a bumped fpVersion means the installed pack would silently mismatch,
     /// so it genuinely has to be replaced before scanning again.
     @MainActor

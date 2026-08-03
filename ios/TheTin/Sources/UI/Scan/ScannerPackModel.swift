@@ -328,6 +328,22 @@ final class ScannerPackModel {
     func retry() {
         phase = .checking
     }
+
+    #if DEBUG
+    /// DEBUG-only: rewinds the *recorded* installed version by one, leaving the ~568 MB pack file
+    /// untouched. `refresh()` then computes `published > installed` and offers the update, so the
+    /// whole update path can be rehearsed on device against a real published pack — without
+    /// republishing the old one to the NAS. Not being able to do that is why v3→v4 shipped
+    /// unnoticed. Never compiled into Release.
+    ///
+    /// Deliberately does NOT call `refresh()`: the reported symptom is that a running app never
+    /// re-checks, and refreshing here would paper over exactly the behaviour under test.
+    func debugRewindInstalledVersion() {
+        guard var state = updater.installedState() else { return }
+        state.version -= 1
+        try? updater.saveState(state)
+    }
+    #endif
 }
 
 extension FingerprintDownloadProgress {

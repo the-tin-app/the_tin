@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var confirmingClear = false
     #if DEBUG
     @State private var confirmingCatalogWipe = false
+    @State private var confirmingPackRewind = false
     #endif
     @State private var confirmingPackDelete = false
     @State private var confirmingPackCellular = false
@@ -93,6 +94,13 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Your collection, wishlist, set goals and scanner pack aren't affected.")
+            }
+            .confirmationDialog("Pretend the installed scanner pack is one version older?",
+                                isPresented: $confirmingPackRewind, titleVisibility: .visible) {
+                Button("Rewind recorded version") { pack.debugRewindInstalledVersion() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The pack file isn't touched, so nothing re-downloads until you tap Update — which then pulls the full pack. Relaunch to see it.")
             }
             #endif
             .confirmationDialog(manualRestoreTitle, isPresented: $confirmingRestore,
@@ -606,10 +614,12 @@ struct SettingsView: View {
                 confirmingCatalogWipe = true
             }
             .disabled(app.catalogDownloadProgress != nil)
+            Button("Rewind recorded pack version") { confirmingPackRewind = true }
+                .disabled(pack.installedVersion == nil || pack.isDownloading)
         } header: {
             Text("Debug")
         } footer: {
-            Text("Forces the self-hosted origin to fail so the backup origin can be tested. \"Delete catalog & re-download\" wipes the installed catalog and pulls a fresh one, honoring the outage switch above. Debug builds only.")
+            Text("Forces the self-hosted origin to fail so the backup origin can be tested. \"Delete catalog & re-download\" wipes the installed catalog and pulls a fresh one, honoring the outage switch above. \"Rewind recorded pack version\" drops the recorded scanner-pack version by one without touching the pack file, so a pack update can be rehearsed against the live server — relaunch to pick it up. Debug builds only.")
         }
     }
     #endif
