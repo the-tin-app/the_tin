@@ -263,8 +263,11 @@ async function main() {
     // Every decision goes to a sidecar next to the artifact. If a card is wrong or missing
     // tomorrow, this answers "which group claimed that set, on how much evidence, and what
     // was rejected" WITHOUT re-running a ~217-request sweep or guessing from the log.
-    mkdirSync(outDir, { recursive: true });
-    const sidecar = join(outDir, `tcgcsv-fill-v${version}.json`);
+    // NOT outDir: the nightly runs with --rm and does not mount .seed-output, so a sidecar
+    // written there is destroyed the moment the run ends — which is exactly when it is wanted.
+    // .cache IS a persistent docker volume (catalog-pipeline-cache), so it survives.
+    mkdirSync(cacheDir, { recursive: true });
+    const sidecar = join(cacheDir, `tcgcsv-fill-v${version}.json`);
     writeFileSync(sidecar, JSON.stringify({
       generatedAt: new Date().toISOString(),
       version,
