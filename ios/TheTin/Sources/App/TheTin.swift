@@ -37,8 +37,6 @@ struct TheTin: App {
         // BGTaskScheduler requires all launch handlers registered before the app finishes
         // launching; skip under XCTest (no Info.plist-gated task ids in the test host run).
         if !isTesting { BackgroundRefresh.register(model: model) }
-        NotificationRouter.shared.install()
-        NotificationRouter.shared.onWishlistTap = { model.openWishlist() }
         // Siri / Shortcuts / the Action button. Installed here rather than in a view so a cold
         // launch straight from an intent has somewhere to deliver before any body runs.
         MainActor.assumeIsolated { IntentRouter.shared.install { model.openIntentRoute($0) } }

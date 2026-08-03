@@ -1,8 +1,10 @@
 import Foundation
 
-/// Priority of a wishlist card. Raw values are ordered so ascending sort = High first.
+/// Priority of a wishlist card. Raw values are ordered so ascending sort = most wanted first.
+/// `grail` is -1 rather than renumbering: 0/1/2 must keep meaning what every stored wishlist
+/// and every written backup already says they mean.
 enum WantPriority: Int, Codable, CaseIterable, Identifiable {
-    case high = 0, normal = 1, low = 2
+    case grail = -1, high = 0, normal = 1, low = 2
     var id: Int { rawValue }
 
     /// An unrecognised priority decodes to `.normal` rather than throwing.
@@ -29,11 +31,33 @@ enum WantPriority: Int, Codable, CaseIterable, Identifiable {
     }
     var label: String {
         switch self {
+        case .grail: return "Grail"
         case .high: return "High"
         case .normal: return "Normal"
         case .low: return "Low"
         }
     }
+}
+
+/// "I am buying this card." Deliberately separate from `WantPriority`: a grail you can't afford
+/// yet isn't hunting, and a $40 card you're buying this week is hunting without being a grail.
+/// Collapsing them forces a lie in one direction.
+///
+/// The budget is `WantEntry.targetUsd` — there is no second price field, because "the price
+/// I'd pay for this" is what that field already means.
+///
+/// **No deadline (2026-08-01).** Hunts used to carry a 7/14/30-day `until` and expire on their
+/// own. A card worth chasing can take six months, and a hunt shouldn't "just expire" — it ends
+/// when you delete it. That trades a self-cleaning list for one you maintain, which is the
+/// accepted cost; the old `isActive`/`daysLeft` arithmetic existed only to give a notification
+/// something urgent to say, and there are no notifications any more.
+///
+/// A `Hunt` written by a build that stored `until` still decodes — Codable ignores the unknown
+/// key. `WantEntryTests.testAHuntWrittenWithADeadlineStillDecodes` is the guard, and it matters
+/// because a decode failure here empties the entire wishlist.
+struct Hunt: Codable, Hashable {
+    /// Worst condition you'd accept. "Anything but DMG" is `.hp`.
+    var minCondition: CardCondition
 }
 
 /// One wishlist entry's per-card data. Every field defaults, so a plain `WantEntry()` is the
@@ -43,4 +67,8 @@ struct WantEntry: Codable, Hashable {
     var targetUsd: Double? = nil
     var notes: String = ""
     var addedAt: Date = Date()
+    /// A real `Optional`, NOT a defaulted non-optional: a defaulted property still makes
+    /// synthesized `Decodable` demand the key, which would silently fail to decode every
+    /// wishlist written before this field existed.
+    var hunt: Hunt? = nil
 }
