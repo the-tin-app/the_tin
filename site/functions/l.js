@@ -103,6 +103,7 @@ export function renderListHTML({ payload, origin }) {
   .set{color:#aeb9d4;font-size:.85rem}
   .meta{margin-left:auto;color:#aeb9d4;font-size:.85rem;font-variant-numeric:tabular-nums}
   .pri.high{color:#ff8a80;font-weight:600}
+  .pri.grail{color:#ffd54f;font-weight:600}
   .pri.low{color:#8794b4}
   .cta{display:inline-block;background:#f4c542;color:#12213f;font-weight:600;
        text-decoration:none;padding:12px 20px;border-radius:10px}

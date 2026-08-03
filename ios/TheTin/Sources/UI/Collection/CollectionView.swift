@@ -789,6 +789,14 @@ struct CollectionView: View {
     /// divider. Set only from the first alert's destructive button.
     @State private var destroyingGroup: CardGroup?
     @State private var searchText = ""
+    /// The price date last seen on Watching, driving that row's dot.
+    ///
+    /// ⚠️ `@AppStorage`, NOT `AppConfig.watchingLastSeenAsOf`. The value was always written
+    /// correctly; a plain `UserDefaults` read is invisible to SwiftUI, so this list never
+    /// re-rendered to notice and the dot survived visiting the screen. It only appeared to work
+    /// when something *else* invalidated the view — adding a hunt mutates the `@Observable`
+    /// wants model, which is exactly the case it was first tested with (2026-08-01).
+    @AppStorage("watchingLastSeenAsOf") private var watchingLastSeenAsOf: String?
     @State private var editingEntry: CollectionEntry?
     @State private var editingSealed: SealedEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -814,7 +822,10 @@ struct CollectionView: View {
                     // which is what this branch is about — but it isn't empty, and hiding what
                     // you do own behind a "your tin is empty" screen would read as data loss.
                     sealedSection
-                    if let wants, !wants.wanted.isEmpty { wishlistLink(wants).tinRow() }
+                    if let wants, !wants.wanted.isEmpty {
+                        wishlistLink(wants).tinRow()
+                        watchingLink(wants).tinRow()
+                    }
                 } else {
                     header.tinRow()
                     everythingRow.tinRow()
@@ -829,6 +840,10 @@ struct CollectionView: View {
                     newDividerRow.tinRow()
                     sealedSection
                     if let wants { wishlistLink(wants).tinRow() }
+                    // Gated on a non-empty wishlist even here, unlike Wanted: with nothing
+                    // hearted the screen has nothing to say, and a row that opens an empty
+                    // screen is the same broken promise the trade row avoids below.
+                    if let wants, !wants.wanted.isEmpty { watchingLink(wants).tinRow() }
                     // Not on the empty branch: with no entries there is nothing to trade, so the
                     // row would only be a promise the tin can't keep — same rule as the wishlist.
                     tradeLink.tinRow()
@@ -977,6 +992,11 @@ struct CollectionView: View {
         .navigationDestination(for: WantedRoute.self) { _ in
             if let wants {
                 WantedView(store: store, wants: wants, collection: model, goals: goals)
+            }
+        }
+        .navigationDestination(for: WatchingRoute.self) { _ in
+            if let wants {
+                WatchingView(store: store, wants: wants)
             }
         }
         .navigationDestination(for: TradeRoute.self) { _ in
@@ -1300,6 +1320,21 @@ struct CollectionView: View {
                    count: wants.wanted.count + (goals?.setIds.count ?? 0), route: WantedRoute())
     }
 
+    /// What the cards you care about have been doing. Sits under Wanted because it is about the
+    /// same cards — the wishlist is the list, this is the news.
+    /// ⚠️ **No count, deliberately.** This row is not a container of N things — the screen behind
+    /// it shows hunts, wishlist drops and grail trends, three different subsets that change on
+    /// their own. Any single number is either wrong or just repeats Wanted's. It shipped briefly
+    /// with `wants.wanted.count`, which read as 72 beside Wanted's 74 (Wanted also counts set
+    /// goals) and meant nothing to anyone. The dot carries "there's something new here", which
+    /// is the only thing this row needs to say.
+    private func watchingLink(_ wants: WantsModel) -> some View {
+        pinnedLink(title: "Watching", systemImage: "binoculars", tint: .teal,
+                   count: nil, route: WatchingRoute(),
+                   dot: WatchingModel.hasUnseen(asOf: model.priceAsOf,
+                                                lastSeen: watchingLastSeenAsOf))
+    }
+
     /// The other half of the wishlist: what you'll give up. Sits beside it because "hunting" and
     /// "trading" are the same conversation at a meetup.
     private var tradeLink: some View {
@@ -1308,13 +1343,21 @@ struct CollectionView: View {
     }
 
     /// The pinned rows under the dividers — same shape, so they read as a pair.
+    /// `count` is optional: a row that isn't a container of countable things omits it rather
+    /// than showing a number that means nothing (see `watchingLink`).
     private func pinnedLink<V: Hashable>(title: String, systemImage: String, tint: Color,
-                                         count: Int, route: V) -> some View {
+                                         count: Int?, route: V, dot: Bool = false) -> some View {
         HStack {
             Image(systemName: systemImage).foregroundStyle(tint)
             Text(title)
+            if dot {
+                Circle().fill(.tint).frame(width: 7, height: 7)
+                    .accessibilityLabel("New since you last looked")
+            }
             Spacer()
-            Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
+            if let count {
+                Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
+            }
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)

@@ -11,11 +11,21 @@ struct WantedView: View {
     var collection: CollectionModel? = nil
     var goals: SetGoalsModel? = nil
 
-    @AppStorage("wantedScope") private var scopeRaw: String = Scope.sets.rawValue
+    @AppStorage(Scope.storageKey) private var scopeRaw: String = Scope.sets.rawValue
 
     enum Scope: String, CaseIterable {
-        case sets, singles
-        var label: String { self == .sets ? "Sets" : "Singles" }
+        case sets, singles, hunting
+
+        /// One literal for the persisted segment choice. A second copy could desynchronise
+        /// silently with every test still green — so there is only ever one.
+        static let storageKey = "wantedScope"
+        var label: String {
+            switch self {
+            case .sets: return "Sets"
+            case .singles: return "Singles"
+            case .hunting: return "Hunting"
+            }
+        }
     }
 
     private var scope: Scope { Scope(rawValue: scopeRaw) ?? .sets }
@@ -27,6 +37,8 @@ struct WantedView: View {
                 SetGoalsListView(store: store, goals: goals, collection: collection, wants: wants)
             case .singles:
                 WantedCardsView(store: store, wants: wants, collection: collection, goals: goals)
+            case .hunting:
+                HuntingListView(store: store, wants: wants)
             }
         }
         .safeAreaInset(edge: .top) {

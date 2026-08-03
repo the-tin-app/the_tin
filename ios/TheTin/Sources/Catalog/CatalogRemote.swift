@@ -120,15 +120,17 @@ enum AppConfig {
     }
     private static let gradingFeeKey = "gradingFeeUsd"
 
-    /// Wishlist price alerts master switch (Settings toggle). Default OFF per spec — the
-    /// snapshot is still maintained while off so re-enabling works instantly.
     /// Set once the user dismisses the Discover invitation to set up the scanner. The offer stays
     /// available from Settings and the Scan tab — dismissing silences the nudge, not the feature.
     static let scannerPromptDismissedKey = "scannerPromptDismissed"
 
-    static var priceAlertsEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "priceAlertsEnabled") }
-        set { UserDefaults.standard.set(newValue, forKey: "priceAlertsEnabled") }
+    /// The catalog price date (`yyyy-MM-dd`) the user last saw on the Watching screen. Drives
+    /// the Tin row's dot via `WatchingModel.hasUnseen`; written when the screen loads, so
+    /// visiting is what clears it. A date rather than a count because, with no event log, a
+    /// count would be permanent state that never cleared.
+    static var watchingLastSeenAsOf: String? {
+        get { UserDefaults.standard.string(forKey: "watchingLastSeenAsOf") }
+        set { UserDefaults.standard.set(newValue, forKey: "watchingLastSeenAsOf") }
     }
 
     /// Scanner mode: false = stage each lock as a draft for the tin (default), true = just show
@@ -149,15 +151,6 @@ enum AppConfig {
     static var scanCondition: CardCondition {
         get { CardCondition(rawValue: UserDefaults.standard.string(forKey: "scanCondition") ?? "") ?? .nm }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "scanCondition") }
-    }
-
-    /// Alert sensitivity in whole percent — 5, 10, or 20; anything else reads as the default 10.
-    static var priceAlertSensitivityPct: Int {
-        get {
-            let raw = UserDefaults.standard.integer(forKey: "priceAlertSensitivityPct")
-            return [5, 10, 20].contains(raw) ? raw : 10
-        }
-        set { UserDefaults.standard.set(newValue, forKey: "priceAlertSensitivityPct") }
     }
 
     #if DEBUG

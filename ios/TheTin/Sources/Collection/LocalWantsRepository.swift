@@ -27,8 +27,8 @@ final class LocalWantsRepository: WantsRepository {
     /// default `WantEntry`. Missing/garbage file → empty. The two formats never collide: an
     /// array can't decode as a dictionary and vice-versa.
     ///
-    /// Shared on-disk wishlist decoder — internal (not `private`) so `PriceAlertsService` can
-    /// reuse it for background runs without a @MainActor repository instance.
+    /// `nonisolated static` so a wishlist can be read off disk without a @MainActor repository
+    /// instance — which `init` itself relies on.
     nonisolated static func load(from url: URL) -> [String: WantEntry] {
         guard let data = try? Data(contentsOf: url) else { return [:] }
         if let dict = try? JSONDecoder().decode([String: WantEntry].self, from: data) { return dict }

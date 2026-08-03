@@ -66,12 +66,11 @@ private struct MainTabView: View {
     // an empty tin (first run) opens on Discover so there's something to see.
     @State private var selection: Tab =
         UserDefaults.standard.bool(forKey: "hasCards") ? .tin : .discover
-    /// Path for the Tin tab's stack, so a notification tap can push WantedRoute programmatically.
+    /// Path for the Tin tab's stack, so Siri and the Action button can push programmatically.
     @State private var tinPath = NavigationPath()
     /// Path for the Discover stack, so the empty tin's "Browse sets" CTA lands ON the catalog
     /// rather than on Discover's home with the catalog somewhere below the fold.
     @State private var discoverPath = NavigationPath()
-    @State private var consumedRouteToken = 0
     @State private var consumedCardToken = 0
     @State private var consumedTradeToken = 0
     @State private var consumedIntentToken = 0
@@ -165,13 +164,11 @@ private struct MainTabView: View {
         }
         .task {
             if searchModel == nil { searchModel = SearchModel(store: store) }
-            consumeWishlistRoute() // cold launch from a tap: token bumped before we appeared
             consumeCardRoute()
             consumeIntentRoute()   // …same for a cold launch from Siri or the Action button
             await pack.refresh()   // learn the pack's state once, for Settings and the prompt
         }
         .onChange(of: model.importRouteToken) { consumeImportRoute() }
-        .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
         .onChange(of: model.tradeRouteToken) { consumeTradeRoute() }
         // A shared WANT link belongs in the browser. `UIApplication.open` called from the app that
@@ -200,13 +197,6 @@ private struct MainTabView: View {
         guard model.importRouteToken > consumedImportToken, model.pendingImportURL != nil else { return }
         consumedImportToken = model.importRouteToken
         showingSettings = true
-    }
-
-    private func consumeWishlistRoute() {
-        guard model.wishlistRouteToken > consumedRouteToken else { return }
-        consumedRouteToken = model.wishlistRouteToken
-        selection = .tin
-        tinPath.append(WantedRoute())
     }
 
     private func consumeIntentRoute() {

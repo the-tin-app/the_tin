@@ -36,7 +36,6 @@ struct SettingsView: View {
         tierSection
         scannerPackSection
         activitySection
-        alertsSection
         supportSection
         dataSection
         printoutSection
@@ -370,36 +369,6 @@ struct SettingsView: View {
                                              ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
                     }
                 }
-            }
-        }
-    }
-
-    // MARK: Wishlist price alerts
-
-    private var alertsSection: some View {
-        Section {
-            Toggle("Wishlist price alerts", isOn: Binding(
-                get: { model.alertsEnabled },
-                set: { on in Task { await model.setAlertsEnabled(on) } }))
-            if model.alertsEnabled {
-                Picker("Sensitivity", selection: Binding(
-                    get: { model.alertSensitivityPct },
-                    set: { model.setAlertSensitivity($0) })) {
-                    Text("5%").tag(5)
-                    Text("10%").tag(10)
-                    Text("20%").tag(20)
-                }
-            }
-        } header: {
-            Text("Alerts")
-        } footer: {
-            if model.alertsDenied {
-                Text("Notifications are off for The Tin. Enable them in iOS Settings to get price alerts.")
-            } else {
-                // Target hits are named explicitly: they don't obey the sensitivity picker above
-                // it, and a target you set months ago is the one alert here you're actually
-                // waiting for.
-                Text("Get notified when a wishlist card drops to the target price you set, or when its price moves by the amount above. Alerts arrive when new prices download — not real-time.")
             }
         }
     }
