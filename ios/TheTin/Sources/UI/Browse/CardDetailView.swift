@@ -156,10 +156,26 @@ final class CardDetailModel {
 }
 
 struct CardDetailView: View {
-    @Bindable var model: CardDetailModel
+    /// ⚠️ `@State`, NOT a passed-in `@Bindable`. Every call site builds this model inside a
+    /// `navigationDestination` closure, and that closure re-runs whenever the PARENT screen's body
+    /// re-evaluates — which hearting a card does, because the parent reads the same `WantsModel`.
+    /// A stored property would take the fresh, empty model; `.task` (no id) does not re-fire, so
+    /// `load()` never runs again and the screen falls to "No sales data for this card" until you
+    /// back out and re-enter. `@State` keeps the first model for the life of this pushed screen.
+    /// (Invisible before the read moved out of `init` — a rebuilt model used to arrive populated.)
+    @State private var model: CardDetailModel
     let store: CatalogStore
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+
+    init(model: CardDetailModel, store: CatalogStore,
+         collection: CollectionModel? = nil, wants: WantsModel? = nil) {
+        _model = State(wrappedValue: model)
+        self.store = store
+        self.collection = collection
+        self.wants = wants
+    }
+
     @State private var showingAddSheet = false
     @State private var sharing: SharePayload?
     @State private var editingEntry: CollectionEntry?
