@@ -89,10 +89,12 @@ final class ScannerPackModelTests: XCTestCase {
         XCTAssertEqual(pack.installedVersion, 1)
     }
 
-    /// An update must not take the scanner away. The Scan tab decides between the live viewfinder
-    /// and the first-install download wall on `isScannerUsable`, so if this goes false mid-update
-    /// a user with a perfectly good pack loses camera scanning for the whole ~568 MB transfer —
-    /// which is precisely what `updateAvailable` exists to avoid.
+    /// An update must not tear the installed pack down. The Scan tab does show the progress view
+    /// for the duration (a deliberate call — keeping the viewfinder alive meant crossing SwiftUI
+    /// `switch` branches and restarting the capture session), but the pack itself has to stay
+    /// intact: `isScannerUsable` going false mid-update means the update wall is being shown
+    /// because the scanner is *gone*, not because it is busy, and a failed transfer would then
+    /// leave a user with no scanner at all rather than the one they started with.
     @MainActor
     func testScannerStaysUsableThroughoutAnUpdate() async throws {
         // Parts format, because that is the only format the NAS serves.

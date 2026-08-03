@@ -158,10 +158,10 @@ private struct MainTabView: View {
                                  pack: pack, network: model.network, staging: staging)
                     .fundingBanner(model: model, store: store, pack: pack)
             }
-            // Shown here only when the Scan tab is NOT already showing the full-screen download
-            // wall — i.e. an update over a working pack, where the viewfinder stays live and the
-            // toast is the only progress on screen. A first install would double up.
-            .appToasts(model: model, pack: pack, showsScannerToast: pack.isScannerUsable)
+            // The Scan tab shows the full-screen progress view for the whole transfer, so a
+            // toast here would say the same thing twice. It appears on every other tab — the
+            // point of hoisting the download is that you can walk away from it.
+            .appToasts(model: model, pack: pack, showsScannerToast: false)
             .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
             .tag(Tab.scan)
         }
@@ -402,7 +402,8 @@ private struct UpdateToast: View {
                         .monospacedDigit()
                 }
             }
-            .font(.caption.weight(.semibold))
+            // Monospaced digits so the byte count doesn't shuffle sideways as it counts up.
+            .font(.caption.weight(.semibold).monospacedDigit())
             ProgressView(value: progress)
                 .animation(reduceMotion ? nil : .linear(duration: 0.2), value: progress)
                 .opacity(isIndeterminate ? 0.35 : 1)

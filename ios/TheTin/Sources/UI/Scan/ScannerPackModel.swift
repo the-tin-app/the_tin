@@ -57,6 +57,13 @@ final class ScannerPackModel {
     /// Which installed version `matcher`/`index` were built against, so a re-check can skip the
     /// rebuild. nil means "nothing usable built".
     private var builtVersion: Int?
+    /// Rate limiter for the progress figure — see `progressSink()`.
+    private var lastProgressPaint = Date.distantPast
+    /// Every byte count as reported, un-throttled. The *displayed* figure is rate-limited, but
+    /// where the transfer actually got to is state, not decoration: parking or failing a
+    /// download has to record the real position, or a drop just under the repaint threshold
+    /// reads as "nothing downloaded" and restarts from zero.
+    private var latestProgress: FingerprintDownloadProgress?
     private var downloadTask: Task<Void, Never>?
     private var networkWatch: Task<Void, Never>?
     /// Set when the user explicitly accepted a metered download ("Download now" / "Resume
@@ -193,6 +200,8 @@ final class ScannerPackModel {
         // Assign, don't OR in: consent belongs to the transfer the user approved. Accumulating it
         // meant one "Download now" over cellular silenced the guard for every later download.
         allowsExpensive = allowingExpensive
+        latestProgress = progress
+        lastProgressPaint = .distantPast   // the first byte count of a transfer always paints
         phase = .downloading(progress ?? FingerprintDownloadProgress(bytesDone: 0,
                                                                      totalBytes: publishedBytes ?? 0))
         downloadTask = Task { [weak self] in
@@ -211,7 +220,7 @@ final class ScannerPackModel {
         stopNetworkWatch()
         downloadTask?.cancel()
         downloadTask = nil
-        phase = .paused(progress ?? FingerprintDownloadProgress(bytesDone: 0, totalBytes: publishedBytes ?? 0),
+        phase = .paused(trueProgress ?? FingerprintDownloadProgress(bytesDone: 0, totalBytes: publishedBytes ?? 0),
                         reason)
     }
 
@@ -266,7 +275,7 @@ final class ScannerPackModel {
             phase = .unavailable("Scanner needs an app update.")
         } catch {
             // Bytes already verified stay on disk, so this is a resume point, not a restart.
-            if let p = progress, p.bytesDone > 0 {
+            if let p = trueProgress, p.bytesDone > 0 {
                 phase = .paused(p, .user)
             } else {
                 phase = .unavailable("Download failed. Check your connection and try again.")
@@ -276,13 +285,35 @@ final class ScannerPackModel {
 
     /// Monotonic sink — byte counts can hop to the main actor out of order, and a resumed
     /// transfer must never appear to go backwards.
+    ///
+    /// Also rate-limited. Progress is reported per network chunk now rather than per 50 MiB
+    /// part, which fires many times a second: the figure churned far faster than it could be
+    /// read. Repaint on a whole megabyte of movement and at most four times a second — and
+    /// always on the final byte, so the bar never stops just short of full.
     private func progressSink() -> @MainActor @Sendable (FingerprintDownloadProgress) -> Void {
         { [weak self] update in
             guard let self, self.isDownloading else { return }
-            if let current = self.progress, update.bytesDone < current.bytesDone { return }
-            self.phase = .downloading(update)
+            guard let current = self.progress else { self.paint(update); return }
+            if update.bytesDone < current.bytesDone { return }
+            self.latestProgress = update
+            if update.totalBytes > 0, update.bytesDone >= update.totalBytes {
+                self.paint(update); return
+            }
+            guard update.bytesDone - current.bytesDone >= 1_000_000,
+                  Date().timeIntervalSince(self.lastProgressPaint) >= 0.25 else { return }
+            self.paint(update)
         }
     }
+
+    private func paint(_ update: FingerprintDownloadProgress) {
+        lastProgressPaint = Date()
+        latestProgress = update
+        phase = .downloading(update)
+    }
+
+    /// Where the transfer really got to — the un-throttled count when there is one, else
+    /// whatever the phase last showed.
+    private var trueProgress: FingerprintDownloadProgress? { latestProgress ?? progress }
 
     // MARK: Deletion
 
@@ -369,9 +400,18 @@ final class ScannerPackModel {
 
 extension FingerprintDownloadProgress {
     /// "180 MB of 520 MB" — the honest phrasing for a transfer someone may leave and come back to.
+    ///
+    /// Whole megabytes on both sides, deliberately. `ByteCountFormatter` switches units and
+    /// fraction digits as the number grows ("948 KB" → "1.2 MB" → "12.44 MB"), so the string
+    /// changed *width* several times a second and the digits slid sideways under the eye — the
+    /// count was unreadable on device even though every value it showed was correct.
     var byteSummary: String {
-        let done = ByteCountFormatter.string(fromByteCount: Int64(bytesDone), countStyle: .file)
-        let total = ByteCountFormatter.string(fromByteCount: Int64(totalBytes), countStyle: .file)
-        return "\(done) of \(total)"
+        "\(Self.wholeMB(bytesDone)) MB of \(Self.wholeMB(totalBytes)) MB"
+    }
+
+    /// Matches `ByteCountFormatter`'s `.file` style, which is decimal (1 MB = 10^6 B) on Apple
+    /// platforms — so this agrees with the "568.6 MB" the setup screens quote.
+    private static func wholeMB(_ bytes: Int) -> Int {
+        max(0, Int((Double(bytes) / 1_000_000).rounded()))
     }
 }
