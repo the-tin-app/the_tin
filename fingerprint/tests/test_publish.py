@@ -1,6 +1,7 @@
 import hashlib
 import gzip
 import os
+import sys
 import pytest
 from fpcore import publish, constants as c
 
@@ -125,3 +126,59 @@ def test_descriptor_payload_does_not_compress(tmp_path):
     if not blobs:
         pytest.skip("fixture carries no descriptor blobs")
     assert len(gzip.compress(blobs, 9)) >= len(blobs) * 0.98
+
+
+# scripts/ isn't a package and isn't on sys.path — other tests here shell out instead, but the
+# upload ORDER is a pure function and worth testing directly rather than through a subprocess.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+import publish_fingerprints as pf
+
+
+def _fake_publish_tree(root, version, legacy=True):
+    """The on-disk layout publish_fingerprints.py produces, without building a real pack."""
+    parts_dir = os.path.join(root, "fingerprint", "parts")
+    os.makedirs(parts_dir, exist_ok=True)
+    for i in range(3):
+        open(os.path.join(parts_dir, f"fingerprints-v{version}.part{i:03d}"), "wb").write(b"x")
+    open(os.path.join(parts_dir, "manifest.json"), "w").write("{}")
+    if legacy:
+        fp_dir = os.path.join(root, "fingerprint")
+        open(os.path.join(fp_dir, f"fingerprints-v{version}.sqlite.gz"), "wb").write(b"x")
+        open(os.path.join(fp_dir, "manifest.json"), "w").write("{}")
+
+
+def test_r2_upload_order_puts_every_manifest_after_its_payload(tmp_path):
+    """The one ordering rule the parts format has: a manifest naming objects R2 isn't serving
+    yet strands every client that reads it. Uploads are sequential, so 'last' is literal."""
+    root = str(tmp_path)
+    _fake_publish_tree(root, version=7)
+
+    ordered = [os.path.relpath(p, root) for p in pf._publish_order(root, 7, wrote_legacy=True)]
+
+    parts_manifest = ordered.index(os.path.join("fingerprint", "parts", "manifest.json"))
+    legacy_manifest = ordered.index(os.path.join("fingerprint", "manifest.json"))
+    last_part = max(i for i, p in enumerate(ordered) if ".part" in p)
+    gz = ordered.index(os.path.join("fingerprint", "fingerprints-v7.sqlite.gz"))
+
+    assert parts_manifest > last_part, "parts manifest must follow every part"
+    assert legacy_manifest > gz, "legacy manifest must follow its .sqlite.gz"
+    assert len(ordered) == 6
+
+
+def test_r2_upload_order_skips_the_legacy_pair_when_it_was_not_written(tmp_path):
+    root = str(tmp_path)
+    _fake_publish_tree(root, version=7, legacy=False)
+
+    ordered = [os.path.relpath(p, root) for p in pf._publish_order(root, 7, wrote_legacy=False)]
+
+    assert ordered[-1] == os.path.join("fingerprint", "parts", "manifest.json")
+    assert not any("sqlite.gz" in p for p in ordered)
+
+
+def test_r2_upload_refuses_a_version_with_no_parts(tmp_path):
+    """Uploading nothing and then flipping the manifest is the exact strand-everyone case."""
+    root = str(tmp_path)
+    _fake_publish_tree(root, version=7)
+
+    with pytest.raises(SystemExit):
+        pf._publish_order(root, 8, wrote_legacy=False)   # v8 was never split

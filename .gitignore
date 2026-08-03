@@ -61,3 +61,6 @@ CLAUDE.md
 
 # wrangler local cache (holds the Cloudflare account id — public repo)
 site/.wrangler/
+
+# wrangler local state (created by the R2 push in publish_fingerprints.py)
+.wrangler/
