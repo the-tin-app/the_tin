@@ -57,3 +57,6 @@ CLAUDE.md
 .impeccable/live/deferred-svelte-component-accepts.json
 .impeccable/live/*.png
 # impeccable-ignore-end
+# wrangler local state — holds the Cloudflare account id (public repo). Unanchored, so it
+# catches site/ and the R2 push in fingerprint/scripts/publish_fingerprints.py alike.
+.wrangler/

@@ -21,9 +21,12 @@ in every pack built against it, and (Plan 3) the bundled device codebook must ma
 polite 120ms throttle). Re-running skips cards already at the current fp_version, so
 it is safe to interrupt and resume. Do NOT commit `fingerprints.sqlite` or `.cache/`.
 
-## 3. Publish (both distribution formats)
+## 3. Publish (both distribution formats) — and push to R2
     python scripts/publish_fingerprints.py --db .fp-output/fingerprints.sqlite \
         --version <N> --out .fp-output
+
+Writes the objects locally **and pushes them to the R2 backup origin** (see §4 for why that is
+automatic and the NAS is not). Add `--no-r2` to write only.
 
 Produces **two** formats under `.fp-output/`, because they roll out on different clocks:
 
@@ -46,18 +49,36 @@ sha256 as the pre-install gate.
 Keep publishing both until TestFlight shows no build in the wild still reads the legacy pair,
 then add `--skip-legacy` and delete the old objects from both hosts.
 
-## 4. Upload — self-hosted NAS only
+## 4. Upload — two hosts, and only one of them is automatic
 
-**The pack is NOT mirrored to Firebase Storage** (decision 2026-07-24). The catalog's casual
-tier is mirrored because it's ~22 MB; the pack is ~500 MB, and backing up an artifact with
-another one 20× its size costs real money — for a fallback that never actually existed (the
-bucket has no `fingerprint/` prefix at all). The iOS client has one source and reports a plain
-retryable failure instead of a second timeout on the way to the same message. Don't re-add a
-Firebase path without redoing that cost trade.
+The pack has **two** origins, and the iOS client fails over between them
+(`ScannerPackModel.liveRemote()` → `FailoverFingerprintRemote`):
 
-Copy into the served fingerprint dir, **parts before manifests** — a manifest listing parts
-that aren't served yet strands every client that reads it. `catalog-server` serves any file
-under its fingerprint dir, so no server change is needed:
+| Origin | Role | Who uploads |
+|---|---|---|
+| NAS, `apithetin.reyes.ai` | **primary** — what every healthy client reads | you, by rsync, below |
+| R2 `tin-artifacts` via `backupthetin.reyes.ai` | fallback when the NAS is unreachable | **step 3 already did it** |
+
+**Still NOT mirrored to Firebase Storage** (decision 2026-07-24) — the catalog's casual tier is
+mirrored because it's ~22 MB, and backing up a ~500 MB artifact there costs real money. What
+changed is the backend: R2 has **zero egress fees**, which is the exact fact that killed the
+original cost trade. The Firebase reasoning stands; don't re-add a Firebase path.
+
+⚠️ **R2 drifting behind is silent, which is why it is no longer a manual step.** On 2026-08-03
+R2 served v3 for a day after v4 went live on the NAS. Nothing surfaces that: the NAS looks
+correct, the app works, and only a NAS outage during a first install would have revealed it —
+by handing that user the older pack with no way to tell. `publish_fingerprints.py` now pushes
+to R2 by default (parts first, manifest last, then reads the manifest back to confirm the
+flip). `--no-r2` opts out, for re-splitting an already-served pack in place or on a machine
+with no `wrangler` auth.
+
+Check what R2 currently serves — there is no `wrangler r2 object list`, so read the manifest:
+
+    npx wrangler r2 object get tin-artifacts/fingerprint/parts/manifest.json --remote --pipe | head -c 200
+
+Now the NAS. Copy into the served fingerprint dir, **parts before manifests** — a manifest
+listing parts that aren't served yet strands every client that reads it. `catalog-server` serves
+any file under its fingerprint dir, so no server change is needed:
 
     NAS=/mnt/media/private/app-config/catalog-server/fingerprint   # host: tomas@192.168.50.20
     rsync -av .fp-output/fingerprint/parts/fingerprints-v<N>.part* tomas@192.168.50.20:$NAS/parts/
@@ -72,7 +93,8 @@ version (a version bump would force every installed client to re-download ~500 M
 bytes):
 
     gunzip -c $NAS/fingerprints-v<N>.sqlite.gz > /tmp/pack.sqlite
-    python3 scripts/publish_fingerprints.py --db /tmp/pack.sqlite --version <N> --skip-legacy --out /tmp/out
+    python3 scripts/publish_fingerprints.py --db /tmp/pack.sqlite --version <N> \
+        --skip-legacy --no-r2 --out /tmp/out          # --no-r2: same version, nothing to re-push
     cat /tmp/out/fingerprint/parts/fingerprints-v<N>.part0* | sha256sum   # must equal manifest sha256
 
 The iOS `FingerprintUpdater` fetches the parts manifest, downloads missing parts, verifies each
