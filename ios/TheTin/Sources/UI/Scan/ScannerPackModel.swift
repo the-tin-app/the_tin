@@ -57,6 +57,8 @@ final class ScannerPackModel {
     /// Which installed version `matcher`/`index` were built against, so a re-check can skip the
     /// rebuild. nil means "nothing usable built".
     private var builtVersion: Int?
+    /// In-flight dependency build, shared by concurrent callers — see `buildScanDependencies()`.
+    private var buildTask: Task<(matcher: Matcher, index: CandidateIndex)?, Never>?
     /// Rate limiter for the progress figure — see `progressSink()`.
     private var lastProgressPaint = Date.distantPast
     /// Every byte count as reported, un-throttled. The *displayed* figure is rate-limited, but
@@ -170,7 +172,7 @@ final class ScannerPackModel {
             }
             updateAvailable = gates.version > installed.version
         }
-        buildScanDependencies()
+        await buildScanDependencies()
         phase = (matcher != nil && index != nil) ? .ready : .unavailable("Scanner data unavailable.")
     }
 
@@ -267,7 +269,7 @@ final class ScannerPackModel {
             allowsExpensive = false      // a fresh transfer must ask again
             installedVersion = updater.installedState()?.version
             installedBytes = updater.installedSizeBytes()
-            buildScanDependencies()
+            await buildScanDependencies()
             phase = (matcher != nil && index != nil) ? .ready : .unavailable("Scanner data unavailable.")
         } catch is CancellationError {
             // pause() already parked the phase; nothing to report.
@@ -350,22 +352,54 @@ final class ScannerPackModel {
     /// failure (corrupt/unopenable pack, bad codebook, catalog read failure) leaves both nil so
     /// the caller can degrade to `.unavailable` instead of crashing or stranding the UI in a
     /// permanently-loading `.ready` state.
-    private func buildScanDependencies() {
-        // Already built against this exact pack — reopening the sqlite and rebuilding the whole
-        // CandidateIndex is far too expensive to repeat on a freshness re-check, and `refresh()`
-        // now runs on every Settings visit and every Scan tab appearance rather than once per
-        // cold launch. On an A10 that rebuild is the difference between a tab switch and a stall.
+    /// Runs OFF the main actor, and that is a correctness fix rather than a tuning one.
+    /// `Matcher.init` reads every card id in the pack (23k rows) and `CandidateIndex.init` walks
+    /// every set and every card in the catalog to build four dictionaries. Both used to run on
+    /// the MainActor, so finishing a pack update froze the entire app for seconds at exactly the
+    /// moment the user is waiting to tap Scan — the tap queued behind the build and the tab
+    /// switch landed after it. Same detached-read shape as `CardDetailModel.load()`.
+    ///
+    /// Concurrent callers share one build: `refresh()` runs from the root task, the Scan tab and
+    /// the Settings sheet, and a cold launch into Scan fires two of them at once — without the
+    /// shared task that is two full catalog walks for one result.
+    private func buildScanDependencies() async {
+        // Already built against this exact pack. `refresh()` runs on every Settings visit and
+        // every Scan tab appearance now, not once per cold launch, so a re-check that finds
+        // nothing changed must not pay for any of the above.
         if matcher != nil, index != nil, builtVersion == installedVersion { return }
+
+        let task = buildTask ?? {
+            let (path, make, makeBook, catalog) =
+                (paths.databaseURL.path, makeStore, makeCodebook, catalogStore)
+            let t = Task.detached(priority: .userInitiated) {
+                Self.buildDependencies(path: path, makeStore: make,
+                                       makeCodebook: makeBook, catalog: catalog)
+            }
+            buildTask = t
+            return t
+        }()
+        let built = await task.value
+        buildTask = nil
+
+        matcher = built?.matcher
+        index = built?.index
+        builtVersion = built == nil ? nil : installedVersion
+    }
+
+    /// Never throws: any failure (corrupt/unopenable pack, bad codebook, catalog read failure)
+    /// returns nil so the caller degrades to `.unavailable` rather than crashing or stranding
+    /// the UI in a permanently-loading `.ready`.
+    nonisolated private static func buildDependencies(
+        path: String,
+        makeStore: (String) throws -> FingerprintStore,
+        makeCodebook: () throws -> Codebook,
+        catalog: CatalogStore
+    ) -> (matcher: Matcher, index: CandidateIndex)? {
         do {
-            let store = try makeStore(paths.databaseURL.path)
-            let codebook = try makeCodebook()
-            matcher = try Matcher(store: store, codebook: codebook)
-            index = try CandidateIndex(store: catalogStore)
-            builtVersion = installedVersion
+            let matcher = try Matcher(store: makeStore(path), codebook: makeCodebook())
+            return (matcher, try CandidateIndex(store: catalog))
         } catch {
-            matcher = nil
-            index = nil
-            builtVersion = nil
+            return nil
         }
     }
 
