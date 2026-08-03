@@ -14,6 +14,9 @@ enum Authorizers {
     /// The self-hosted NAS: an App Attest–minted Bearer session token.
     static func appAttest(_ session: SessionProvider) -> RequestAuthorizer {
         { req, refresh in
+            #if DEBUG
+            if AppConfig.simulatePrimaryOutage { throw CatalogError.httpStatus(503) }
+            #endif
             let token = refresh ? try await session.refreshedToken() : try await session.authToken()
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }

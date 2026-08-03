@@ -22,7 +22,13 @@ extension AppModel {
     func probeConnections() async -> ConnectionStatus {
         var s = ConnectionStatus()
 
-        if let base = AppConfig.selfHostBaseURL {
+        #if DEBUG
+        let simulatingOutage = AppConfig.simulatePrimaryOutage
+        #else
+        let simulatingOutage = false
+        #endif
+
+        if let base = AppConfig.selfHostBaseURL, !simulatingOutage {
             s.selfHostConfigured = true
 
             var req = URLRequest(url: base.appendingPathComponent("health"))
@@ -39,6 +45,11 @@ extension AppModel {
                 s.selfHostVersion = info.version
                 s.tierSizes = info.sizes
             }
+        } else if AppConfig.selfHostBaseURL != nil {
+            // Simulated outage: still report the box as configured (so the row shows, not "—"),
+            // but neither alive nor auth-OK — exactly what a real outage would look like, so the
+            // Settings screen doesn't contradict what every real request is about to do.
+            s.selfHostConfigured = true
         }
 
         if let m = try? await AppModel.backupRemote().fetchManifest() {

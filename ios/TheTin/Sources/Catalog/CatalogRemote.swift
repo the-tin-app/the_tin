@@ -153,5 +153,15 @@ enum AppConfig {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "scanCondition") }
     }
 
+    #if DEBUG
+    /// DEBUG-only: force every request to the PRIMARY origin to fail, so the R2 backup path can be
+    /// exercised without taking the real server down. Checked per REQUEST rather than at
+    /// construction, so flipping it takes effect immediately — needing a relaunch mid-test is what
+    /// makes an outage switch useless. Never compiled into Release.
+    static var simulatePrimaryOutage: Bool {
+        get { UserDefaults.standard.bool(forKey: "simulatePrimaryOutage") }
+        set { UserDefaults.standard.set(newValue, forKey: "simulatePrimaryOutage") }
+    }
+    #endif
 }
 
