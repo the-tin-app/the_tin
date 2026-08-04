@@ -40,7 +40,7 @@ struct DiscoverView: View {
         }
         .task(id: tasteSignalKey) {
             let m = model ?? DiscoverModel(store: store)
-            await m.load(ownedIds: (collection?.entries ?? []).map(\.cardId), wantedIds: wants?.wanted ?? [])
+            await m.load(entries: collection?.entries ?? [], wants: wants?.entries ?? [:])
             model = m
         }
     }

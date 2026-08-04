@@ -8,6 +8,16 @@ struct ForYouStream: CardStream {
     let profile: DiscoverAffinity.Profile
     let tasteIds: Set<String>
     var pageSize: Int = 12
+    /// The user's buying range. `nil` means not enough purchase or target history to have one, and
+    /// scoring proceeds without any price influence.
+    var band: PriceBand? = nil
+    /// Preview prices for the candidate pool, batched by the caller. Empty means "fetch them here".
+    var prices: [String: Double] = [:]
+    /// Cards whose art is an identical-art reprint of something on the wishlist.
+    var twinIds: Set<String> = []
+    /// `Profile.species` widened by `DiscoverAffinity.relatedSpecies` — families and co-occurring
+    /// partners, not just exact dex matches. Empty falls back to `profile.species`.
+    var relatedSpecies: [Int: Double] = [:]
 
     /// Buckets considered per dimension grow with the page index (progressive widening).
     static func bucketDepth(forPage index: Int) -> Int { 4 + index * 4 }
@@ -21,7 +31,9 @@ struct ForYouStream: CardStream {
 
         let depth = Self.bucketDepth(forPage: index)
         let topSets: [String] = profile.sets.sorted { $0.value > $1.value }.prefix(depth).map(\.key)
-        let topSpecies: [Int] = profile.species.sorted { $0.value > $1.value }.prefix(depth).map(\.key)
+        // Widened species drive which buckets we PULL, so a liked Charmander now reaches Charizard.
+        let speciesWeights = relatedSpecies.isEmpty ? profile.species : relatedSpecies
+        let topSpecies: [Int] = speciesWeights.sorted { $0.value > $1.value }.prefix(depth).map(\.key)
         let topArtists: [String] = profile.artists.sorted { $0.value > $1.value }.prefix(depth).map(\.key)
 
         var pool: [String: CardRecord] = [:]
@@ -41,8 +53,15 @@ struct ForYouStream: CardStream {
 
         let poolDex: [String: [Int]] = (try? store.dexIds(forCards: Array(pool.keys))) ?? [:]
         let rankLimit: Int = pageSize * (index + 1)
+        // The widened species map also drives SCORING, so a family member outranks an unrelated
+        // card from the same set. Copying it onto the profile keeps `score` a single summation.
+        var scoringProfile = profile
+        scoringProfile.species = speciesWeights
+        let poolPrices = prices.isEmpty ? ((try? store.previewPrices(cardIds: Array(pool.keys))) ?? [:]) : prices
         let ranked: [CardRecord] = DiscoverAffinity.rank(candidates: Array(pool.values), dexIds: poolDex,
-                                                          profile: profile, limit: rankLimit)
+                                                          profile: scoringProfile, band: band,
+                                                          prices: poolPrices, twinIds: twinIds,
+                                                          limit: rankLimit)
         // Reserve ~1-in-varietyEvery slots for interleaved variety so taste-matches never run unbroken.
         let varietyCount: Int = Self.experimentSlots(pageSize: pageSize)
         let matchCount: Int = pageSize - varietyCount

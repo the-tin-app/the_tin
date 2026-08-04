@@ -3,6 +3,20 @@ import GRDB
 @testable import TheTin
 
 final class DiscoverModelTests: XCTestCase {
+    /// `load` takes whole records now, not ids — the price band needs `pricePaid` and `targetUsd`,
+    /// which ids cannot carry. These two build the minimum record for a taste signal.
+    private func owned(_ cardIds: [String]) -> [CollectionEntry] {
+        cardIds.enumerated().map { index, cardId in
+            CollectionEntry(id: "e\(index)", cardId: cardId, groupId: "", qty: 1, condition: nil,
+                            grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
+                            addedAt: Date(timeIntervalSince1970: 0))
+        }
+    }
+
+    private func wanted(_ cardIds: [String]) -> [String: WantEntry] {
+        Dictionary(uniqueKeysWithValues: cardIds.map { ($0, WantEntry()) })
+    }
+
     private func makeStore() throws -> CatalogStore {
         let path = NSTemporaryDirectory() + "cat-\(UUID().uuidString).sqlite"
         let q = try DatabaseQueue(path: path)
@@ -39,7 +53,7 @@ final class DiscoverModelTests: XCTestCase {
     func testColdStartHasPopularForYouAndCuratedConnection() async throws {
         let store = try makeStore()
         let model = DiscoverModel(store: store)
-        await model.load(ownedIds: [], wantedIds: [])
+        await model.load(entries: [], wants: [:])
 
         XCTAssertTrue(model.isLoaded)
         // No taste signal -> ForYou falls back to a popular/high-value mix, never empty.
@@ -60,13 +74,13 @@ final class DiscoverModelTests: XCTestCase {
         let store = try makeStore()
         let model = DiscoverModel(store: store)
 
-        await model.load(ownedIds: [], wantedIds: [])
+        await model.load(entries: [], wants: [:])
         let before = model.previews[.forYou, default: []].map(\.id)
         // Precondition that makes the after-assertion discriminating: the popular cold-start mix
         // contains s1-1, so its later absence can only come from a genuine recompute.
         XCTAssertTrue(before.contains("s1-1"), "cold-start popular mix should include priced s1-1")
 
-        await model.load(ownedIds: ["s1-1"], wantedIds: [])
+        await model.load(entries: owned(["s1-1"]), wants: [:])
         let after = model.previews[.forYou, default: []].map(\.id)
 
         XCTAssertNotEqual(before, after, "For You preview must rebuild on a taste-signal change")
@@ -81,10 +95,10 @@ final class DiscoverModelTests: XCTestCase {
         let store = try makeStore()
         let model = DiscoverModel(store: store)
 
-        await model.load(ownedIds: [], wantedIds: [])
+        await model.load(entries: [], wants: [:])
         let before = model.previews[.forYou, default: []].map(\.id)
 
-        await model.load(ownedIds: [], wantedIds: ["s1-1"])
+        await model.load(entries: [], wants: wanted(["s1-1"]))
         let after = model.previews[.forYou, default: []].map(\.id)
 
         XCTAssertNotEqual(before, after, "For You preview must rebuild when wanted changes")
@@ -99,7 +113,7 @@ final class DiscoverModelTests: XCTestCase {
     func testForYouCaptionUsesSpeciesReason() async throws {
         let store = try makeStore()
         let model = DiscoverModel(store: store)
-        await model.load(ownedIds: ["s1-1"], wantedIds: [])            // owns Pikachu (dex 25)
+        await model.load(entries: owned(["s1-1"]), wants: [:])            // owns Pikachu (dex 25)
         let raichu = try XCTUnwrap(try store.card(id: "s1-2"))         // dex 25, rarity Rare (not full-art)
         XCTAssertEqual(model.caption(for: raichu, kind: .forYou), "Because you like Pikachu")
     }

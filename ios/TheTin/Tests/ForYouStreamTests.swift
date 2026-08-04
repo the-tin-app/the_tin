@@ -81,4 +81,27 @@ final class ForYouStreamTests: XCTestCase {
         // For a page of 10, expect ~2 experiment slots.
         XCTAssertEqual(ForYouStream.experimentSlots(pageSize: 10), 2)
     }
+
+    // MARK: price band
+
+    func testForYouStillProducesCardsWithAPriceBandApplied() throws {
+        let store = try makeStore()
+        let profile = DiscoverAffinity.profile(owned: try store.cards(ids: ["s1-1"]),
+                                               wanted: [], dexIds: [:])
+        // Prices built by hand: this fixture has no `price_by_condition`, so `previewPrices` throws.
+        let stream = ForYouStream(store: store, profile: profile, tasteIds: ["s1-1"],
+                                  band: PriceBand(p25: 1, p50: 3, p75: 6),
+                                  prices: ["s1-2": 50.0])
+        XCTAssertFalse(stream.page(0).isEmpty, "a non-empty profile must still produce cards")
+    }
+
+    func testForYouWithNoBandMatchesTodaysBehaviour() throws {
+        let store = try makeStore()
+        let profile = DiscoverAffinity.profile(owned: try store.cards(ids: ["s1-1"]),
+                                               wanted: [], dexIds: [:])
+        let withDefaults = ForYouStream(store: store, profile: profile, tasteIds: ["s1-1"]).page(0)
+        let explicitNil = ForYouStream(store: store, profile: profile, tasteIds: ["s1-1"],
+                                       band: nil, prices: [:]).page(0)
+        XCTAssertEqual(withDefaults.map(\.id), explicitNil.map(\.id))
+    }
 }
