@@ -95,6 +95,29 @@ final class ForYouStreamTests: XCTestCase {
         XCTAssertFalse(stream.page(0).isEmpty, "a non-empty profile must still produce cards")
     }
 
+    func testAThumbedDownCardNeverAppears() throws {
+        let store = try makeStore()
+        let profile = DiscoverAffinity.profile(owned: try store.cards(ids: ["s1-1"]),
+                                               wanted: [], dexIds: [:])
+        let before = ForYouStream(store: store, profile: profile, tasteIds: ["s1-1"]).page(0)
+        let target = try XCTUnwrap(before.first?.id)
+        let after = ForYouStream(store: store, profile: profile, tasteIds: ["s1-1"],
+                                 dismissed: [target]).page(0)
+        XCTAssertFalse(after.contains { $0.id == target })
+    }
+
+    func testAThumbedDownCardIsGoneFromTheColdStartMixToo() throws {
+        // A brand-new user with no profile still gets the popular mix — a dismissal has to hold
+        // there, or the card they just rejected comes straight back.
+        let store = try makeStore()
+        let empty = DiscoverAffinity.Profile()
+        let before = ForYouStream(store: store, profile: empty, tasteIds: []).page(0)
+        let target = try XCTUnwrap(before.first?.id)
+        let after = ForYouStream(store: store, profile: empty, tasteIds: [],
+                                 dismissed: [target]).page(0)
+        XCTAssertFalse(after.contains { $0.id == target })
+    }
+
     func testForYouWithNoBandMatchesTodaysBehaviour() throws {
         let store = try makeStore()
         let profile = DiscoverAffinity.profile(owned: try store.cards(ids: ["s1-1"]),

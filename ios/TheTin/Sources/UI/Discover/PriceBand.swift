@@ -20,10 +20,15 @@ struct PriceBand: Equatable {
     /// discarding history entirely.
     static let targetWeight = 2
 
-    /// How far a band-fit multiplier can fall. Deliberately well above zero: price alone must never
-    /// fully suppress a card, or For You goes blind to the user's grail — the one card whose price
-    /// they most want to see move.
-    static let fitFloor = 0.35
+    /// How far a band-fit multiplier can fall. Kept in step with `DiscoverAffinity.dimensionFloor`
+    /// so price, rarity and generation all demote by the same amount.
+    ///
+    /// ⚠️ This was `0.35`, on the stated reasoning that "price alone must never fully suppress a
+    /// card, or For You goes blind to the user's grail". **That reasoning was wrong**:
+    /// `ForYouStream` already removes every owned and wanted card from the candidate pool, so a
+    /// grail is never a For You candidate and the floor was protecting nothing. What 0.35 actually
+    /// did was let a $1,000 card ride a 3x species match past an in-band one.
+    static let fitFloor = 0.15
 
     /// Nearest-rank percentile over a **pre-sorted, non-empty** sample.
     static func percentile(_ sorted: [Double], _ q: Double) -> Double {

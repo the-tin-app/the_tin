@@ -5,12 +5,14 @@ struct DiscoverView: View {
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
     var goals: SetGoalsModel? = nil
+    var signals: DiscoverSignalsModel? = nil
     @State private var model: DiscoverModel?
 
     var body: some View {
         Group {
             if let model, model.isLoaded {
-                DiscoverHomeView(model: model, store: store, collection: collection, wants: wants)
+                DiscoverHomeView(model: model, store: store, collection: collection, wants: wants,
+                                 signals: signals)
             } else {
                 TinLoadingView(label: "Finding cards for you…")
             }
@@ -40,13 +42,17 @@ struct DiscoverView: View {
         }
         .task(id: tasteSignalKey) {
             let m = model ?? DiscoverModel(store: store)
-            await m.load(entries: collection?.entries ?? [], wants: wants?.entries ?? [:])
+            await m.load(entries: collection?.entries ?? [], wants: wants?.entries ?? [:],
+                         dismissed: signals?.dismissed ?? [])
             model = m
         }
     }
 
+    /// ⚠️ `signals.revision` is load-bearing, not decoration. Counting owned and wanted cards
+    /// cannot see a thumbs-down — it changes neither count — so without the revision the task
+    /// never re-fires and "Not for me" appears to do nothing until you happen to heart something.
     private var tasteSignalKey: String {
-        "\(collection?.entries.count ?? 0)-\(wants?.wanted.count ?? 0)"
+        "\(collection?.entries.count ?? 0)-\(wants?.wanted.count ?? 0)-\(signals?.revision ?? 0)"
     }
 }
 
@@ -55,6 +61,7 @@ private struct DiscoverHomeView: View {
     let store: CatalogStore
     var collection: CollectionModel?
     var wants: WantsModel?
+    var signals: DiscoverSignalsModel?
 
     var body: some View {
         ScrollView {
@@ -75,12 +82,12 @@ private struct DiscoverHomeView: View {
                     let cards = model.previews[kind] ?? []
                     if !cards.isEmpty {
                         StreamPreviewRow(kind: kind, cards: cards, store: store,
-                                         wants: wants, collection: collection)
+                                         wants: wants, collection: collection, signals: signals)
                     }
                 }
                 if !model.connections.isEmpty {
                     ConnectionsRow(connections: model.connections, store: store,
-                                   wants: wants, collection: collection)
+                                   wants: wants, collection: collection, signals: signals)
                 }
             }
             .padding(.vertical)
@@ -95,6 +102,7 @@ private struct StreamPreviewRow: View {
     let store: CatalogStore
     var wants: WantsModel?
     var collection: CollectionModel?
+    var signals: DiscoverSignalsModel?
 
     var body: some View {
         // Preview price = raw market, falling back to the NM condition price (a separate feed)
@@ -113,7 +121,7 @@ private struct StreamPreviewRow: View {
                 LazyHStack(spacing: 12) {
                     ForEach(cards) { card in
                         DiscoverTile(card: card, value: prices[card.id], wants: wants,
-                                     collection: collection, store: store)
+                                     collection: collection, store: store, signals: signals)
                     }
                 }
                 .padding(.horizontal)
@@ -128,6 +136,7 @@ private struct ConnectionsRow: View {
     let store: CatalogStore
     var wants: WantsModel?
     var collection: CollectionModel?
+    var signals: DiscoverSignalsModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -142,7 +151,7 @@ private struct ConnectionsRow: View {
                             HStack(spacing: 8) {
                                 ForEach(cards) { card in
                                     DiscoverTile(card: card, value: prices[card.id], wants: wants,
-                                                 collection: collection, store: store)
+                                                 collection: collection, store: store, signals: signals)
                                 }
                             }
                         }
@@ -160,6 +169,7 @@ private struct DiscoverTile: View {
     var wants: WantsModel?
     var collection: CollectionModel?
     var store: CatalogStore?
+    var signals: DiscoverSignalsModel?
 
     var body: some View {
         NavigationLink(value: CardID(raw: card.id)) {
@@ -172,7 +182,8 @@ private struct DiscoverTile: View {
             .frame(width: 120)
         }
         .buttonStyle(.plain)
-        .cardQuickActions(card: card, wants: wants, collection: collection, store: store)
+        .cardQuickActions(card: card, wants: wants, collection: collection, store: store,
+                          signals: signals)
         .overlay(alignment: .topTrailing) {
             if let wants {
                 Button {

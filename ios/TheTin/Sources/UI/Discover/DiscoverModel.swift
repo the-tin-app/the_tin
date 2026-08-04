@@ -33,6 +33,8 @@ final class DiscoverModel {
     private(set) var relatedSpecies: [Int: Double] = [:]
     /// Identical-art reprints of wishlist cards.
     private(set) var twinIds: Set<String> = []
+    /// Cards the user thumbed down.
+    private(set) var dismissed: Set<String> = []
 
     /// Per-session shuffle seed for the Full-art stream. Fresh each launch so the shuffle feels new;
     /// stable within a session so paging stays deterministic. Runtime randomness is intentional here.
@@ -69,7 +71,8 @@ final class DiscoverModel {
     /// ForYou/Chase ignore the seed; FullArt uses it for its per-session shuffle. Cheap value-type init.
     func makeStream(_ kind: StreamKind) -> CardStream {
         DiscoverModel.makeStream(kind, store: store, profile: profile, tasteIds: tasteIds, seed: seed,
-                                 band: band, relatedSpecies: relatedSpecies, twinIds: twinIds)
+                                 band: band, relatedSpecies: relatedSpecies, twinIds: twinIds,
+                                 dismissed: dismissed)
     }
 
     /// Single source of truth for stream construction, shared by the off-main `assemble` (preview
@@ -80,11 +83,13 @@ final class DiscoverModel {
                                        profile: DiscoverAffinity.Profile, tasteIds: Set<String>,
                                        seed: UInt64, band: PriceBand? = nil,
                                        relatedSpecies: [Int: Double] = [:],
-                                       twinIds: Set<String> = []) -> CardStream {
+                                       twinIds: Set<String> = [],
+                                       dismissed: Set<String> = []) -> CardStream {
         switch kind {
         case .forYou:
             return ForYouStream(store: store, profile: profile, tasteIds: tasteIds,
-                                band: band, twinIds: twinIds, relatedSpecies: relatedSpecies)
+                                band: band, twinIds: twinIds, dismissed: dismissed,
+                                relatedSpecies: relatedSpecies)
         case .fullArt: return FullArtStream(store: store, seed: seed)
         case .chase: return ChaseStream(store: store)
         }
@@ -93,14 +98,18 @@ final class DiscoverModel {
     /// Rebuild `profile`, `connections`, and `previews` whenever the taste signal (owned/wanted counts)
     /// changes. No latch: later Want toggles re-run the assembly. All catalog-touching work runs off the
     /// main thread in a detached task; results are assigned back on the main actor.
-    func load(entries: [CollectionEntry], wants: [String: WantEntry]) async {
-        let signal = (owned: entries.count, wanted: wants.count)
+    func load(entries: [CollectionEntry], wants: [String: WantEntry],
+              dismissed: Set<String> = []) async {
+        // ⚠️ The dismissed COUNT is part of the signal. Without it a thumbs-down changes neither
+        // the owned nor the wanted count, the early return fires, and nothing recomputes.
+        let signal = (owned: entries.count, wanted: wants.count + dismissed.count)
         if isLoaded, let last = lastSignal, last == signal { return }
 
         let store = self.store
         let seed = self.seed
         let assembled = await Task.detached(priority: .userInitiated) {
-            DiscoverModel.assemble(store: store, seed: seed, entries: entries, wants: wants)
+            DiscoverModel.assemble(store: store, seed: seed, entries: entries, wants: wants,
+                                   dismissed: dismissed)
         }.value
 
         profile = assembled.profile
@@ -109,6 +118,7 @@ final class DiscoverModel {
         band = assembled.band
         relatedSpecies = assembled.relatedSpecies
         twinIds = assembled.twinIds
+        self.dismissed = assembled.dismissed
         connections = assembled.connections
         previews = assembled.previews
         isLoaded = true
@@ -123,6 +133,7 @@ final class DiscoverModel {
         var band: PriceBand?
         var relatedSpecies: [Int: Double]
         var twinIds: Set<String>
+        var dismissed: Set<String>
         var connections: [Connection]
         var previews: [StreamKind: [CardRecord]]
     }
@@ -132,7 +143,8 @@ final class DiscoverModel {
     /// compute previews; the main actor reconstructs them via `makeStream` from the same stored state.
     nonisolated private static func assemble(store: CatalogStore, seed: UInt64,
                                              entries: [CollectionEntry],
-                                             wants: [String: WantEntry]) -> Assembled {
+                                             wants: [String: WantEntry],
+                                             dismissed: Set<String>) -> Assembled {
         let ownedIds = entries.map(\.cardId)
         let wantedIds = Set(wants.keys)
         let tasteIds = Set(ownedIds).union(wantedIds)
@@ -163,12 +175,12 @@ final class DiscoverModel {
         for kind in StreamKind.allCases {
             let stream = makeStream(kind, store: store, profile: profile, tasteIds: tasteIds,
                                     seed: seed, band: band, relatedSpecies: relatedSpecies,
-                                    twinIds: twinIds)
+                                    twinIds: twinIds, dismissed: dismissed)
             previews[kind] = Array(stream.page(0).prefix(previewCount))
         }
 
         return Assembled(profile: profile, tasteIds: tasteIds, referencePrice: referencePrice,
                          band: band, relatedSpecies: relatedSpecies, twinIds: twinIds,
-                         connections: connections, previews: previews)
+                         dismissed: dismissed, connections: connections, previews: previews)
     }
 }

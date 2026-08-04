@@ -15,6 +15,9 @@ struct ForYouStream: CardStream {
     var prices: [String: Double] = [:]
     /// Cards whose art is an identical-art reprint of something on the wishlist.
     var twinIds: Set<String> = []
+    /// Thumbed down. Excluded outright — an explicit "no" is the one signal that should never be
+    /// weighed against anything.
+    var dismissed: Set<String> = []
     /// `Profile.species` widened by `DiscoverAffinity.relatedSpecies` — families and co-occurring
     /// partners, not just exact dex matches. Empty falls back to `profile.species`.
     var relatedSpecies: [Int: Double] = [:]
@@ -54,6 +57,7 @@ struct ForYouStream: CardStream {
             for c in cards { pool[c.id] = c }
         }
         for id in tasteIds { pool[id] = nil }
+        for id in dismissed { pool[id] = nil }
 
         let poolDex: [String: [Int]] = (try? store.dexIds(forCards: Array(pool.keys))) ?? [:]
         let rankLimit: Int = pageSize * (index + 1)
@@ -71,7 +75,7 @@ struct ForYouStream: CardStream {
         let matchCount: Int = pageSize - varietyCount
         let start: Int = index * matchCount
         let matches: [CardRecord] = Array(ranked.dropFirst(start).prefix(matchCount))
-        let used: Set<String> = tasteIds.union(matches.map(\.id))
+        let used: Set<String> = tasteIds.union(dismissed).union(matches.map(\.id))
         let variety: [CardRecord] = varietyPicks(count: varietyCount, page: index, exclude: used)
         return Self.interleave(matches: matches, variety: variety, every: Self.varietyEvery)
     }
@@ -121,9 +125,13 @@ struct ForYouStream: CardStream {
 
     /// Cold-start: blend high-value + full-art standouts.
     private func popularMix(_ index: Int) -> [CardRecord] {
-        let chase: [CardRecord] = (try? store.topPricedCards(offset: index * pageSize, limit: pageSize)) ?? []
+        // A thumbs-down has to hold on the cold-start path too, or a brand-new user who dismisses
+        // something watches it come straight back.
+        let chase: [CardRecord] = ((try? store.topPricedCards(offset: index * pageSize, limit: pageSize)) ?? [])
+            .filter { !dismissed.contains($0.id) }
         if !chase.isEmpty { return chase }
-        let art: [CardRecord] = (try? store.cards(matchingRarities: DiscoverConstants.fullArtRarities)) ?? []
+        let art: [CardRecord] = ((try? store.cards(matchingRarities: DiscoverConstants.fullArtRarities)) ?? [])
+            .filter { !dismissed.contains($0.id) }
         let start = index * pageSize
         guard start < art.count else { return [] }
         return Array(art[start..<min(start + pageSize, art.count)])

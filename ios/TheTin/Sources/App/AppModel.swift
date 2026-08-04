@@ -21,6 +21,9 @@ final class AppModel {
     /// The sets you're collecting. Created eagerly (it's a file read, no network) so every screen
     /// can ask; nil never happens in the app, only in catalog-only tests.
     private(set) var setGoals: SetGoalsModel? = SetGoalsModel()
+    /// What the collector told Discover directly (thumbs-down). Created eagerly for the same
+    /// reason as `setGoals`: it's a small file read with no network behind it.
+    private(set) var discoverSignals: DiscoverSignalsModel? = DiscoverSignalsModel()
     private(set) var catalogState: CatalogState?
     /// Which remote served the most recent catalog operation (nil until the first update runs).
     private(set) var activeSource: CatalogSource?

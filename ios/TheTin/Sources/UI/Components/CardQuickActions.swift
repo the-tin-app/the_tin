@@ -10,11 +10,24 @@ struct CardQuickActions: ViewModifier {
     var wants: WantsModel?
     var collection: CollectionModel?
     var store: CatalogStore?
+    var signals: DiscoverSignalsModel?
     @State private var saving = false
 
     func body(content: Content) -> some View {
         content
             .contextMenu {
+                if let signals {
+                    Button(role: signals.isDismissed(card.id) ? nil : .destructive) {
+                        if signals.isDismissed(card.id) {
+                            signals.restore(card.id)
+                        } else {
+                            signals.dismiss(card.id)
+                        }
+                    } label: {
+                        Label(signals.isDismissed(card.id) ? "Show this again" : "Not for me",
+                              systemImage: signals.isDismissed(card.id) ? "arrow.uturn.backward" : "hand.thumbsdown")
+                    }
+                }
                 if let wants {
                     Button {
                         wants.toggle(card.id)
@@ -52,7 +65,9 @@ struct CardQuickActions: ViewModifier {
 extension View {
     func cardQuickActions(card: CardRecord, wants: WantsModel?,
                           collection: CollectionModel? = nil,
-                          store: CatalogStore? = nil) -> some View {
-        modifier(CardQuickActions(card: card, wants: wants, collection: collection, store: store))
+                          store: CatalogStore? = nil,
+                          signals: DiscoverSignalsModel? = nil) -> some View {
+        modifier(CardQuickActions(card: card, wants: wants, collection: collection,
+                                  store: store, signals: signals))
     }
 }

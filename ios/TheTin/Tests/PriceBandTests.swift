@@ -65,21 +65,23 @@ final class PriceBandTests: XCTestCase {
 
     func testFitFallsOffLinearlyToTheFloorOverOneBandWidth() {
         let band = PriceBand(p25: 10, p50: 15, p75: 20) // width 10
-        // Half a band-width above p75 → halfway from 1.0 to the 0.35 floor.
-        XCTAssertEqual(band.fit(25), 0.675, accuracy: 0.0001)
+        // Half a band-width above p75 → halfway from 1.0 to the floor.
+        XCTAssertEqual(band.fit(25), 1.0 - 0.5 * (1.0 - PriceBand.fitFloor), accuracy: 0.0001)
         // A full band-width above → exactly the floor.
-        XCTAssertEqual(band.fit(30), 0.35, accuracy: 0.0001)
+        XCTAssertEqual(band.fit(30), PriceBand.fitFloor, accuracy: 0.0001)
     }
 
     func testFitIsSymmetricBelowTheBand() {
         let band = PriceBand(p25: 10, p50: 15, p75: 20)
-        XCTAssertEqual(band.fit(5), 0.675, accuracy: 0.0001)
+        XCTAssertEqual(band.fit(5), 1.0 - 0.5 * (1.0 - PriceBand.fitFloor), accuracy: 0.0001)
     }
 
     func testPriceAloneCanNeverFullySuppressACard() {
-        // The whole point of a floor: a grail priced absurdly far above the band stays rankable.
+        // A floor, not a cut: an absurdly-priced card is demoted, never scored to zero.
+        // (It is NOT there to protect a grail — ForYouStream already excludes every owned
+        // and wanted card from the pool, so a grail is never a candidate.)
         let band = PriceBand(p25: 10, p50: 15, p75: 20)
-        XCTAssertEqual(band.fit(100_000), 0.35, accuracy: 0.0001)
+        XCTAssertEqual(band.fit(100_000), PriceBand.fitFloor, accuracy: 0.0001)
     }
 
     func testAnUnpricedCardIsNeutral() {
@@ -91,7 +93,7 @@ final class PriceBandTests: XCTestCase {
     func testADegenerateZeroWidthBandDoesNotDivideByZero() {
         let band = PriceBand(p25: 10, p50: 10, p75: 10)
         XCTAssertEqual(band.fit(10), 1.0, accuracy: 0.0001)
-        XCTAssertEqual(band.fit(1000), 0.35, accuracy: 0.0001)
+        XCTAssertEqual(band.fit(1000), PriceBand.fitFloor, accuracy: 0.0001)
     }
 
     // MARK: building from real records

@@ -30,6 +30,10 @@ enum DiscoverAffinity {
         var artists: [String: Double] = [:]
         var rarities: [String: Double] = [:]
         var types: [String: Double] = [:]
+        /// Which generations the collector actually lives in, rolled up from `species` via
+        /// `PokemonRegion`. A much broader statement than species: it says "anything from Gen 1-5"
+        /// for species the user has never owned, which no amount of per-species affinity can.
+        var generations: [Int: Double] = [:]
         var isEmpty: Bool {
             sets.isEmpty && species.isEmpty && artists.isEmpty && rarities.isEmpty && types.isEmpty
         }
@@ -47,6 +51,7 @@ enum DiscoverAffinity {
         var artists: [String: Double] = [:]
         var rarities: [String: Double] = [:]
         var types: [String: Double] = [:]
+        var generations: [Int: Double] = [:]
 
         func accumulate(_ cards: [CardRecord], _ weight: Double) {
             for c in cards {
@@ -54,7 +59,12 @@ enum DiscoverAffinity {
                 if let a = c.artist { artists[a, default: 0] += weight }
                 if let r = c.rarity { rarities[r, default: 0] += weight }
                 for t in c.types { types[t, default: 0] += weight }
-                for d in dexIds[c.id] ?? [] { species[d, default: 0] += weight }
+                for d in dexIds[c.id] ?? [] {
+                    species[d, default: 0] += weight
+                    if let gen = PokemonRegion.all.first(where: { d >= $0.lo && d <= $0.hi })?.gen {
+                        generations[gen, default: 0] += weight
+                    }
+                }
             }
         }
         accumulate(owned, ownedWeight)
@@ -63,7 +73,8 @@ enum DiscoverAffinity {
         }
 
         return Profile(sets: normalize(sets), species: normalize(species),
-                       artists: normalize(artists), rarities: normalize(rarities), types: normalize(types))
+                       artists: normalize(artists), rarities: normalize(rarities),
+                       types: normalize(types), generations: normalize(generations))
     }
 
     /// How far either side of a liked species counts as "the same family".
@@ -148,21 +159,67 @@ enum DiscoverAffinity {
     /// should always have been.
     static let speciesWeight = 3.0
 
-    /// Sum of normalized profile weights across a candidate's dimensions, plus a twin boost, all
-    /// scaled by how well the price fits the user's band.
+    /// How far any multiplicative dimension can demote a card. Shared by price, rarity and
+    /// generation so there is one story, not three.
     ///
-    /// The band is a **multiplier and never a filter** — see `PriceBand.fit`. An absent band or an
-    /// absent price is neutral.
+    /// Not zero, because a profile is evidence and not a rule — a collector with no Gen 8 cards has
+    /// not *forbidden* Gen 8. But low enough that three strikes (wrong price, wrong rarity, wrong
+    /// generation) multiply to ~0.003 and the card is effectively gone.
+    static let dimensionFloor = 0.15
+
+    /// Map a normalized profile weight (0…1) onto a multiplier in `dimensionFloor`…1.
+    /// An **empty** histogram is neutral: at cold start we know nothing, and demoting the entire
+    /// catalog to the floor would be a statement we have no evidence for.
+    private static func fit(_ weight: Double?, empty: Bool) -> Double {
+        if empty { return 1.0 }
+        return dimensionFloor + (1.0 - dimensionFloor) * (weight ?? 0)
+    }
+
+    /// How well a card's rarity matches what the collector actually buys.
+    ///
+    /// ⚠️ Rarity used to be an **attractor** — a flat `+= profile.rarities[r]`, capped at 1. So a
+    /// Common scored `+0` and was never *penalised*; with species weighted 3x it could still win
+    /// outright. "I only like full art" was unrepresentable in the old model, because no dimension
+    /// could subtract.
+    static func rarityFit(_ rarity: String?, profile: Profile) -> Double {
+        fit(rarity.flatMap { profile.rarities[$0] }, empty: profile.rarities.isEmpty)
+    }
+
+    /// How well a card's generation matches where the collector lives, taking the card's **best**
+    /// generation when it carries several species.
+    ///
+    /// A card with no dex id at all (trainers, energy) is neutral, not punished — it has no
+    /// generation to be wrong about.
+    static func generationFit(_ dexIds: [Int], profile: Profile) -> Double {
+        guard !dexIds.isEmpty else { return 1.0 }
+        let best = dexIds.compactMap { dex -> Double? in
+            PokemonRegion.all.first { dex >= $0.lo && dex <= $0.hi }.map { profile.generations[$0.gen] ?? 0 }
+        }.max()
+        return fit(best, empty: profile.generations.isEmpty)
+    }
+
+    /// A card's rank score: **attractors** (reasons to show it) scaled by **filters** (reasons not
+    /// to).
+    ///
+    /// That split is the model, and it is the thing the first cut of this got wrong. Set, artist and
+    /// species are additive — each is a reason a card might interest you, and more reasons is
+    /// better. Price, rarity and generation are multiplicative — they can only ever take away,
+    /// because "$1,000", "Common" and "Gen 9" are how a collector says *no*. A purely additive score
+    /// has no way to express dislike: the worst any dimension can do is contribute nothing, which
+    /// loses to a single strong match somewhere else.
     static func score(_ card: CardRecord, dexIds: [Int], profile: Profile,
                       band: PriceBand? = nil, priceUsd: Double? = nil,
                       twinOfWanted: Bool = false) -> Double {
-        var s = profile.sets[card.setId] ?? 0
-        if let a = card.artist { s += profile.artists[a] ?? 0 }
-        if let r = card.rarity { s += profile.rarities[r] ?? 0 }
-        for t in card.types { s += profile.types[t] ?? 0 }
-        for d in dexIds { s += (profile.species[d] ?? 0) * speciesWeight }
-        if twinOfWanted { s += twinBoost }
-        return s * (band?.fit(priceUsd) ?? 1.0)
+        var attractors = profile.sets[card.setId] ?? 0
+        if let a = card.artist { attractors += profile.artists[a] ?? 0 }
+        for t in card.types { attractors += profile.types[t] ?? 0 }
+        for d in dexIds { attractors += (profile.species[d] ?? 0) * speciesWeight }
+        if twinOfWanted { attractors += twinBoost }
+
+        let filters = (band?.fit(priceUsd) ?? 1.0)
+            * rarityFit(card.rarity, profile: profile)
+            * generationFit(dexIds, profile: profile)
+        return attractors * filters
     }
 
     /// A candidate paired with its computed affinity score.

@@ -103,6 +103,87 @@ final class DiscoverSimilarityTests: XCTestCase {
                        "a liked species must outrank a liked set + liked artist")
     }
 
+    // MARK: generation affinity
+
+    func testGenerationsAreRolledUpFromDexIds() {
+        let owned = [card("g1", set: "A"), card("g8", set: "B")]
+        let p = DiscoverAffinity.profile(owned: owned, wanted: [], dexIds: ["g1": [25], "g8": [880]])
+        XCTAssertEqual(p.generations[1] ?? 0, 1.0, accuracy: 0.001)   // dex 25 -> Gen 1
+        XCTAssertEqual(p.generations[8] ?? 0, 1.0, accuracy: 0.001)   // dex 880 -> Gen 8
+        XCTAssertNil(p.generations[4])                                 // never touched
+    }
+
+    func testACardFromAGenerationYouNeverTouchIsHeavilyDemoted() {
+        // 121 of this user's 127 dex hits are Gens 1-5; Gen 8 is zero. A Gen 8 card must not
+        // rank alongside a Gen 1 card just because it shares a liked artist.
+        var p = DiscoverAffinity.Profile()
+        p.generations = [1: 1.0]
+        XCTAssertEqual(DiscoverAffinity.generationFit([25], profile: p), 1.0, accuracy: 0.001)
+        XCTAssertEqual(DiscoverAffinity.generationFit([880], profile: p),
+                       DiscoverAffinity.dimensionFloor, accuracy: 0.001)
+    }
+
+    func testAnEmptyGenerationProfileIsNeutral() {
+        // Cold start must not demote the entire catalog to the floor.
+        XCTAssertEqual(DiscoverAffinity.generationFit([25], profile: DiscoverAffinity.Profile()),
+                       1.0, accuracy: 0.001)
+    }
+
+    func testACardWithNoSpeciesIsNeutralOnGeneration() {
+        // Trainers and energy have no dex id — they must not be punished for it.
+        var p = DiscoverAffinity.Profile()
+        p.generations = [1: 1.0]
+        XCTAssertEqual(DiscoverAffinity.generationFit([], profile: p), 1.0, accuracy: 0.001)
+    }
+
+    func testTheBestGenerationOnAMultiSpeciesCardWins() {
+        var p = DiscoverAffinity.Profile()
+        p.generations = [1: 1.0]
+        XCTAssertEqual(DiscoverAffinity.generationFit([880, 25], profile: p), 1.0, accuracy: 0.001)
+    }
+
+    // MARK: rarity as a filter, not just an attractor
+
+    func testACommonIsDemotedWhenYouOnlyCollectFullArt() {
+        // 85 of 121 of this user's cards are full-art tier; exactly one is Common.
+        var p = DiscoverAffinity.Profile()
+        p.rarities = ["Illustration rare": 1.0, "Common": 0.03]
+        let fullArt = DiscoverAffinity.rarityFit("Illustration rare", profile: p)
+        let common = DiscoverAffinity.rarityFit("Common", profile: p)
+        XCTAssertEqual(fullArt, 1.0, accuracy: 0.001)
+        XCTAssertLessThan(common, 0.25)
+    }
+
+    func testAnUnseenRarityFallsToTheFloorRatherThanZero() {
+        var p = DiscoverAffinity.Profile()
+        p.rarities = ["Illustration rare": 1.0]
+        XCTAssertEqual(DiscoverAffinity.rarityFit("Common", profile: p),
+                       DiscoverAffinity.dimensionFloor, accuracy: 0.001)
+    }
+
+    func testAnEmptyRarityProfileIsNeutral() {
+        XCTAssertEqual(DiscoverAffinity.rarityFit("Common", profile: DiscoverAffinity.Profile()),
+                       1.0, accuracy: 0.001)
+    }
+
+    /// The whole point, end to end: a Common from an untouched generation must lose to an in-band
+    /// full-art card of a liked generation, **even though both match the species**.
+    func testAFullArtCardOfALikedGenerationBeatsACommonFromAnUntouchedOne() {
+        var p = DiscoverAffinity.Profile()
+        p.species = [25: 1.0]
+        p.rarities = ["Illustration rare": 1.0]
+        p.generations = [1: 1.0]
+        let good = CardRecord(id: "good", setId: "Z", number: "1", name: "good", hp: nil, types: [],
+                              rarity: "Illustration rare", artist: nil, imageBase: nil,
+                              imageUrl: nil, tcgplayerId: nil)
+        let bad = CardRecord(id: "bad", setId: "Z", number: "2", name: "bad", hp: nil, types: [],
+                             rarity: "Common", artist: nil, imageBase: nil,
+                             imageUrl: nil, tcgplayerId: nil)
+        let ranked = DiscoverAffinity.rank(candidates: [bad, good],
+                                           dexIds: ["good": [25], "bad": [880]], profile: p)
+        XCTAssertEqual(ranked.first?.id, "good")
+    }
+
     // MARK: band fit and twins in the ranker
 
     private func card(_ id: String, set: String, artist: String? = nil) -> CardRecord {
