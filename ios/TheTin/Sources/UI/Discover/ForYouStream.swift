@@ -32,8 +32,12 @@ struct ForYouStream: CardStream {
         let depth = Self.bucketDepth(forPage: index)
         let topSets: [String] = profile.sets.sorted { $0.value > $1.value }.prefix(depth).map(\.key)
         // Widened species drive which buckets we PULL, so a liked Charmander now reaches Charizard.
+        // ⚠️ NOT a plain top-N over the widened map — adjacency caps at 0.6x its seed, so a plain
+        // cut is all exact matches and the expansion never reaches the pool. `speciesBuckets`
+        // reserves slots for what the expansion added.
         let speciesWeights = relatedSpecies.isEmpty ? profile.species : relatedSpecies
-        let topSpecies: [Int] = speciesWeights.sorted { $0.value > $1.value }.prefix(depth).map(\.key)
+        let topSpecies: [Int] = DiscoverAffinity.speciesBuckets(exact: profile.species,
+                                                               related: speciesWeights, depth: depth)
         let topArtists: [String] = profile.artists.sorted { $0.value > $1.value }.prefix(depth).map(\.key)
 
         var pool: [String: CardRecord] = [:]

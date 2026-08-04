@@ -103,6 +103,28 @@ enum DiscoverAffinity {
         return out
     }
 
+    /// Bucket slots reserved for species the expansion ADDED, on top of the exact-match slots.
+    ///
+    /// ⚠️ Without this the expansion is invisible. Adjacency caps at 0.6x its seed, so any user with
+    /// four or more exact species at >= 0.6 fills the whole cut with exact matches and no derived
+    /// species is ever pulled into the candidate pool. Measured on a real 60-card collection: 79
+    /// species widened to 267, and the first derived entry landed at **rank 6** against a cut of 4.
+    static let derivedBucketSlots = 3
+
+    /// The species buckets a page should pull candidates from: the strongest exact matches, plus a
+    /// reserved tail of the strongest species the expansion added. Ordered exact-first, so the
+    /// user's own collection still leads.
+    static func speciesBuckets(exact: [Int: Double], related: [Int: Double], depth: Int) -> [Int] {
+        guard !exact.isEmpty else { return [] }
+        let topExact = exact.sorted { $0.value > $1.value }.prefix(depth).map(\.key)
+        let derived = related
+            .filter { exact[$0.key] == nil }
+            .sorted { $0.value > $1.value }
+            .prefix(derivedBucketSlots)
+            .map(\.key)
+        return topExact + derived
+    }
+
     private static func normalize<K>(_ hist: [K: Double]) -> [K: Double] {
         guard let maxValue = hist.values.max(), maxValue > 0 else { return [:] }
         return hist.mapValues { $0 / maxValue }
@@ -112,6 +134,19 @@ enum DiscoverAffinity {
     /// wishlist. `card_twin` was built for the scanner's twin-aware lock and is free to reuse here:
     /// "you want this exact art, and here it is cheaper from another print".
     static let twinBoost = 0.9
+
+    /// How much more a species match counts than any other single dimension.
+    ///
+    /// ⚠️ `score` used to sum all five dimensions flat, and that quietly made species the weakest
+    /// signal in the system: set + artist + rarity + type can contribute ~4 points, against
+    /// species' maximum of 1. So "a Pokemon you like" could never outrank "same set, same artist",
+    /// and For You kept returning the same cluster however well the species expansion worked.
+    ///
+    /// Species is the axis users actually think in — "show me more Charizards", not "show me more
+    /// cards illustrated by the person who drew my Charizard". Weighted 3x, a liked species beats a
+    /// liked set AND a liked artist together; set/artist/rarity/type become the tiebreak they
+    /// should always have been.
+    static let speciesWeight = 3.0
 
     /// Sum of normalized profile weights across a candidate's dimensions, plus a twin boost, all
     /// scaled by how well the price fits the user's band.
@@ -125,7 +160,7 @@ enum DiscoverAffinity {
         if let a = card.artist { s += profile.artists[a] ?? 0 }
         if let r = card.rarity { s += profile.rarities[r] ?? 0 }
         for t in card.types { s += profile.types[t] ?? 0 }
-        for d in dexIds { s += profile.species[d] ?? 0 }
+        for d in dexIds { s += (profile.species[d] ?? 0) * speciesWeight }
         if twinOfWanted { s += twinBoost }
         return s * (band?.fit(priceUsd) ?? 1.0)
     }

@@ -154,6 +154,45 @@ final class PriceBandTests: XCTestCase {
         XCTAssertNil(PriceBand.make(entries: entries, wants: [:], now: now))
     }
 
+    /// ⚠️ Regression, found on real data 2026-08-04. Six purchases at $5–66 plus three wishlist
+    /// targets at $90–250 produced a band of $6.24–$200 — which made `fit()` return 1.0 for
+    /// virtually the whole catalog, so the band was a measured no-op. A `targetUsd` is a ceiling
+    /// for ONE expensive card, not evidence of typical spend, so it must not widen the band when
+    /// real purchase history exists.
+    func testAspirationalTargetsDoNotWidenABandBuiltFromRealPurchases() {
+        let entries = [entry("1", paid: 5, acquired: monthsAgo(1)),
+                       entry("2", paid: 5.13, acquired: monthsAgo(1)),
+                       entry("3", paid: 6.24, acquired: monthsAgo(1)),
+                       entry("4", paid: 17.71, acquired: monthsAgo(1)),
+                       entry("5", paid: 33.55, acquired: monthsAgo(1)),
+                       entry("6", paid: 65.73, acquired: monthsAgo(1))]
+        let wants: [String: WantEntry] = [
+            "a": WantEntry(priority: .normal, targetUsd: 250),
+            "b": WantEntry(priority: .normal, targetUsd: 90),
+            "c": WantEntry(priority: .normal, targetUsd: 200),
+        ]
+        let band = try! XCTUnwrap(PriceBand.make(entries: entries, wants: wants, now: now))
+        XCTAssertEqual(band.p75, 33.55, "p75 must come from purchases, not from grail targets")
+        XCTAssertLessThan(band.p75, 100)
+    }
+
+    func testTargetsStillBuildABandWhenThereIsNoPurchaseHistory() {
+        // Cold start: three targets are better than no band at all.
+        let wants: [String: WantEntry] = [
+            "a": WantEntry(priority: .normal, targetUsd: 10),
+            "b": WantEntry(priority: .normal, targetUsd: 20),
+        ]
+        XCTAssertNotNil(PriceBand.make(entries: [], wants: wants, now: now))
+    }
+
+    func testTargetsFillInWhenPurchasesAreTooFewToFormABand() {
+        // Two purchases is under `minimumSamples`, so the targets must be allowed to carry it.
+        let entries = [entry("1", paid: 8, acquired: monthsAgo(1)),
+                       entry("2", paid: 9, acquired: monthsAgo(1))]
+        let wants: [String: WantEntry] = ["a": WantEntry(priority: .normal, targetUsd: 30)]
+        XCTAssertNotNil(PriceBand.make(entries: entries, wants: wants, now: now))
+    }
+
     func testWishlistTargetsFeedTheBand() {
         let wants: [String: WantEntry] = [
             "a": WantEntry(priority: .normal, targetUsd: 6),

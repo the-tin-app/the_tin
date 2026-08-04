@@ -55,6 +55,20 @@ struct PriceBand: Equatable {
     /// unrecorded detail rather than proof the purchase is stale. (The spec said "entries with
     /// `acquiredAt` within 24 months"; discarding every undated purchase would throw away most of a
     /// typical collection, so undated entries are kept.)
+    /// ⚠️ **Targets are a FALLBACK, not an ingredient.** They used to be folded into the same
+    /// sample (counted twice, so an "explicit budget dominates"), and on real data that was a
+    /// measured disaster: six purchases at $5–66 plus three wishlist targets at $90–250 gave a band
+    /// of **$6.24–$200**, which made `fit()` return 1.0 for virtually the entire catalog. The band
+    /// multiplier did nothing at all.
+    ///
+    /// The reasoning was wrong, not just the arithmetic. A `targetUsd` is the ceiling the user set
+    /// for ONE specific expensive card — it says nothing about typical spend, and averaging it with
+    /// purchase history merges two different distributions. Purchases alone give a real band (that
+    /// same collection yields $5.13–$33.55). Targets carry the band only when there is no purchase
+    /// history to build one from, where three aspirational numbers still beat nothing.
+    ///
+    /// Per-card targets are not lost — "$4 under your target" is a per-card caption, which is where
+    /// that signal belongs.
     static func make(entries: [CollectionEntry], wants: [String: WantEntry], now: Date) -> PriceBand? {
         let cutoff = now.addingTimeInterval(-Double(purchaseWindowMonths) * 30.4 * 86_400)
         let purchases: [Double] = entries.compactMap { entry in
@@ -62,6 +76,7 @@ struct PriceBand: Equatable {
             if let acquired = entry.acquiredAt, acquired < cutoff { return nil }
             return paid
         }
+        if let fromPurchases = make(purchases: purchases, targets: []) { return fromPurchases }
         return make(purchases: purchases, targets: wants.values.compactMap(\.targetUsd))
     }
 

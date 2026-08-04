@@ -58,6 +58,51 @@ final class DiscoverSimilarityTests: XCTestCase {
         XCTAssertTrue(DiscoverAffinity.relatedSpecies(seed: [:], coOccurring: [644]).isEmpty)
     }
 
+    // MARK: derived species must survive the bucket cut
+
+    /// ⚠️ Regression, found on real data 2026-08-04. Adjacency caps at 0.6x its seed, so with five
+    /// exact species at >= 0.6 the top-4 bucket cut was ALL exact matches and no derived species
+    /// reached page 0 — the first one landed at rank 6. The expansion worked and was invisible.
+    func testDerivedSpeciesGetBucketSlotsEvenWhenExactMatchesFillTheCut() {
+        // Five exact species all at full weight — every one outranks any 0.6 adjacency entry.
+        let exact: [Int: Double] = [1: 1.0, 20: 1.0, 40: 0.8, 60: 0.8, 80: 0.6]
+        let related = DiscoverAffinity.relatedSpecies(seed: exact, coOccurring: [])
+        let buckets = DiscoverAffinity.speciesBuckets(exact: exact, related: related, depth: 4)
+        let derived = buckets.filter { exact[$0] == nil }
+        XCTAssertFalse(derived.isEmpty, "the widened map is pointless if it never reaches the pool")
+    }
+
+    func testExactSpeciesStillLeadTheBuckets() {
+        let exact: [Int: Double] = [1: 1.0, 20: 1.0, 40: 0.8, 60: 0.8, 80: 0.6]
+        let related = DiscoverAffinity.relatedSpecies(seed: exact, coOccurring: [])
+        let buckets = DiscoverAffinity.speciesBuckets(exact: exact, related: related, depth: 4)
+        XCTAssertEqual(Array(buckets.prefix(2)).sorted(), [1, 20], "strongest exact matches come first")
+    }
+
+    func testNoExactSpeciesYieldsNoBuckets() {
+        XCTAssertTrue(DiscoverAffinity.speciesBuckets(exact: [:], related: [:], depth: 4).isEmpty)
+    }
+
+    // MARK: species outranks set/artist
+
+    /// ⚠️ Found on real data 2026-08-04. `score` summed five dimensions flat, so set + artist +
+    /// rarity + type could contribute ~4 points against species' maximum of 1 — "similar Pokemon"
+    /// structurally could not beat "same set, same artist". Species is the dimension the user
+    /// actually asked to browse by, so it is weighted above the rest.
+    func testASpeciesMatchBeatsASetAndArtistMatch() {
+        var profile = DiscoverAffinity.Profile()
+        profile.sets = ["A": 1.0]
+        profile.artists = ["K": 1.0]
+        profile.species = [25: 1.0]
+        let setAndArtist = card("set-artist", set: "A", artist: "K")   // 1.0 + 1.0 = 2.0
+        let speciesOnly = card("species", set: "Z", artist: "Z")       // species only
+        let ranked = DiscoverAffinity.rank(
+            candidates: [setAndArtist, speciesOnly],
+            dexIds: ["species": [25]], profile: profile)
+        XCTAssertEqual(ranked.first?.id, "species",
+                       "a liked species must outrank a liked set + liked artist")
+    }
+
     // MARK: band fit and twins in the ranker
 
     private func card(_ id: String, set: String, artist: String? = nil) -> CardRecord {
