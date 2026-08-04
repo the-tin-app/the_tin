@@ -45,6 +45,26 @@ struct PriceBand: Equatable {
                          p75: percentile(sample, 0.75))
     }
 
+    /// Purchases older than this stop describing what the user buys today.
+    static let purchaseWindowMonths = 24
+
+    /// Build the band from the user's own records.
+    ///
+    /// Sold copies are excluded — what you offloaded is not evidence of what you buy. An entry with
+    /// **no `acquiredAt` still counts**: `pricePaid` is the signal, and a missing date is an
+    /// unrecorded detail rather than proof the purchase is stale. (The spec said "entries with
+    /// `acquiredAt` within 24 months"; discarding every undated purchase would throw away most of a
+    /// typical collection, so undated entries are kept.)
+    static func make(entries: [CollectionEntry], wants: [String: WantEntry], now: Date) -> PriceBand? {
+        let cutoff = now.addingTimeInterval(-Double(purchaseWindowMonths) * 30.4 * 86_400)
+        let purchases: [Double] = entries.compactMap { entry in
+            guard !entry.isSold, let paid = entry.pricePaid else { return nil }
+            if let acquired = entry.acquiredAt, acquired < cutoff { return nil }
+            return paid
+        }
+        return make(purchases: purchases, targets: wants.values.compactMap(\.targetUsd))
+    }
+
     /// Multiplier applied to an affinity score: 1.0 inside the band, falling off linearly to
     /// `fitFloor` over one band-width in each direction, never below it.
     ///
