@@ -6,6 +6,23 @@ enum DiscoverAffinity {
     static let ownedWeight = 1.0
     static let wantedWeight = 2.0
 
+    /// How loudly a wishlist card speaks, by priority.
+    ///
+    /// A grail and a shrug used to weigh the same — every wanted card accumulated a flat
+    /// `wantedWeight`, so `WantPriority` was recorded and never read.
+    ///
+    /// ⚠️ `.normal` is deliberately **equal to `wantedWeight`**, not lower. Rebasing the scale so
+    /// Normal keeps today's value means a wishlist with no priorities set ranks exactly as it
+    /// always has; only a user who actually set a priority sees a change.
+    static func weight(for priority: WantPriority) -> Double {
+        switch priority {
+        case .grail:  return 3.0
+        case .high:   return 2.5
+        case .normal: return 2.0
+        case .low:    return 1.0
+        }
+    }
+
     /// Normalized taste weights per dimension (each value in 0...1), from the user's cards.
     struct Profile: Equatable {
         var sets: [String: Double] = [:]
@@ -21,7 +38,10 @@ enum DiscoverAffinity {
     /// Build normalized affinity histograms. `dexIds` maps card id → its species dex ids.
     /// Wanted cards weight higher than owned (active intent). Each dimension is normalized by
     /// its own max so no single dimension dominates purely by raw count.
-    static func profile(owned: [CardRecord], wanted: [CardRecord], dexIds: [String: [Int]]) -> Profile {
+    /// `priorities` maps a wanted card's id to its `WantPriority`. An id missing from the map is
+    /// treated as `.normal` — the same lenient default `WantPriority`'s decoder uses.
+    static func profile(owned: [CardRecord], wanted: [CardRecord], dexIds: [String: [Int]],
+                        priorities: [String: WantPriority] = [:]) -> Profile {
         var sets: [String: Double] = [:]
         var species: [Int: Double] = [:]
         var artists: [String: Double] = [:]
@@ -38,7 +58,9 @@ enum DiscoverAffinity {
             }
         }
         accumulate(owned, ownedWeight)
-        accumulate(wanted, wantedWeight)
+        for card in wanted {
+            accumulate([card], weight(for: priorities[card.id] ?? .normal))
+        }
 
         return Profile(sets: normalize(sets), species: normalize(species),
                        artists: normalize(artists), rarities: normalize(rarities), types: normalize(types))

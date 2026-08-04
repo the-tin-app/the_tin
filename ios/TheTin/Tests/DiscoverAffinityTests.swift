@@ -132,4 +132,36 @@ final class DiscoverAffinityTests: XCTestCase {
         let ranked = DiscoverAffinity.rank(candidates: candidates, dexIds: [:], profile: p, perGroupCap: 3, limit: 30)
         XCTAssertEqual(ranked.map(\.id), ["aaa", "bbb"]) // lower id first on tie
     }
+
+    // MARK: wishlist priority weighting
+
+    func testWishlistPriorityWeights() {
+        XCTAssertEqual(DiscoverAffinity.weight(for: .grail), 3.0)
+        XCTAssertEqual(DiscoverAffinity.weight(for: .high), 2.5)
+        XCTAssertEqual(DiscoverAffinity.weight(for: .normal), 2.0)
+        XCTAssertEqual(DiscoverAffinity.weight(for: .low), 1.0)
+    }
+
+    func testNormalPriorityMatchesTodaysFlatWantedWeight() {
+        // Rebasing guard: a wishlist with no priorities set must rank exactly as it does today.
+        XCTAssertEqual(DiscoverAffinity.weight(for: .normal), DiscoverAffinity.wantedWeight)
+    }
+
+    func testAGrailOutweighsALowWant() {
+        let wanted = [card("g", set: "G"), card("l", set: "L")]
+        let p = DiscoverAffinity.profile(owned: [], wanted: wanted, dexIds: [:],
+                                         priorities: ["g": .grail, "l": .low])
+        // Normalized by the max (grail, 3.0): G = 1.0, L = 1/3.
+        XCTAssertEqual(p.sets["G"] ?? 0, 1.0, accuracy: 0.001)
+        XCTAssertEqual(p.sets["L"] ?? 0, 1.0 / 3.0, accuracy: 0.001)
+    }
+
+    func testAnUnlistedPriorityFallsBackToNormal() {
+        // Mirrors WantPriority's own lenient decode: an absent entry is Normal, not zero.
+        let wanted = [card("w", set: "W")]
+        let withMap = DiscoverAffinity.profile(owned: [], wanted: wanted, dexIds: [:],
+                                               priorities: ["w": .normal])
+        let withoutMap = DiscoverAffinity.profile(owned: [], wanted: wanted, dexIds: [:])
+        XCTAssertEqual(withMap, withoutMap)
+    }
 }
