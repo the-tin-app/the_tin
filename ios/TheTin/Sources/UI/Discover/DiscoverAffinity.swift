@@ -66,6 +66,43 @@ enum DiscoverAffinity {
                        artists: normalize(artists), rarities: normalize(rarities), types: normalize(types))
     }
 
+    /// How far either side of a liked species counts as "the same family".
+    ///
+    /// ⚠️ A heuristic, and a knowingly imperfect one. Evolution families occupy contiguous dex ids
+    /// (Charmander 4 → Charmeleon 5 → Charizard 6), so a radius of 2 covers a three-stage family
+    /// from either end — but it is wrong for Eeveelutions and for cross-generation evolutions, and
+    /// it will occasionally pull in an unrelated neighbour. Accepted because it costs nothing; the
+    /// upgrade, if it misfires visibly, is TCGdex's `evolveFrom` as a real evolution table.
+    static let adjacencyRadius = 2
+    static let adjacencyWeight = 0.6
+    static let coOccurrenceWeight = 0.5
+
+    /// Expand the profile's species histogram into a wider "and things like these" map.
+    ///
+    /// `seed` is `Profile.species`; `coOccurring` comes from `CatalogStore.coOccurringDexIds(with:)`
+    /// and is passed in rather than fetched so this stays pure and testable.
+    ///
+    /// Derived weights scale with the seed that produced them — a species you barely like does not
+    /// promote its whole family as hard as one you love. Where two routes reach the same dex id the
+    /// **strongest wins**, so an exact match is never downgraded by a weaker derived route.
+    static func relatedSpecies(seed: [Int: Double], coOccurring: Set<Int>) -> [Int: Double] {
+        guard !seed.isEmpty else { return [:] }
+        var out = seed
+        func offer(_ dexId: Int, _ weight: Double) {
+            guard dexId > 0 else { return }
+            out[dexId] = max(out[dexId] ?? 0, weight)
+        }
+        for (dexId, weight) in seed {
+            for offset in 1...adjacencyRadius {
+                offer(dexId - offset, weight * adjacencyWeight)
+                offer(dexId + offset, weight * adjacencyWeight)
+            }
+        }
+        let strongestSeed = seed.values.max() ?? 0
+        for dexId in coOccurring { offer(dexId, strongestSeed * coOccurrenceWeight) }
+        return out
+    }
+
     private static func normalize<K>(_ hist: [K: Double]) -> [K: Double] {
         guard let maxValue = hist.values.max(), maxValue > 0 else { return [:] }
         return hist.mapValues { $0 / maxValue }
