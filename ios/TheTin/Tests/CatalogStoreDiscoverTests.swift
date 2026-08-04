@@ -20,6 +20,12 @@ final class CatalogStoreDiscoverTests: XCTestCase {
             INSERT INTO price_latest VALUES ('s1-3',NULL,NULL,NULL,NULL,NULL,NULL,'2026-07-06');
             INSERT INTO connected_art VALUES ('scene-a','Night Picnic','s1-2',1);
             INSERT INTO connected_art VALUES ('scene-a','Night Picnic','s1-1',0);
+            CREATE TABLE card_dex(card_id TEXT NOT NULL, dex_id INTEGER NOT NULL, PRIMARY KEY(card_id, dex_id));
+            INSERT INTO card_dex VALUES ('s1-1',25);
+            INSERT INTO card_dex VALUES ('s1-2',26);
+            INSERT INTO card_dex VALUES ('s1-3',133);
+            INSERT INTO card_dex VALUES ('tag-1',25);
+            INSERT INTO card_dex VALUES ('tag-1',644);
             """)
         }
         try q.close()
@@ -45,5 +51,30 @@ final class CatalogStoreDiscoverTests: XCTestCase {
         XCTAssertEqual(scenes.first?.sceneId, "scene-a")
         XCTAssertEqual(scenes.first?.title, "Night Picnic")
         XCTAssertEqual(scenes.first?.cardIds, ["s1-1","s1-2"]) // position 0 then 1
+    }
+
+    // MARK: co-occurring species
+
+    func testCoOccurringDexIdsFindsPartnersOnMultiDexCards() throws {
+        let store = try makeStore()
+        // 'tag-1' carries both 25 and 644, so seeding 25 surfaces 644.
+        XCTAssertEqual(try store.coOccurringDexIds(with: [25]), [644])
+    }
+
+    func testCoOccurringDexIdsExcludesTheSeedsThemselves() throws {
+        let store = try makeStore()
+        let out = try store.coOccurringDexIds(with: [25, 644])
+        XCTAssertTrue(out.isEmpty, "seeds must not be returned as their own neighbours")
+    }
+
+    func testCoOccurringDexIdsIsEmptyForASoloSpecies() throws {
+        let store = try makeStore()
+        // 133 (Eevee) only ever appears alone in this fixture.
+        XCTAssertEqual(try store.coOccurringDexIds(with: [133]), [])
+    }
+
+    func testCoOccurringDexIdsHandlesAnEmptySeedList() throws {
+        let store = try makeStore()
+        XCTAssertEqual(try store.coOccurringDexIds(with: []), [])
     }
 }
