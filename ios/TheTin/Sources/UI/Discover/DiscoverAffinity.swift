@@ -108,14 +108,26 @@ enum DiscoverAffinity {
         return hist.mapValues { $0 / maxValue }
     }
 
-    /// Sum of normalized profile weights across a candidate's dimensions.
-    static func score(_ card: CardRecord, dexIds: [Int], profile: Profile) -> Double {
+    /// Added to the score of a card whose art is an identical-art reprint of something on the
+    /// wishlist. `card_twin` was built for the scanner's twin-aware lock and is free to reuse here:
+    /// "you want this exact art, and here it is cheaper from another print".
+    static let twinBoost = 0.9
+
+    /// Sum of normalized profile weights across a candidate's dimensions, plus a twin boost, all
+    /// scaled by how well the price fits the user's band.
+    ///
+    /// The band is a **multiplier and never a filter** — see `PriceBand.fit`. An absent band or an
+    /// absent price is neutral.
+    static func score(_ card: CardRecord, dexIds: [Int], profile: Profile,
+                      band: PriceBand? = nil, priceUsd: Double? = nil,
+                      twinOfWanted: Bool = false) -> Double {
         var s = profile.sets[card.setId] ?? 0
         if let a = card.artist { s += profile.artists[a] ?? 0 }
         if let r = card.rarity { s += profile.rarities[r] ?? 0 }
         for t in card.types { s += profile.types[t] ?? 0 }
         for d in dexIds { s += profile.species[d] ?? 0 }
-        return s
+        if twinOfWanted { s += twinBoost }
+        return s * (band?.fit(priceUsd) ?? 1.0)
     }
 
     /// A candidate paired with its computed affinity score.
@@ -128,11 +140,14 @@ enum DiscoverAffinity {
     /// per-species, and per-artist diversity caps, take `limit`. The per-artist cap stops one
     /// prolific favorite illustrator from flooding the ranking (long "More from X" runs).
     static func rank(candidates: [CardRecord], dexIds: [String: [Int]], profile: Profile,
-                     perGroupCap: Int = 3, limit: Int = 30) -> [CardRecord] {
+                     band: PriceBand? = nil, prices: [String: Double] = [:],
+                     twinIds: Set<String> = [], perGroupCap: Int = 3, limit: Int = 30) -> [CardRecord] {
         var scored: [ScoredCard] = []
         for candidate in candidates {
             let candidateDexIds: [Int] = dexIds[candidate.id] ?? []
-            let candidateScore: Double = score(candidate, dexIds: candidateDexIds, profile: profile)
+            let candidateScore: Double = score(candidate, dexIds: candidateDexIds, profile: profile,
+                                               band: band, priceUsd: prices[candidate.id],
+                                               twinOfWanted: twinIds.contains(candidate.id))
             if candidateScore > 0 {
                 scored.append(ScoredCard(card: candidate, score: candidateScore))
             }

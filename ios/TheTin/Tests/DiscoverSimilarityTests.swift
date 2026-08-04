@@ -57,4 +57,61 @@ final class DiscoverSimilarityTests: XCTestCase {
     func testAnEmptySeedProducesNothing() {
         XCTAssertTrue(DiscoverAffinity.relatedSpecies(seed: [:], coOccurring: [644]).isEmpty)
     }
+
+    // MARK: band fit and twins in the ranker
+
+    private func card(_ id: String, set: String, artist: String? = nil) -> CardRecord {
+        CardRecord(id: id, setId: set, number: "1", name: id, hp: nil, types: [],
+                   rarity: nil, artist: artist, imageBase: nil, imageUrl: nil, tcgplayerId: nil)
+    }
+
+    func testBandFitReordersTwoOtherwiseEqualCards() {
+        let owned = [card("o1", set: "A")]
+        let profile = DiscoverAffinity.profile(owned: owned, wanted: [], dexIds: [:])
+        let band = PriceBand(p25: 10, p50: 15, p75: 20)
+        let candidates = [card("expensive", set: "A"), card("in-band", set: "A")]
+        let ranked = DiscoverAffinity.rank(
+            candidates: candidates, dexIds: [:], profile: profile, band: band,
+            prices: ["expensive": 500, "in-band": 15])
+        XCTAssertEqual(ranked.map(\.id), ["in-band", "expensive"])
+    }
+
+    func testAnOutOfBandCardIsDemotedButNeverDropped() {
+        // The 0.35 floor exists so a grail stays visible. It must still be in the result.
+        let owned = [card("o1", set: "A")]
+        let profile = DiscoverAffinity.profile(owned: owned, wanted: [], dexIds: [:])
+        let band = PriceBand(p25: 10, p50: 15, p75: 20)
+        let ranked = DiscoverAffinity.rank(
+            candidates: [card("grail", set: "A")], dexIds: [:], profile: profile, band: band,
+            prices: ["grail": 100_000])
+        XCTAssertEqual(ranked.map(\.id), ["grail"])
+    }
+
+    func testAnUnpricedCardIsNotPenalisedByTheBand() {
+        let owned = [card("o1", set: "A")]
+        let profile = DiscoverAffinity.profile(owned: owned, wanted: [], dexIds: [:])
+        let band = PriceBand(p25: 10, p50: 15, p75: 20)
+        let ranked = DiscoverAffinity.rank(
+            candidates: [card("unpriced", set: "A"), card("far-out", set: "A")],
+            dexIds: [:], profile: profile, band: band, prices: ["far-out": 100_000])
+        XCTAssertEqual(ranked.first?.id, "unpriced")
+    }
+
+    func testATwinOfAWantedCardOutranksAPlainMatch() {
+        let owned = [card("o1", set: "A")]
+        let profile = DiscoverAffinity.profile(owned: owned, wanted: [], dexIds: [:])
+        let ranked = DiscoverAffinity.rank(
+            candidates: [card("plain", set: "A"), card("twin", set: "A")],
+            dexIds: [:], profile: profile, twinIds: ["twin"])
+        XCTAssertEqual(ranked.map(\.id), ["twin", "plain"])
+    }
+
+    func testRankWithNoBandAndNoTwinsIsUnchanged() {
+        // The defaults must be a no-op, or every existing call site silently changes behaviour.
+        let owned = [card("o1", set: "A", artist: "K")]
+        let profile = DiscoverAffinity.profile(owned: owned, wanted: [], dexIds: [:])
+        let candidates = [card("c2", set: "A", artist: "K"), card("c1", set: "A", artist: "Z")]
+        XCTAssertEqual(DiscoverAffinity.rank(candidates: candidates, dexIds: [:], profile: profile).map(\.id),
+                       ["c2", "c1"])
+    }
 }
