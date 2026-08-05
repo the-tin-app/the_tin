@@ -8,13 +8,11 @@ struct DiscoverView: View {
     @State private var model: DiscoverModel?
 
     var body: some View {
-        Group {
-            if let model, model.isLoaded {
-                DiscoverHomeView(model: model, store: store, collection: collection, wants: wants)
-            } else {
-                TinLoadingView(label: "Finding cards for you…")
-            }
-        }
+        // One view, loaded or not. This used to be `Group { if isLoaded { home } else { TinLoadingView } }`,
+        // which is two `_ConditionalContent` identities — so `isLoaded` flipping DESTROYED the layout and
+        // rebuilt it, and the centred loading tin was replaced by a top-anchored scroll view. On an A10
+        // iPad that reads as the whole screen popping to the top. The home renders its own skeletons now.
+        DiscoverHomeView(model: model, store: store, collection: collection, wants: wants)
         .navigationTitle("Discover")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: CardID.self) { cardID in
@@ -51,10 +49,14 @@ struct DiscoverView: View {
 }
 
 private struct DiscoverHomeView: View {
-    let model: DiscoverModel
+    /// Nil until the first `load()` returns — the rows render skeletons in the meantime rather than
+    /// the surface being swapped out for a spinner.
+    let model: DiscoverModel?
     let store: CatalogStore
     var collection: CollectionModel?
     var wants: WantsModel?
+
+    private var isLoaded: Bool { model?.isLoaded ?? false }
 
     var body: some View {
         ScrollView {
@@ -72,13 +74,15 @@ private struct DiscoverHomeView: View {
                 .buttonStyle(.plain)
                 .padding(.horizontal)
                 ForEach(DiscoverModel.StreamKind.allCases, id: \.self) { kind in
-                    let cards = model.previews[kind] ?? []
-                    if !cards.isEmpty {
+                    let cards = model?.previews[kind] ?? []
+                    // Every row is present while loading; only a row that is genuinely empty
+                    // *after* loading is dropped.
+                    if !isLoaded || !cards.isEmpty {
                         StreamPreviewRow(kind: kind, cards: cards, store: store,
                                          wants: wants, collection: collection)
                     }
                 }
-                if !model.connections.isEmpty {
+                if let model, !model.connections.isEmpty {
                     ConnectionsRow(connections: model.connections, store: store,
                                    wants: wants, collection: collection)
                 }
@@ -99,18 +103,25 @@ private struct StreamPreviewRow: View {
     var body: some View {
         // Preview price = raw market, falling back to the NM condition price (a separate feed)
         // when raw is absent. Batched once per row rather than one query per tile.
-        let prices = (try? store.previewPrices(cardIds: cards.map(\.id))) ?? [:]
+        let prices = cards.isEmpty ? [:] : (try? store.previewPrices(cardIds: cards.map(\.id))) ?? [:]
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(kind.title).font(.title3.bold())
                 Spacer()
+                // Kept (not hidden) while loading so the header doesn't reflow when cards land;
+                // there is no stream to push until the model exists.
                 NavigationLink(value: StreamRoute(kind: kind)) {
                     Text("See all ›").font(.subheadline)
                 }
+                .disabled(cards.isEmpty)
             }
             .padding(.horizontal)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
+                    if cards.isEmpty {
+                        // Enough to fill the widest phone; the strip scrolls, so more is wasted work.
+                        ForEach(0..<4, id: \.self) { _ in SkeletonTile() }
+                    }
                     ForEach(cards) { card in
                         DiscoverTile(card: card, value: prices[card.id], wants: wants,
                                      collection: collection, store: store)
@@ -119,6 +130,24 @@ private struct StreamPreviewRow: View {
                 .padding(.horizontal)
             }
         }
+    }
+}
+
+/// A `DiscoverTile` with the data taken out: same metrics, so nothing moves when the real tile
+/// replaces it. Built from the real `Text`/`PriceLabel` under `.redacted` rather than hand-sized
+/// bars, which is how the line heights stay exact for free.
+private struct SkeletonTile: View {
+    var body: some View {
+        VStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.quaternary)
+                .frame(width: 110, height: 110 / 0.717) // the card ratio CardImageView applies
+            Text("Card name").font(.caption).lineLimit(1)
+            PriceLabel(value: 0) // a *priced* label — `nil` renders "no data" in the lighter caption
+        }
+        .frame(width: 120)
+        .redacted(reason: .placeholder)
+        .accessibilityHidden(true)
     }
 }
 
