@@ -80,7 +80,7 @@ private struct MainTabView: View {
         TabView(selection: $selection) {
             NavigationStack(path: $discoverPath) {
                 DiscoverView(store: store, collection: collection, wants: model.wants,
-                             goals: model.setGoals)
+                             goals: model.setGoals, signals: model.discoverSignals)
                     // Install day is when someone is most likely on home Wi-Fi — the right moment
                     // to mention the scanner. A dismissible banner, never a modal: stacking a
                     // second large download behind the catalog's would make first run worse.

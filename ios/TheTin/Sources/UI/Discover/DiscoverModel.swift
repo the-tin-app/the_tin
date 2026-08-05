@@ -25,11 +25,15 @@ final class DiscoverModel {
     /// Taste state, recomputed on every signal change and reused by `makeStream` on the main actor.
     private(set) var profile = DiscoverAffinity.Profile()
     private(set) var tasteIds: Set<String> = []
-    /// Average USD price of the user's taste cards — the reference for "cheaper / pricier" captions.
-    private(set) var referencePrice: Double?
     /// The built shelves, in priority order. `ForYouStream` round-robins them for the home strip;
     /// `ForYouShelvesView` renders them as rows.
     private(set) var shelves: [Shelf] = []
+    /// `cardId` → why it is being shown, taken from the shelf that placed it.
+    ///
+    /// Built once per assembly rather than derived per card. The old caption path re-derived a
+    /// reason from the card's own properties on every render, at the cost of three synchronous
+    /// catalog reads each (`dexIds`, `pokemonNames`, `price`) on the main actor during deck scroll.
+    private(set) var shelfCaptions: [String: String] = [:]
     /// The user's buying range. `nil` until there is enough purchase or target history for one.
     private(set) var band: PriceBand?
 
@@ -48,16 +52,18 @@ final class DiscoverModel {
         self.seed = UInt64.random(in: .min ... .max)
     }
 
-    /// The "why" caption shown under a card in the immersive deck: the ForYou experiment tag,
-    /// a formatted chase price, or the full-art rarity. `nil` collapses the caption line.
+    /// The "why" caption shown under a card in the immersive deck. `nil` collapses the caption line.
+    ///
+    /// ⚠️ For You's caption is now a **lookup of the reason the card was chosen**, not a
+    /// re-derivation from the card's own properties. It used to call
+    /// `DiscoverAffinity.forYouReason`, which ranked full-art above every other explanation — so a
+    /// card in the deck *because it completes a set you are collecting* read "✨ Full-art find".
+    /// Verified on the simulator against real data: every card in the round-robin said that,
+    /// including the two set-goal cards leading it. It described the card instead of explaining it.
     func caption(for card: CardRecord, kind: StreamKind) -> String? {
         switch kind {
         case .forYou:
-            let dexIds: [Int] = ((try? store.dexIds(forCards: [card.id])) ?? [:])[card.id] ?? []
-            let names: [Int: String] = (try? store.pokemonNames(dexIds: dexIds)) ?? [:]
-            let price: Double? = (try? store.price(cardId: card.id))?.rawUsd
-            return DiscoverAffinity.forYouReason(card: card, cardDexIds: dexIds, speciesNames: names,
-                                                 profile: profile, priceUsd: price, referencePrice: referencePrice)
+            return shelfCaptions[card.id]
         case .chase:
             guard let usd = (try? store.price(cardId: card.id))?.rawUsd else { return nil }
             return "Chase · " + usd.formatted(.currency(code: "USD"))
@@ -118,9 +124,9 @@ final class DiscoverModel {
 
         profile = assembled.profile
         tasteIds = assembled.tasteIds
-        referencePrice = assembled.referencePrice
         band = assembled.band
         shelves = assembled.shelves
+        shelfCaptions = assembled.shelfCaptions
         connections = assembled.connections
         previews = assembled.previews
         isLoaded = true
@@ -131,9 +137,9 @@ final class DiscoverModel {
     private struct Assembled: Sendable {
         var profile: DiscoverAffinity.Profile
         var tasteIds: Set<String>
-        var referencePrice: Double?
         var band: PriceBand?
         var shelves: [Shelf]
+        var shelfCaptions: [String: String]
         var connections: [Connection]
         var previews: [StreamKind: [CardRecord]]
     }
@@ -177,9 +183,12 @@ final class DiscoverModel {
                                          tasteIds: tasteIds, dismissed: inputs.dismissed,
                                          priceCeiling: priceCeiling, relatedSpecies: relatedSpecies)
 
-        // Reference price = average USD of the user's taste cards (nil when none are priced).
-        let tastePrices = ((try? store.prices(cardIds: Array(tasteIds))) ?? [:]).values.compactMap(\.rawUsd)
-        let referencePrice: Double? = tastePrices.isEmpty ? nil : tastePrices.reduce(0, +) / Double(tastePrices.count)
+        // One entry per card, from the shelf that placed it. ShelfBuilder dedupes across shelves,
+        // so this is 1:1 and the later shelf never overwrites an earlier, stronger reason.
+        var shelfCaptions: [String: String] = [:]
+        for shelf in shelves {
+            for id in shelf.cardIds where shelfCaptions[id] == nil { shelfCaptions[id] = shelf.caption }
+        }
 
         let connections = ConnectionsBuilder.build(store: store)
 
@@ -189,7 +198,7 @@ final class DiscoverModel {
             previews[kind] = Array(stream.page(0).prefix(previewCount))
         }
 
-        return Assembled(profile: profile, tasteIds: tasteIds, referencePrice: referencePrice,
-                         band: band, shelves: shelves, connections: connections, previews: previews)
+        return Assembled(profile: profile, tasteIds: tasteIds, band: band, shelves: shelves,
+                         shelfCaptions: shelfCaptions, connections: connections, previews: previews)
     }
 }

@@ -25,7 +25,7 @@ final class ForYouStreamTests: XCTestCase {
     }
 
     private func shelf(_ id: String, _ ids: [String]) -> Shelf {
-        Shelf(id: id, kind: .band, title: id, cardIds: ids)
+        Shelf(id: id, kind: .band, subject: nil, detail: nil, cardIds: ids)
     }
 
     /// The home strip shows one card per reason before a second from any of them, so the first

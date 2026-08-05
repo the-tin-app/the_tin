@@ -6,13 +6,58 @@ import OSLog
 /// structure that actually decided the deck — `perGroupCap: 3` on set / artist / species — was
 /// invisible and unexplainable.
 struct Shelf: Identifiable, Equatable {
-    enum Kind: String {
+    enum Kind: String, CaseIterable {
         case setGoal, band, historicLow, weeklyDrop, species, artist, explore
     }
     let id: String
     let kind: Kind
-    let title: String
+    /// What this shelf is about — a set name, a species, an artist, a price cap. `nil` where the
+    /// reason needs no subject ("Cheapest in 6 months" is about nothing but itself).
+    let subject: String?
+    /// A shelf-level fact for the row header only ("120 left").
+    let detail: String?
     let cardIds: [String]
+
+    /// The row header on the shelves screen.
+    var title: String {
+        let base: String
+        switch kind {
+        case .setGoal:     base = subject.map { "Finish \($0)" } ?? "Finish a set you collect"
+        case .band:        base = subject.map { "Under \($0) · your usual range" } ?? "Your usual range"
+        case .historicLow: base = "Cheapest in 6 months"
+        case .weeklyDrop:  base = "Down this week"
+        case .species:     base = subject.map { "Because you like \($0)" } ?? "A species you like"
+        case .artist:      base = subject.map { "More from \($0)" } ?? "An artist you like"
+        case .explore:     base = "Something new"
+        }
+        return detail.map { "\(base) · \($0)" } ?? base
+    }
+
+    /// Why **this card** is in front of you, shown under it in the deck.
+    ///
+    /// ⚠️ This replaces `DiscoverAffinity.forYouReason`, which answered a different question: it
+    /// ranked *properties of the card* (full-art first, then species, then artist, then set) and had
+    /// no idea why the card had been chosen. Verified on the simulator against real data, every card
+    /// in the round-robin read "✨ Full-art find" — including the two leading it, which were there
+    /// because they complete sets the collector is chasing. The card was being described instead of
+    /// explained.
+    ///
+    /// The shelf already knows the answer, so the caption is now a lookup rather than a re-derivation
+    /// — which also deletes three synchronous catalog reads per card render on the main actor.
+    ///
+    /// Shelf-level facts (`detail`) are deliberately dropped: how many cards remain in a set belongs
+    /// to the row header, not under the one card in your hand.
+    var caption: String {
+        switch kind {
+        case .setGoal:     return subject.map { "Finishing \($0)" } ?? "Finishing a set you collect"
+        case .band:        return "In your usual range"
+        case .historicLow: return "Cheapest in 6 months"
+        case .weeklyDrop:  return "Down this week"
+        case .species:     return subject.map { "Because you like \($0)" } ?? "A species you like"
+        case .artist:      return subject.map { "More from \($0)" } ?? "An artist you like"
+        case .explore:     return "Something new"
+        }
+    }
 }
 
 /// Pure aggregation over `CatalogStore` reads, following `ConnectionsBuilder`.
@@ -152,12 +197,13 @@ enum ShelfBuilder {
         /// A shelf with no data does NOT render. Not an empty state, not a placeholder — absent,
         /// the rule the Supporters row already follows. Distinct from the Movers case, where a bold
         /// `+$0.00` was a lie about movement; here there is no claim to get wrong.
-        func append(_ kind: Shelf.Kind, id: String, title: String, cards: [CardRecord]) {
+        func append(_ kind: Shelf.Kind, id: String, subject: String? = nil,
+                    detail: String? = nil, cards: [CardRecord]) {
             let priced = prices(cards)
             let ids = rank(admit(cards, priced), priced)
             guard !ids.isEmpty else { return }
             used.formUnion(ids)
-            out.append(Shelf(id: id, kind: kind, title: title, cardIds: ids))
+            out.append(Shelf(id: id, kind: kind, subject: subject, detail: detail, cardIds: ids))
         }
 
         // 1. Set goals — the user literally named the set.
@@ -177,8 +223,8 @@ enum ShelfBuilder {
             let remaining = read("cardsMissingFromSet(\(setId), count)") {
                 try store.cardsMissingFromSet(setId, owned: owned, band: nil, limit: Int.max)
             }.count
-            append(.setGoal, id: "setGoal/\(setId)",
-                   title: "Finish \(record.name) · \(remaining) left", cards: cards)
+            append(.setGoal, id: "setGoal/\(setId)", subject: record.name,
+                   detail: "\(remaining) left", cards: cards)
         }
 
         // 2. Buy signals against a stated budget.
@@ -196,8 +242,7 @@ enum ShelfBuilder {
                 try store.cardsNearHistoricLow(candidateIds: candidateIds,
                                                withinPct: historicLowWithinPct, limit: maxCards * 2)
             }
-            append(.historicLow, id: "historicLow", title: "Cheapest in 6 months",
-                   cards: lowIds.compactMap { byId[$0] })
+            append(.historicLow, id: "historicLow", cards: lowIds.compactMap { byId[$0] })
 
             let drops = read("cardsDroppedThisWeek") {
                 try store.cardsDroppedThisWeek(candidateIds: candidateIds,
@@ -209,12 +254,11 @@ enum ShelfBuilder {
                 .filter { !used.contains($0) }.prefix(maxCards))
             if !dropIds.isEmpty {
                 used.formUnion(dropIds)
-                out.append(Shelf(id: "weeklyDrop", kind: .weeklyDrop, title: "Down this week",
-                                 cardIds: dropIds))
+                out.append(Shelf(id: "weeklyDrop", kind: .weeklyDrop, subject: nil,
+                                 detail: nil, cardIds: dropIds))
             }
 
-            append(.band, id: "band", title: "Under $\(Int(band.p75)) · your usual range",
-                   cards: bandCards)
+            append(.band, id: "band", subject: "$\(Int(band.p75))", cards: bandCards)
         }
 
         // 3. Inferred similarity.
@@ -229,13 +273,13 @@ enum ShelfBuilder {
             let cards = read("cardsForDexIds(\(seed))") {
                 try store.cardsForDexIds(family, band: band, limit: maxCards * 4)
             }
-            append(.species, id: "species/\(seed)", title: "Because you like \(name)", cards: cards)
+            append(.species, id: "species/\(seed)", subject: name, cards: cards)
         }
 
         for artist in profile.artists.sorted(by: { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key })
             .prefix(maxArtistShelves).map(\.key) {
             let cards = read("cardsByArtist(\(artist))") { try store.cards(byArtist: artist) }
-            append(.artist, id: "artist/\(artist)", title: "More from \(artist)", cards: cards)
+            append(.artist, id: "artist/\(artist)", subject: artist, cards: cards)
         }
 
         // 4. Exploration: a set AND artist never touched — but IN BAND. Novelty comes from the
@@ -245,7 +289,7 @@ enum ShelfBuilder {
             let fresh = bandCards.filter {
                 profile.sets[$0.setId] == nil && ($0.artist.map { profile.artists[$0] == nil } ?? true)
             }
-            append(.explore, id: "explore", title: "Something new", cards: fresh)
+            append(.explore, id: "explore", cards: fresh)
         }
 
         return out

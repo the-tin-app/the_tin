@@ -21,6 +21,13 @@ final class AppModel {
     /// The sets you're collecting. Created eagerly (it's a file read, no network) so every screen
     /// can ask; nil never happens in the app, only in catalog-only tests.
     private(set) var setGoals: SetGoalsModel? = SetGoalsModel()
+    /// Explicit Discover feedback — thumbs-down and stated reasons. Created eagerly for the same
+    /// reason as `setGoals`: it is a small file read with no network behind it.
+    ///
+    /// Deliberately its OWN file rather than a field in `wants.json`. A failed read here costs a
+    /// handful of thumbs-downs; a failed `wants.json` decode silently emptied the whole wishlist and
+    /// the next write persisted the emptiness.
+    private(set) var discoverSignals: DiscoverSignalsModel? = DiscoverSignalsModel()
     private(set) var catalogState: CatalogState?
     /// Which remote served the most recent catalog operation (nil until the first update runs).
     private(set) var activeSource: CatalogSource?

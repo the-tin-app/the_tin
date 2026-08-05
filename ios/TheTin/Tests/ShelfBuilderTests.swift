@@ -174,6 +174,72 @@ final class ShelfBuilderTests: XCTestCase {
         XCTAssertEqual(goal.title, "Finish Pitch Black · 30 left")
     }
 
+    // MARK: Reason — title vs caption
+
+    /// ⚠️ The caption is what appears under a card in the deck, and it must say why THAT CARD is in
+    /// front of you. It used to come from `DiscoverAffinity.forYouReason`, which put full-art first
+    /// — so a card sitting in the deck *because it completes a set you are collecting* read
+    /// "✨ Full-art find". Verified on the simulator against real data: every card in the round-robin
+    /// said "Full-art find", including the two set-goal cards leading it.
+    func testCaptionSaysWhyTheCardIsThereNotWhatItLooksLike() {
+        let goal = Shelf(id: "setGoal/me05", kind: .setGoal, subject: "Pitch Black",
+                         detail: "120 left", cardIds: ["a"])
+        XCTAssertEqual(goal.title, "Finish Pitch Black · 120 left")
+        XCTAssertEqual(goal.caption, "Finishing Pitch Black")
+    }
+
+    /// A shelf-level fact belongs in the row header, never under a single card: how many cards are
+    /// left in a set is a property of the shelf, not of the card in your hand.
+    func testCaptionDropsShelfLevelDetail() {
+        for kind in [Shelf.Kind.setGoal, .band, .species, .artist] {
+            let shelf = Shelf(id: "x", kind: kind, subject: "Subject", detail: "99 left", cardIds: ["a"])
+            XCTAssertFalse(shelf.caption.contains("99 left"), "\(kind.rawValue) leaked shelf detail")
+            XCTAssertTrue(shelf.title.contains("99 left"), "\(kind.rawValue) dropped it from the header")
+        }
+    }
+
+    func testEveryKindHasABothTitleAndCaption() {
+        let subjects: [Shelf.Kind: String?] = [
+            .setGoal: "Pitch Black", .band: "$33", .historicLow: nil,
+            .weeklyDrop: nil, .species: "Articuno", .artist: "5ban Graphics", .explore: nil,
+        ]
+        let expected: [Shelf.Kind: (String, String)] = [
+            .setGoal:     ("Finish Pitch Black", "Finishing Pitch Black"),
+            .band:        ("Under $33 · your usual range", "In your usual range"),
+            .historicLow: ("Cheapest in 6 months", "Cheapest in 6 months"),
+            .weeklyDrop:  ("Down this week", "Down this week"),
+            .species:     ("Because you like Articuno", "Because you like Articuno"),
+            .artist:      ("More from 5ban Graphics", "More from 5ban Graphics"),
+            .explore:     ("Something new", "Something new"),
+        ]
+        for (kind, (title, caption)) in expected {
+            let shelf = Shelf(id: "x", kind: kind, subject: subjects[kind] ?? nil,
+                              detail: nil, cardIds: ["a"])
+            XCTAssertEqual(shelf.title, title, kind.rawValue)
+            XCTAssertEqual(shelf.caption, caption, kind.rawValue)
+        }
+    }
+
+    /// A missing subject must not produce "Because you like " with a dangling space.
+    func testAMissingSubjectStillReadsAsASentence() {
+        for kind in Shelf.Kind.allCases {
+            let shelf = Shelf(id: "x", kind: kind, subject: nil, detail: nil, cardIds: ["a"])
+            XCTAssertFalse(shelf.caption.hasSuffix(" "), kind.rawValue)
+            XCTAssertFalse(shelf.title.hasSuffix(" "), kind.rawValue)
+            XCTAssertFalse(shelf.caption.isEmpty, kind.rawValue)
+        }
+    }
+
+    func testTheBuilderGivesEachShelfTheSubjectItsCaptionNeeds() throws {
+        let profile = DiscoverAffinity.Profile(sets: ["s1": 1.0], species: [144: 1.0],
+                                               artists: ["Artist A": 1.0])
+        let shelves = build(store: try makeStore(), profile: profile)
+        XCTAssertEqual(shelves.first { $0.kind == .setGoal }?.caption, "Finishing Pitch Black")
+        XCTAssertEqual(shelves.first { $0.kind == .species }?.caption, "Because you like Articuno")
+        XCTAssertEqual(shelves.first { $0.kind == .artist }?.caption, "More from Artist A")
+        XCTAssertEqual(shelves.first { $0.kind == .band }?.caption, "In your usual range")
+    }
+
     func testShelvesWithNoDataAreAbsentNotEmpty() throws {
         let shelves = build(store: try makeStore())
         XCTAssertTrue(shelves.allSatisfy { !$0.cardIds.isEmpty })

@@ -20,7 +20,9 @@ final class DiscoverModelTests: XCTestCase {
             INSERT INTO set_info VALUES ('s1','Set One','2020-01-01',3,'E1','s1-2');
             INSERT INTO set_info VALUES ('s2','Set Two','2024-01-01',1,'E2','s2-1');
             INSERT INTO card VALUES ('s1-1','s1','1','Pikachu',60,'Lightning','Rare','K','img/s1-1',1);
-            INSERT INTO card VALUES ('s1-2','s1','2','Raichu',120,'Lightning','Rare','K','img/s1-2',2);
+            -- Ultra Rare on purpose: it is in `DiscoverConstants.fullArtRarities`, so this is the card
+            -- the old caption path would have labelled "✨ Full-art find" regardless of why it was chosen.
+            INSERT INTO card VALUES ('s1-2','s1','2','Raichu',120,'Lightning','Ultra Rare','K','img/s1-2',2);
             INSERT INTO card VALUES ('s1-3','s1','3','Eevee',50,'Colorless','Common','A','img/s1-3',3);
             INSERT INTO card VALUES ('s2-1','s2','1','Mew',60,'Psychic','Rare','A','img/s2-1',4);
             INSERT INTO price_latest VALUES ('s1-1',20.0,4.0,NULL,NULL,NULL,NULL,'2026-07-06');
@@ -122,14 +124,45 @@ final class DiscoverModelTests: XCTestCase {
         XCTAssertEqual(model.shelves.map(\.id), first)
     }
 
-    /// The caption is secondary now — the shelf title carries the reason — but it still resolves a
-    /// species reason for the deck.
+    /// ⚠️ The caption must name the reason the card was CHOSEN, not describe the card.
+    ///
+    /// This is the bug I watched on the simulator against real data: every card in the round-robin
+    /// read "✨ Full-art find", including the two set-goal cards leading it. `forYouReason` ranked
+    /// full-art above every other explanation and had no idea why the card had been picked, so a
+    /// card sitting in the deck because it completes a set you are chasing was described by its
+    /// finish. Here `s1-2` is an Ultra Rare — full-art by `DiscoverConstants.fullArtRarities` — in a
+    /// set the user is collecting, which is exactly the case that used to lie.
     @MainActor
-    func testForYouCaptionUsesSpeciesReason() async throws {
+    func testCaptionNamesTheShelfNotTheCardsFinish() async throws {
         let store = try makeStore()
         let model = DiscoverModel(store: store)
-        await model.load(inputs(owned: [("s1-1", 20)]))            // owns Pikachu (dex 25)
-        let raichu = try XCTUnwrap(try store.card(id: "s1-2"))     // dex 25, rarity Rare (not full-art)
-        XCTAssertEqual(model.caption(for: raichu, kind: .forYou), "Because you like Pikachu")
+        await model.load(inputs(goals: ["s1"]))
+
+        let raichu = try XCTUnwrap(try store.card(id: "s1-2"))
+        XCTAssertEqual(raichu.rarity, "Ultra Rare")
+        XCTAssertTrue(DiscoverConstants.fullArtRarities.contains("Ultra Rare"),
+                      "precondition: this is the rarity the old caption would have led with")
+        XCTAssertEqual(model.caption(for: raichu, kind: .forYou), "Finishing Set One")
+    }
+
+    @MainActor
+    func testCaptionUsesTheSpeciesShelfWhenThatIsWhyTheCardIsThere() async throws {
+        let store = try makeStore()
+        let model = DiscoverModel(store: store)
+        await model.load(inputs(owned: [("s1-1", 20), ("s1-3", 18), ("s2-1", 30)]))
+        let raichu = try XCTUnwrap(try store.card(id: "s1-2"))
+        let caption = try XCTUnwrap(model.caption(for: raichu, kind: .forYou))
+        XCTAssertFalse(caption.contains("Full-art"), "captions explain, they do not describe")
+    }
+
+    /// A card no shelf placed has no reason to give, and the caption line collapses rather than
+    /// inventing one.
+    @MainActor
+    func testAnUnplacedCardHasNoCaption() async throws {
+        let store = try makeStore()
+        let model = DiscoverModel(store: store)
+        await model.load(inputs(owned: [("s1-1", 20), ("s1-3", 18), ("s2-1", 30)]))
+        let owned = try XCTUnwrap(try store.card(id: "s1-1"))
+        XCTAssertNil(model.caption(for: owned, kind: .forYou))
     }
 }

@@ -268,29 +268,4 @@ enum DiscoverAffinity {
         return out
     }
 
-    /// The "why" caption shown under a For You card, in priority order. Full-art wins (product
-    /// choice): a SIR/IR reads "Full-art find" even when it also matches a liked species/artist.
-    /// Otherwise: liked species → liked artist → liked set → chase price → cheaper/pricier vs the
-    /// user's typical spend → a generic "something new". Pure/deterministic; `speciesNames` maps the
-    /// card's dex ids to display names, `referencePrice` is the user's average taste-card price.
-    static func forYouReason(card: CardRecord, cardDexIds: [Int], speciesNames: [Int: String],
-                             profile: Profile, priceUsd: Double?, referencePrice: Double?,
-                             chaseThreshold: Double = 50,
-                             fullArtRarities: Set<String> = DiscoverConstants.fullArtRarities) -> String {
-        if let r = card.rarity, fullArtRarities.contains(r) { return "✨ Full-art find" }
-        let likedDex: Int? = cardDexIds
-            .filter { (profile.species[$0] ?? 0) > 0 }
-            .max { (profile.species[$0] ?? 0) < (profile.species[$1] ?? 0) }
-        if let d = likedDex, let name = speciesNames[d] { return "Because you like \(name)" }
-        if let a = card.artist, (profile.artists[a] ?? 0) > 0 { return "More from \(a)" }
-        if (profile.sets[card.setId] ?? 0) > 0 { return "From a set you like" }
-        if let p = priceUsd {
-            if p >= chaseThreshold { return "🔥 Chase pick · $\(Int(p))" }
-            if let ref = referencePrice, ref > 0 {
-                if p <= ref * 0.7 { return "Cheaper pick" }
-                if p >= ref * 1.3 { return "A little pricier" }
-            }
-        }
-        return "Something new to try"
-    }
 }

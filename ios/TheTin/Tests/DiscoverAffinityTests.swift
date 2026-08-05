@@ -83,47 +83,6 @@ final class DiscoverAffinityTests: XCTestCase {
 
     // MARK: - For You caption reasons
 
-    /// Profile that likes: species 6 ("Charizard"), artist "Ken", set "A".
-    private var tasteProfile: DiscoverAffinity.Profile {
-        DiscoverAffinity.profile(owned: [card("o1", set: "A", artist: "Ken")], wanted: [], dexIds: ["o1": [6]])
-    }
-
-    func testReasonFullArtWinsOverEverything() {
-        // A full-art card that ALSO matches a liked species must read as a full-art find (user choice).
-        let c = card("c1", set: "A", artist: "Ken", rarity: "Illustration rare")
-        let r = DiscoverAffinity.forYouReason(card: c, cardDexIds: [6], speciesNames: [6: "Charizard"],
-                                              profile: tasteProfile, priceUsd: 500, referencePrice: 20)
-        XCTAssertEqual(r, "✨ Full-art find")
-    }
-
-    func testReasonSpeciesWhenNotFullArt() {
-        let c = card("c1", set: "Z", artist: "Nobody", rarity: "Common")
-        let r = DiscoverAffinity.forYouReason(card: c, cardDexIds: [6], speciesNames: [6: "Charizard"],
-                                              profile: tasteProfile, priceUsd: nil, referencePrice: nil)
-        XCTAssertEqual(r, "Because you like Charizard")
-    }
-
-    func testReasonArtistWhenNoSpeciesMatch() {
-        let c = card("c1", set: "Z", artist: "Ken", rarity: "Common")
-        let r = DiscoverAffinity.forYouReason(card: c, cardDexIds: [999], speciesNames: [:],
-                                              profile: tasteProfile, priceUsd: nil, referencePrice: nil)
-        XCTAssertEqual(r, "More from Ken")
-    }
-
-    func testReasonChasePriceWhenNoTasteMatch() {
-        let c = card("c1", set: "Z", artist: "Nobody", rarity: "Common")
-        let r = DiscoverAffinity.forYouReason(card: c, cardDexIds: [], speciesNames: [:],
-                                              profile: tasteProfile, priceUsd: 420, referencePrice: 20)
-        XCTAssertEqual(r, "🔥 Chase pick · $420")
-    }
-
-    func testReasonFallbackWhenNothingMatches() {
-        let c = card("c1", set: "Z", artist: "Nobody", rarity: "Common")
-        let r = DiscoverAffinity.forYouReason(card: c, cardDexIds: [], speciesNames: [:],
-                                              profile: tasteProfile, priceUsd: nil, referencePrice: nil)
-        XCTAssertEqual(r, "Something new to try")
-    }
-
     func testTiebreakByIdAscendingOnEqualScore() {
         // Two candidates in the same favored set → equal score; result must be id-ascending.
         let owned = [card("o1", set: "A")]
