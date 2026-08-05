@@ -20,6 +20,9 @@ struct StreamView: View {
     /// Bumped by `DiscoverModel` when a fresh assembly LANDS. Keyed off the completed recompute,
     /// not the user's tap, so `stream` is already rebuilt by the time this changes.
     var recomputeToken: Int = 0
+    /// What the user's feedback is currently filtering out, e.g. "Hiding cards over $2,400 · 3 hidden".
+    /// `nil` when nothing is active.
+    var activeFilterNote: String? = nil
     var collection: CollectionModel?
 
     @State private var pager: StreamPager?
@@ -30,9 +33,6 @@ struct StreamView: View {
     /// drives `fullScreenCover(item:)` directly.
     @State private var askingWhyFor: CardRecord?
     @State private var sharing: SharePayload?
-    /// Shown briefly after the deck restreams, because otherwise a recompute is invisible and
-    /// there is no way to tell whether the feedback did anything.
-    @State private var showUpdatedPill = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(StreamDensity.storageKey) private var densityRaw = StreamDensity.one.rawValue
 
@@ -77,25 +77,22 @@ struct StreamView: View {
         .onChange(of: recomputeToken) {
             guard let pager else { return }
             pager.restream(stream)
-            showUpdatedPill = true
-            Task {
-                await pager.loadNextPage()
-                try? await Task.sleep(for: .seconds(2))
-                showUpdatedPill = false
-            }
+            Task { await pager.loadNextPage() }
         }
-        .overlay(alignment: .top) {
-            if showUpdatedPill {
-                Label("Picks updated", systemImage: "sparkles")
-                    .font(.footnote.bold())
-                    .padding(.horizontal, 14).padding(.vertical, 8)
+        // ⚠️ A PERSISTENT line, not a transient toast. A 2s "Picks updated" pill was the first
+        // attempt and it is the wrong instrument twice over: it is gone before you look, and it
+        // says only that something happened rather than WHAT is being filtered. This states the
+        // active filter for as long as it is active, so the feedback is verifiable at any moment.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let activeFilterNote {
+                Text(activeFilterNote)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(.thinMaterial, in: Capsule())
-                    .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .accessibilityAddTraits(.isStaticText)
+                    .padding(.bottom, 4)
             }
         }
-        .animation(.snappy, value: showUpdatedPill)
         .onChange(of: currentIndex) {
             guard let i = currentIndex, let pager else { return }
             prefetchAround(i)
@@ -170,7 +167,6 @@ struct StreamView: View {
         NavigationLink(value: CardID(raw: card.id)) {
             VStack(spacing: 4) {
                 CardImageView(card: card, quality: "high")
-                    .overlay { whyPanel(for: card, compact: true) }
                     .overlay(alignment: .topLeading) { notForMe(for: card) }
                     .overlay(alignment: .topTrailing) { heart(for: card) }
                 Text(card.name).font(.caption).lineLimit(1)
@@ -184,6 +180,9 @@ struct StreamView: View {
         })
         .cardQuickActions(card: card, wants: nil, collection: collection, store: store,
                           signals: signals)
+        // Same hoist as the 1-up page, and additionally OUT of the NavigationLink's label — a
+        // Button inside a link's label loses its taps to the link.
+        .overlay { whyPanel(for: card, compact: true) }
     }
 
     /// Set name for the share link's `?set=` (the web preview renders it under the card name).
@@ -220,7 +219,6 @@ struct StreamView: View {
                 .frame(maxWidth: 420)
                 .frame(maxWidth: .infinity)   // …then re-centre in the page
                 .padding(.horizontal, 40)
-                .overlay { whyPanel(for: card, compact: false) }
                 .overlay(alignment: .topLeading) { notForMe(for: card) }
                 .overlay(alignment: .topTrailing) { heart(for: card) }
                 .contentShape(Rectangle())
@@ -233,6 +231,13 @@ struct StreamView: View {
                 // its save sheet only — passing `wants: nil` keeps the long-press to one action.
                 .cardQuickActions(card: card, wants: nil, collection: collection, store: store,
                           signals: signals)
+                // ⚠️ LAST, on purpose. Placed before `.contentShape`/`.onTapGesture`/`.contextMenu`
+                // the panel was completely dead — not one button responded, not even Cancel, so
+                // opening it trapped you on the card. Those modifiers wrap whatever precedes them
+                // and take the touch first; the small corner badges slip past because they barely
+                // overlap the tap target, but a full-bleed panel does not. An overlay applied after
+                // them hit-tests first.
+                .overlay { whyPanel(for: card, compact: false) }
 
             VStack(spacing: 4) {
                 Text(card.name).font(.title3.bold()).multilineTextAlignment(.center)

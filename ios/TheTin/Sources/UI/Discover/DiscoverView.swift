@@ -34,6 +34,7 @@ struct DiscoverView: View {
                            store: store, wants: wants,
                            signals: route.kind == .forYou ? signals : nil,
                            recomputeToken: model.recomputeCount,
+                           activeFilterNote: route.kind == .forYou ? filterNote(model) : nil,
                            collection: collection)
             }
         }
@@ -50,6 +51,19 @@ struct DiscoverView: View {
                          dismissed: signals?.dismissed ?? [], reasons: signals?.reasons ?? [:])
             model = m
         }
+    }
+
+    /// What the user's feedback is currently filtering out of For You. Shown persistently in the
+    /// deck, because a recompute only changes cards you have not reached yet — without this there
+    /// is no way to tell the thumbs-down did anything.
+    private func filterNote(_ model: DiscoverModel) -> String? {
+        var parts: [String] = []
+        if let ceiling = model.priceCeiling {
+            parts.append("Hiding over \(ceiling.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
+        }
+        let hidden = signals?.dismissed.count ?? 0
+        if hidden > 0 { parts.append("\(hidden) hidden") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// ⚠️ `signals.revision` is load-bearing, not decoration. Counting owned and wanted cards

@@ -13,17 +13,29 @@ struct DismissConfirmedOverlay: View {
         ZStack {
             // ⚠️ Heavy on purpose. At 0.72 the card art bled through and the labels fought it —
             // full-art cards are bright and busy, which is exactly what this sits on top of.
-            Color.black.opacity(0.88)
+            //
+            // ⚠️ `allowsHitTesting(false)` is load-bearing. This overlay is applied OUTSIDE the
+            // deck's gesture chain (so its Undo button actually works), which means an opaque
+            // scrim here also swallows the deck's horizontal pan — you could not swipe past a card
+            // you had just rejected. Only the Undo button should take touches; everything else
+            // must fall through to the pager.
+            Color.black.opacity(0.88).allowsHitTesting(false)
             VStack(spacing: compact ? 3 : 8) {
+                // ⚠️ Every non-interactive part must opt OUT of hit testing, not just the scrim.
+                // Text and Image are hit-testable in SwiftUI, and this overlay sits outside the
+                // deck's gesture chain — so they swallowed the horizontal pan and you could not
+                // swipe past a card you had just rejected. Only Undo takes touches.
                 Image(systemName: "checkmark.circle.fill")
                     .font(compact ? .title3 : .largeTitle)
                     .foregroundStyle(.white)
+                    .allowsHitTesting(false)
                 Text(reason?.effect ?? "Hidden")
                     .font(compact ? .system(size: 9, weight: .semibold) : .caption.bold())
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.6)
                     .lineLimit(3)
+                    .allowsHitTesting(false)
                 Button(action: onUndo) {
                     Text("Undo")
                         .font(compact ? .system(size: 10, weight: .bold) : .footnote.bold())
