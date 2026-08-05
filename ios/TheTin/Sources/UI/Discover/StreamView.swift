@@ -265,6 +265,10 @@ struct StreamView: View {
                 signals?.dismiss(card.id, reason: reason)
                 askingWhyFor = nil
             } onCancel: { askingWhyFor = nil }
+        } else if let signals, signals.isDismissed(card.id) {
+            DismissConfirmedOverlay(compact: compact, reason: signals.reasons[card.id]) {
+                signals.restore(card.id)
+            }
         }
     }
 
@@ -277,7 +281,7 @@ struct StreamView: View {
     private func notForMe(for card: CardRecord) -> some View {
         // Hidden while that card's panel is open: the badges sit above the overlay and clip
         // its top row of labels.
-        if signals != nil, askingWhyFor?.id != card.id {
+        if let signals, askingWhyFor?.id != card.id, !signals.isDismissed(card.id) {
             Button {
                 askingWhyFor = card
             } label: {
@@ -300,7 +304,7 @@ struct StreamView: View {
     /// power-user shortcut.
     @ViewBuilder
     private func heart(for card: CardRecord) -> some View {
-        if let wants, askingWhyFor?.id != card.id {
+        if let wants, askingWhyFor?.id != card.id, !(signals?.isDismissed(card.id) ?? false) {
             Button {
                 wants.toggle(card.id)
                 wantBump += 1

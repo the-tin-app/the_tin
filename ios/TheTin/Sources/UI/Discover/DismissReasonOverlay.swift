@@ -12,6 +12,47 @@ import SwiftUI
 ///
 /// **2×2, not a 4-row list**, for the same reason: a card is portrait but not *that* portrait, and
 /// four stacked rows inside a 110×153pt tile leaves ~28pt per row. A grid matches the shape.
+/// The state a card sits in once it has been rejected: dimmed, saying what was recorded, with a way
+/// back. Without it a thumbs-down just made the card vanish, which reads as "nothing happened"
+/// rather than "got it" — the feedback was captured and the UI never said so.
+struct DismissConfirmedOverlay: View {
+    var compact: Bool = false
+    /// `nil` when the card was hidden without a stated reason.
+    let reason: DismissReason?
+    let onUndo: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.72)
+            VStack(spacing: compact ? 3 : 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(compact ? .title3 : .largeTitle)
+                    .foregroundStyle(.white)
+                Text(reason?.effect ?? "Hidden")
+                    .font(compact ? .system(size: 9, weight: .semibold) : .caption.bold())
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(3)
+                Button(action: onUndo) {
+                    Text("Undo")
+                        .font(compact ? .system(size: 10, weight: .bold) : .footnote.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, compact ? 8 : 14)
+                        .padding(.vertical, compact ? 3 : 6)
+                        .background(.white.opacity(0.22), in: Capsule())
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(compact ? 5 : 12)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: compact ? 6 : 12))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(reason.map { "Noted: \($0.effect)" } ?? "Card hidden")
+    }
+}
+
 struct DismissReasonOverlay: View {
     /// Compact drops the icons and shrinks the type — the Discover home tile, where the whole panel
     /// is about 110pt across.

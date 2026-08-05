@@ -124,9 +124,42 @@ final class DiscoverModel {
         self.dismissed = assembled.dismissed
         priceCeiling = assembled.priceCeiling
         connections = assembled.connections
-        previews = assembled.previews
+        previews = Self.keepingRejectedInPlace(new: assembled.previews, old: previews,
+                                               dismissed: dismissed)
         isLoaded = true
         lastSignal = signal
+    }
+
+    /// Re-insert a just-rejected card at the slot it already occupied.
+    ///
+    /// ⚠️ Without this the thumbs-down is invisible as feedback. Rejecting a card excludes it from
+    /// the pool, so the row recomputed and the tile simply **vanished from under the finger** — the
+    /// signal was captured and the UI said nothing, which reads as "that did nothing". The card now
+    /// holds its place wearing `DismissConfirmedOverlay`, and is gone the next time the row is built
+    /// from scratch.
+    ///
+    /// Only cards that were ALREADY on screen come back; a rejected card never reappears somewhere
+    /// new, and the row never grows.
+    /// `nonisolated` because it is pure — it reads nothing off the model, so it does not need the
+    /// main actor and stays directly unit-testable.
+    nonisolated static func keepingRejectedInPlace(new: [StreamKind: [CardRecord]],
+                                                   old: [StreamKind: [CardRecord]],
+                                                   dismissed: Set<String>) -> [StreamKind: [CardRecord]] {
+        guard !dismissed.isEmpty, !old.isEmpty else { return new }
+        var out = new
+        for (kind, previous) in old {
+            let fresh = new[kind] ?? []
+            guard !fresh.isEmpty else { continue }
+            var merged = fresh
+            var freshIds = Set(fresh.map(\.id))
+            for (index, card) in previous.enumerated()
+            where dismissed.contains(card.id) && !freshIds.contains(card.id) {
+                merged.insert(card, at: min(index, merged.count))
+                freshIds.insert(card.id)
+            }
+            out[kind] = Array(merged.prefix(max(previous.count, fresh.count)))
+        }
+        return out
     }
 
     /// Sendable bundle of everything the detached assembly computes.

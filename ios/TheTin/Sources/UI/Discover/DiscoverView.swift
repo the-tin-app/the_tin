@@ -213,6 +213,12 @@ private struct DiscoverTile: View {
                                 signals?.dismiss(card.id, reason: reason)
                                 askingWhy = false
                             } onCancel: { askingWhy = false }
+                        } else if let signals, signals.isDismissed(card.id) {
+                            // The card holds its slot wearing this, so the thumbs-down is visibly
+                            // captured instead of the tile vanishing from under your finger.
+                            DismissConfirmedOverlay(compact: true, reason: signals.reasons[card.id]) {
+                                signals.restore(card.id)
+                            }
                         }
                     }
                 Text(card.name).font(.caption).lineLimit(1)
@@ -228,7 +234,7 @@ private struct DiscoverTile: View {
         // Badges hide while the panel is open — they sit above it and were clipping its
         // top row of labels.
         .overlay(alignment: .topLeading) {
-            if signals != nil, !askingWhy {
+            if let signals, !askingWhy, !signals.isDismissed(card.id) {
                 Button {
                     askingWhy = true
                 } label: {
@@ -244,7 +250,7 @@ private struct DiscoverTile: View {
         }
 
         .overlay(alignment: .topTrailing) {
-            if let wants, !askingWhy {
+            if let wants, !askingWhy, !(signals?.isDismissed(card.id) ?? false) {
                 Button {
                     wants.toggle(card.id)
                 } label: {
