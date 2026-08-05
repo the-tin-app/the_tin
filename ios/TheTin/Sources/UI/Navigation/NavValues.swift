@@ -23,3 +23,8 @@ struct StreamRoute: Hashable { let kind: DiscoverModel.StreamKind }
 
 /// Route to the filterable Browse deck.
 struct BrowseRoute: Hashable {}
+
+/// One shelf's "See all" — the existing immersive deck over a single For You row. Carries the
+/// shelf id rather than the shelf itself so the route stays a small, stable value while the shelves
+/// behind it are rebuilt on every signal change.
+struct ShelfRoute: Hashable { let shelfId: String }
