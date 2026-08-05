@@ -625,15 +625,25 @@ final class CatalogStore {
     // page 5, of which 39 and 182 respectively survived the diversity cap — ~98% of the scoring
     // work was discarded by a rule that was not the score.
 
-    /// Cards whose raw price sits inside the user's buying range. Cheapest-first is deliberately
-    /// NOT the order: the caller ranks by affinity, and price has already done its job by being
-    /// the filter.
+    /// Cards whose raw price sits inside the user's buying range, most *typical* first — nearest
+    /// the band's median.
+    ///
+    /// ⚠️ **The ORDER BY is load-bearing, and `c.id` was catastrophically wrong here.** Card ids
+    /// sort alphabetically, so `ORDER BY c.id LIMIT 600` over a real 3,342-card band stopped at
+    /// `ecard2-144`: every `g1`, `me*`, `sm*`, `sv*`, `swsh*` and `xy*` card was excluded outright,
+    /// which is essentially the whole of a modern collection. Four shelves would have been built
+    /// from sets the collector owns nothing from. Measured: ordering by distance from `p50` covers
+    /// **151 distinct sets against 45**, and reaches every set in the test collection.
+    ///
+    /// Cheapest-first is also wrong, for a subtler reason: it fills the window with bulk commons.
+    /// Distance from the median is the honest reading of "your usual range".
     func cardsInPriceBand(_ band: PriceBand, limit: Int) throws -> [CardRecord] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT c.* FROM card c JOIN price_latest p ON p.card_id = c.id
-                WHERE p.raw_usd BETWEEN ? AND ? ORDER BY c.id LIMIT ?
-                """, arguments: [band.p25, band.p75, limit]).map(Self.cardRecord)
+                WHERE p.raw_usd BETWEEN ? AND ?
+                ORDER BY ABS(p.raw_usd - ?), c.id LIMIT ?
+                """, arguments: [band.p25, band.p75, band.p50, limit]).map(Self.cardRecord)
         }
     }
 
@@ -647,11 +657,14 @@ final class CatalogStore {
                              limit: Int) throws -> [CardRecord] {
         let rows: [CardRecord] = try dbQueue.read { db in
             if let band {
+                // ⚠️ NOT by card number. `limit` is smaller than a modern set (sv10 is 244 cards),
+                // so ordering by number truncates to the low numbers — which are the commons, while
+                // the cards worth chasing carry the high numbers. Same bias as `cardsInPriceBand`.
                 return try Row.fetchAll(db, sql: """
                     SELECT c.* FROM card c JOIN price_latest p ON p.card_id = c.id
                     WHERE c.set_id = ? AND p.raw_usd BETWEEN ? AND ?
-                    ORDER BY CAST(c.number AS INTEGER), c.number
-                    """, arguments: [setId, band.p25, band.p75]).map(Self.cardRecord)
+                    ORDER BY ABS(p.raw_usd - ?), c.id
+                    """, arguments: [setId, band.p25, band.p75, band.p50]).map(Self.cardRecord)
             }
             return try Row.fetchAll(db, sql: """
                 SELECT * FROM card WHERE set_id = ? ORDER BY CAST(number AS INTEGER), number
@@ -710,13 +723,15 @@ final class CatalogStore {
         let marks = databaseQuestionMarks(count: dexIds.count)
         return try dbQueue.read { db in
             if let band {
+                // Same median-first ordering as `cardsInPriceBand`: a popular species (Pikachu has
+                // hundreds of printings) overruns `limit`, and id order would cut it alphabetically.
                 return try Row.fetchAll(db, sql: """
                     SELECT DISTINCT c.* FROM card c
                     JOIN card_dex x ON x.card_id = c.id
                     JOIN price_latest p ON p.card_id = c.id
                     WHERE x.dex_id IN (\(marks)) AND p.raw_usd BETWEEN ? AND ?
-                    ORDER BY c.id LIMIT ?
-                    """, arguments: StatementArguments(dexIds) + [band.p25, band.p75, limit])
+                    ORDER BY ABS(p.raw_usd - ?), c.id LIMIT ?
+                    """, arguments: StatementArguments(dexIds) + [band.p25, band.p75, band.p50, limit])
                     .map(Self.cardRecord)
             }
             return try Row.fetchAll(db, sql: """

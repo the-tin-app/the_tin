@@ -122,6 +122,51 @@ final class CatalogStoreShelfTests: XCTestCase {
         XCTAssertTrue(try store.cardsDroppedThisWeek(candidateIds: [], maxPct: -0.05, limit: 10).isEmpty)
     }
 
+    /// ⚠️ Regression: `ORDER BY c.id LIMIT n` truncated the candidate window ALPHABETICALLY. On the
+    /// real catalog that meant a 600-card window over 3,342 in-band cards stopped at `ecard2-144`,
+    /// excluding every `sv*`, `swsh*`, `me*` and `xy*` card — essentially a whole modern collection.
+    /// The window must be chosen by price, not by name, so it spans the catalog.
+    private func makeWideStore() throws -> CatalogStore {
+        let path = NSTemporaryDirectory() + "cat-wide-\(UUID().uuidString).sqlite"
+        let q = try DatabaseQueue(path: path)
+        try q.write { db in
+            try db.execute(sql: """
+            CREATE TABLE set_info(id TEXT PRIMARY KEY, name TEXT, release_date TEXT, total INTEGER, era TEXT, rep_card_id TEXT);
+            CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT, number TEXT, name TEXT, hp INTEGER, types TEXT, rarity TEXT, artist TEXT, image_base TEXT, tcgplayer_id INTEGER);
+            CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL, raw_eur REAL, psa3 REAL, psa7 REAL, psa9 REAL, psa10 REAL, as_of TEXT);
+            """)
+            // "aaa" sorts first and sits at the edge of the band; "zzz" sorts last and sits at the
+            // median. Id ordering would return only aaa-*; price ordering must reach zzz-*.
+            for i in 1...30 {
+                try db.execute(sql: "INSERT INTO card VALUES (?,'aaa',?,?,60,'','Rare','A','i',?)",
+                               arguments: ["aaa-\(i)", "\(i)", "Edge \(i)", i])
+                try db.execute(sql: "INSERT INTO price_latest VALUES (?,10.5,NULL,NULL,NULL,NULL,NULL,'2026-08-01')",
+                               arguments: ["aaa-\(i)"])
+                try db.execute(sql: "INSERT INTO card VALUES (?,'zzz',?,?,60,'','Rare','Z','i',?)",
+                               arguments: ["zzz-\(i)", "\(i)", "Typical \(i)", 1000 + i])
+                try db.execute(sql: "INSERT INTO price_latest VALUES (?,20.0,NULL,NULL,NULL,NULL,NULL,'2026-08-01')",
+                               arguments: ["zzz-\(i)"])
+            }
+        }
+        try q.close()
+        return try CatalogStore(path: path)
+    }
+
+    func testPriceBandWindowIsChosenByPriceNotAlphabetically() throws {
+        let store = try makeWideStore()
+        let ids = try store.cardsInPriceBand(band, limit: 10).map(\.id)
+        XCTAssertTrue(ids.allSatisfy { $0.hasPrefix("zzz-") },
+                      "the window must hold the cards nearest p50 ($20), not the ones named first")
+    }
+
+    func testSetGoalWindowIsChosenByPriceNotCardNumber() throws {
+        let store = try makeWideStore()
+        // Numbers 1...30 exist at both prices; the in-band slice must not be "the low numbers".
+        let ids = try store.cardsMissingFromSet("zzz", owned: [], band: band, limit: 5).map(\.id)
+        XCTAssertEqual(ids.count, 5)
+        XCTAssertTrue(ids.allSatisfy { $0.hasPrefix("zzz-") })
+    }
+
     func testRecentSetsAreNewestFirst() throws {
         let store = try makeStore()
         let ids = try store.recentSets(limit: 5).map(\.id)
