@@ -561,6 +561,24 @@ final class CatalogStore {
         }
     }
 
+    /// Dex ids that share a card with any of `seeds` — the species that appear *alongside* the ones
+    /// the user likes. A card carrying two dex ids (a tag team, "Pikachu & Zekrom") is a statement
+    /// that those two belong together, and the catalog already records it in `card_dex`.
+    ///
+    /// The seeds themselves are excluded: a species is not its own neighbour.
+    func coOccurringDexIds(with seeds: [Int]) throws -> Set<Int> {
+        guard !seeds.isEmpty else { return [] }
+        let marks = databaseQuestionMarks(count: seeds.count)
+        return try dbQueue.read { db in
+            Set(try Int.fetchAll(db, sql: """
+                SELECT DISTINCT partner.dex_id
+                FROM card_dex seed
+                JOIN card_dex partner ON partner.card_id = seed.card_id
+                WHERE seed.dex_id IN (\(marks)) AND partner.dex_id NOT IN (\(marks))
+                """, arguments: StatementArguments(seeds + seeds)))
+        }
+    }
+
     func cards(byArtist artist: String) throws -> [CardRecord] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM card WHERE artist = ? ORDER BY id",
