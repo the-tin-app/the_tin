@@ -88,11 +88,31 @@ struct DiscoverFeedback: Equatable, Sendable {
     ///
     /// Never inverts the band: a ceiling below `p25` collapses it to a point at the ceiling rather
     /// than producing `p75 < p25`, which would make `fit`'s width negative.
+    ///
+    /// ⚠️ This alone is NOT enough, and assuming it was is the reason `excludes(price:)` exists —
+    /// see there.
     func apply(to band: PriceBand?) -> PriceBand? {
         guard let band else { return nil }
         guard let ceiling = priceCeiling, ceiling < band.p75 else { return band }
         return PriceBand(p25: min(band.p25, ceiling),
                          p50: min(band.p50, ceiling),
                          p75: ceiling)
+    }
+
+    /// Is this price at or above the cheapest thing the user called too expensive?
+    ///
+    /// ⚠️ **"Too expensive" has to be a hard cut, not a band nudge.** Measured against a real
+    /// collection: that user's band was $5.13–$33.55, while the cards they were actually rejecting
+    /// were $80–$352. Every one of those is ALREADY above `p75`, so `apply(to:band)` changed
+    /// nothing — and they were already pinned at the 0.15 price floor yet still ranked top, because
+    /// a 3x species match swamps any multiplier. Tapping "Too expensive" would have felt like it
+    /// did nothing, which is exactly the failure this whole branch already made once.
+    ///
+    /// So the ceiling excludes outright. It only ever comes from an explicit statement about a
+    /// specific price, and it is undone by restoring that card — `restore` drops the reason, which
+    /// re-derives the ceiling from what's left.
+    func excludes(price: Double?) -> Bool {
+        guard let ceiling = priceCeiling, let price else { return false }
+        return price >= ceiling
     }
 }

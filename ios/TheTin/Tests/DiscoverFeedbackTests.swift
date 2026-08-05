@@ -137,6 +137,31 @@ final class DiscoverFeedbackTests: XCTestCase {
         XCTAssertEqual(out.p75, 2)
     }
 
+    // MARK: the ceiling must be a HARD cut
+
+    /// ⚠️ Regression guard, from real data 2026-08-04. That user's band was $5.13–$33.55 while the
+    /// cards they were rejecting were $80–$352 — all already above p75, so tightening the band
+    /// changed nothing, and they were already at the 0.15 price floor yet still ranked top because
+    /// a 3x species match swamps any multiplier. "Too expensive" has to exclude, not nudge.
+    func testACardAtOrAboveTheCeilingIsExcludedOutright() {
+        var f = DiscoverFeedback()
+        f.priceCeiling = 80
+        XCTAssertTrue(f.excludes(price: 80), "at the ceiling counts as too expensive")
+        XCTAssertTrue(f.excludes(price: 352))
+        XCTAssertFalse(f.excludes(price: 79.99))
+    }
+
+    func testNoCeilingExcludesNothing() {
+        XCTAssertFalse(DiscoverFeedback().excludes(price: 10_000))
+    }
+
+    func testAnUnpricedCardIsNeverExcludedByTheCeiling() {
+        // No price is not a high price — a card we can't price must not vanish.
+        var f = DiscoverFeedback()
+        f.priceCeiling = 20
+        XCTAssertFalse(f.excludes(price: nil))
+    }
+
     func testNoBandStaysNoBand() {
         XCTAssertNil(DiscoverFeedback().apply(to: nil))
     }

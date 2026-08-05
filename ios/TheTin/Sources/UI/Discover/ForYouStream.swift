@@ -18,6 +18,10 @@ struct ForYouStream: CardStream {
     /// Thumbed down. Excluded outright — an explicit "no" is the one signal that should never be
     /// weighed against anything.
     var dismissed: Set<String> = []
+    /// At or above the cheapest price the user called "too expensive". Also excluded outright: a
+    /// multiplier cannot express it, because those cards are already at the price floor and still
+    /// win on species affinity. See `DiscoverFeedback.excludes(price:)`.
+    var priceCeiling: Double? = nil
     /// `Profile.species` widened by `DiscoverAffinity.relatedSpecies` — families and co-occurring
     /// partners, not just exact dex matches. Empty falls back to `profile.species`.
     var relatedSpecies: [Int: Double] = [:]
@@ -65,7 +69,10 @@ struct ForYouStream: CardStream {
         // card from the same set. Copying it onto the profile keeps `score` a single summation.
         var scoringProfile = profile
         scoringProfile.species = speciesWeights
-        let poolPrices = prices.isEmpty ? ((try? store.previewPrices(cardIds: Array(pool.keys))) ?? [:]) : prices
+        var poolPrices = prices.isEmpty ? ((try? store.previewPrices(cardIds: Array(pool.keys))) ?? [:]) : prices
+        if let ceiling = priceCeiling {
+            for (id, price) in poolPrices where price >= ceiling { pool[id] = nil; poolPrices[id] = nil }
+        }
         let ranked: [CardRecord] = DiscoverAffinity.rank(candidates: Array(pool.values), dexIds: poolDex,
                                                           profile: scoringProfile, band: band,
                                                           prices: poolPrices, twinIds: twinIds,

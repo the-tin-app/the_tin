@@ -35,6 +35,8 @@ final class DiscoverModel {
     private(set) var twinIds: Set<String> = []
     /// Cards the user thumbed down.
     private(set) var dismissed: Set<String> = []
+    /// Derived from "Too expensive" answers; cards at or above it are excluded outright.
+    private(set) var priceCeiling: Double?
 
     /// Per-session shuffle seed for the Full-art stream. Fresh each launch so the shuffle feels new;
     /// stable within a session so paging stays deterministic. Runtime randomness is intentional here.
@@ -72,7 +74,7 @@ final class DiscoverModel {
     func makeStream(_ kind: StreamKind) -> CardStream {
         DiscoverModel.makeStream(kind, store: store, profile: profile, tasteIds: tasteIds, seed: seed,
                                  band: band, relatedSpecies: relatedSpecies, twinIds: twinIds,
-                                 dismissed: dismissed)
+                                 dismissed: dismissed, priceCeiling: priceCeiling)
     }
 
     /// Single source of truth for stream construction, shared by the off-main `assemble` (preview
@@ -84,12 +86,13 @@ final class DiscoverModel {
                                        seed: UInt64, band: PriceBand? = nil,
                                        relatedSpecies: [Int: Double] = [:],
                                        twinIds: Set<String> = [],
-                                       dismissed: Set<String> = []) -> CardStream {
+                                       dismissed: Set<String> = [],
+                                       priceCeiling: Double? = nil) -> CardStream {
         switch kind {
         case .forYou:
             return ForYouStream(store: store, profile: profile, tasteIds: tasteIds,
                                 band: band, twinIds: twinIds, dismissed: dismissed,
-                                relatedSpecies: relatedSpecies)
+                                priceCeiling: priceCeiling, relatedSpecies: relatedSpecies)
         case .fullArt: return FullArtStream(store: store, seed: seed)
         case .chase: return ChaseStream(store: store)
         }
@@ -119,6 +122,7 @@ final class DiscoverModel {
         relatedSpecies = assembled.relatedSpecies
         twinIds = assembled.twinIds
         self.dismissed = assembled.dismissed
+        priceCeiling = assembled.priceCeiling
         connections = assembled.connections
         previews = assembled.previews
         isLoaded = true
@@ -134,6 +138,7 @@ final class DiscoverModel {
         var relatedSpecies: [Int: Double]
         var twinIds: Set<String>
         var dismissed: Set<String>
+        var priceCeiling: Double?
         var connections: [Connection]
         var previews: [StreamKind: [CardRecord]]
     }
@@ -156,6 +161,7 @@ final class DiscoverModel {
         var profile = DiscoverAffinity.profile(owned: ownedCards, wanted: wantedCards,
                                                dexIds: tasteDex, priorities: priorities)
 
+        var priceCeiling: Double?
         var band = PriceBand.make(entries: entries, wants: wants, now: Date())
 
         // Stated reasons are applied AFTER the profile is built and normalized. Re-normalizing
@@ -169,6 +175,7 @@ final class DiscoverModel {
                                                    dexIds: rejectedDex, prices: rejectedPrices)
             profile = feedback.apply(to: profile)
             band = feedback.apply(to: band)
+            priceCeiling = feedback.priceCeiling
         }
         let coOccurring = (try? store.coOccurringDexIds(with: Array(profile.species.keys))) ?? []
         let relatedSpecies = DiscoverAffinity.relatedSpecies(seed: profile.species,
@@ -189,12 +196,13 @@ final class DiscoverModel {
         for kind in StreamKind.allCases {
             let stream = makeStream(kind, store: store, profile: profile, tasteIds: tasteIds,
                                     seed: seed, band: band, relatedSpecies: relatedSpecies,
-                                    twinIds: twinIds, dismissed: dismissed)
+                                    twinIds: twinIds, dismissed: dismissed, priceCeiling: priceCeiling)
             previews[kind] = Array(stream.page(0).prefix(previewCount))
         }
 
         return Assembled(profile: profile, tasteIds: tasteIds, referencePrice: referencePrice,
                          band: band, relatedSpecies: relatedSpecies, twinIds: twinIds,
-                         dismissed: dismissed, connections: connections, previews: previews)
+                         dismissed: dismissed, priceCeiling: priceCeiling,
+                         connections: connections, previews: previews)
     }
 }
