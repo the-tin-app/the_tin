@@ -31,6 +31,17 @@ enum DismissReason: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Two-line label for the card-sized overlay, where the whole panel is ~110pt wide on the
+    /// Discover home row. `label` is used wherever there is room for one line.
+    var shortLabel: String {
+        switch self {
+        case .tooExpensive: return "Too\npricey"
+        case .notMySpecies: return "Not my\nPokémon"
+        case .wrongEra:     return "Wrong\nera"
+        case .notMyKind:    return "Not my\nkind"
+        }
+    }
+
     /// What this answer actually moves, shown under the label so the gesture never feels like a
     /// black box.
     var effect: String {

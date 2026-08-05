@@ -177,6 +177,15 @@ private struct DiscoverTile: View {
             VStack(spacing: 4) {
                 CardImageView(card: card, quality: "low")
                     .frame(width: 110)
+                    // The panel sits ON the card, sized to it — not a screen of its own.
+                    .overlay {
+                        if askingWhy {
+                            DismissReasonOverlay(compact: true) { reason in
+                                signals?.dismiss(card.id, reason: reason)
+                                askingWhy = false
+                            } onCancel: { askingWhy = false }
+                        }
+                    }
                 Text(card.name).font(.caption).lineLimit(1)
                 PriceLabel(value: value)
             }
@@ -187,8 +196,10 @@ private struct DiscoverTile: View {
                           signals: signals)
         // Mirrors the heart: Want on the right, Not-for-me on the left. The long-press menu still
         // carries both, but a menu item is not an affordance — it can't be seen.
+        // Badges hide while the panel is open — they sit above it and were clipping its
+        // top row of labels.
         .overlay(alignment: .topLeading) {
-            if signals != nil {
+            if signals != nil, !askingWhy {
                 Button {
                     askingWhy = true
                 } label: {
@@ -202,14 +213,9 @@ private struct DiscoverTile: View {
                 .accessibilityLabel("Not for me")
             }
         }
-        .fullScreenCover(isPresented: $askingWhy) {
-            DismissReasonOverlay(card: card) { reason in
-                signals?.dismiss(card.id, reason: reason)
-                askingWhy = false
-            } onCancel: { askingWhy = false }
-        }
+
         .overlay(alignment: .topTrailing) {
-            if let wants {
+            if let wants, !askingWhy {
                 Button {
                     wants.toggle(card.id)
                 } label: {

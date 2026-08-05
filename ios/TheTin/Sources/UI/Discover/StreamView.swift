@@ -61,12 +61,6 @@ struct StreamView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { densityToggle }
         .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
-        .fullScreenCover(item: $askingWhyFor) { card in
-            DismissReasonOverlay(card: card) { reason in
-                signals?.dismiss(card.id, reason: reason)
-                askingWhyFor = nil
-            } onCancel: { askingWhyFor = nil }
-        }
         .task {
             if pager == nil {
                 pager = StreamPager(stream: stream)
@@ -148,6 +142,7 @@ struct StreamView: View {
         NavigationLink(value: CardID(raw: card.id)) {
             VStack(spacing: 4) {
                 CardImageView(card: card, quality: "high")
+                    .overlay { whyPanel(for: card, compact: true) }
                     .overlay(alignment: .topLeading) { notForMe(for: card) }
                     .overlay(alignment: .topTrailing) { heart(for: card) }
                 Text(card.name).font(.caption).lineLimit(1)
@@ -197,6 +192,7 @@ struct StreamView: View {
                 .frame(maxWidth: 420)
                 .frame(maxWidth: .infinity)   // …then re-centre in the page
                 .padding(.horizontal, 40)
+                .overlay { whyPanel(for: card, compact: false) }
                 .overlay(alignment: .topLeading) { notForMe(for: card) }
                 .overlay(alignment: .topTrailing) { heart(for: card) }
                 .contentShape(Rectangle())
@@ -261,6 +257,17 @@ struct StreamView: View {
         .accessibilityHidden(true)
     }
 
+    /// The reason panel, scoped to the card it is rejecting.
+    @ViewBuilder
+    private func whyPanel(for card: CardRecord, compact: Bool) -> some View {
+        if askingWhyFor?.id == card.id {
+            DismissReasonOverlay(compact: compact) { reason in
+                signals?.dismiss(card.id, reason: reason)
+                askingWhyFor = nil
+            } onCancel: { askingWhyFor = nil }
+        }
+    }
+
     /// The visible "no" affordance, mirroring `heart` on the opposite corner.
     ///
     /// ⚠️ This screen never received `signals` at all when the thumbs-down first shipped, so the
@@ -268,7 +275,9 @@ struct StreamView: View {
     /// A context-menu item is also not an affordance: it cannot be seen, so it cannot be found.
     @ViewBuilder
     private func notForMe(for card: CardRecord) -> some View {
-        if signals != nil {
+        // Hidden while that card's panel is open: the badges sit above the overlay and clip
+        // its top row of labels.
+        if signals != nil, askingWhyFor?.id != card.id {
             Button {
                 askingWhyFor = card
             } label: {
@@ -291,7 +300,7 @@ struct StreamView: View {
     /// power-user shortcut.
     @ViewBuilder
     private func heart(for card: CardRecord) -> some View {
-        if let wants {
+        if let wants, askingWhyFor?.id != card.id {
             Button {
                 wants.toggle(card.id)
                 wantBump += 1
