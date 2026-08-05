@@ -54,6 +54,22 @@ final class CollectionModel {
     private(set) var tradeEntries: [CollectionEntry] = []
     /// What the trade list is worth, in the same best-effort terms as the tin total.
     private(set) var tradeValue: (total: Double, pricedCards: Int, totalCards: Int) = (0, 0, 0)
+    /// Whether the entries stream has delivered at least once. `entries` starts empty and is
+    /// filled asynchronously, so `entries.isEmpty` on its own cannot tell "you own nothing" from
+    /// "we haven't read the file yet".
+    private(set) var hasLoadedEntries = false
+    /// Whether the LAST launch ended holding cards. Captured at init, not read on demand: a plain
+    /// `UserDefaults` read inside a computed property is invisible to SwiftUI's observation (the
+    /// same trap that made the Watching dot survive visiting its screen), and the value can't
+    /// change before the first emission anyway.
+    private let hadCardsLastLaunch = UserDefaults.standard.bool(forKey: "hasCards")
+
+    /// True only between launch and the entries stream's first emission, and only for a tin that
+    /// had cards last time. `CollectionView`'s empty branch states "Your tin is empty" out loud,
+    /// which is a lie told to exactly the people who own the most — a first run has
+    /// `hadCardsLastLaunch == false` and falls straight through to the real empty state.
+    var isAwaitingFirstLoad: Bool { !hasLoadedEntries && hadCardsLastLaunch }
+
     private var streamTasks: [Task<Void, Never>] = []
     /// Mirrors the header's numbers to the home-screen widget. nil until AppModel injects one
     /// (and in unit tests that don't care) — publishing is then a no-op.
@@ -85,6 +101,7 @@ final class CollectionModel {
                 // that is already correct, rather than each consumer remembering to exclude sold
                 // rows — which is the version of this feature that would have quietly broken the
                 // tin total the first time somebody added a screen.
+                self?.hasLoadedEntries = true
                 self?.allEntries = all
                 self?.entries = all.filter { !$0.isSold }
                 self?.soldEntries = all.filter(\.isSold).sorted {
@@ -809,7 +826,16 @@ struct CollectionView: View {
         List {
             if searchText.isEmpty {
                 if model.catalogUnavailable { catalogNotice.tinRow() }
-                if model.entries.isEmpty {
+                if model.isAwaitingFirstLoad {
+                    // NOT `emptyTin`: until the stream delivers we don't know the tin is empty,
+                    // and telling someone who owns cards that they own none reads as data loss —
+                    // the same objection the sealed comment below makes about a different cause.
+                    // A redacted `header` is exactly what lands here, so nothing jumps.
+                    header.tinRow()
+                        .redacted(reason: .placeholder)
+                        .disabled(true) // it's a placeholder figure — don't let it open Portfolio
+                        .accessibilityHidden(true)
+                } else if model.entries.isEmpty {
                     // A first-run tin has nothing to total, riffle, or file — so the screen's job
                     // is to say what a tin is and offer the two ways to fill it. Dividers still
                     // show if any exist (deleting the last card mustn't strand them), and the
