@@ -13,8 +13,7 @@ struct DiscoverView: View {
         // which is two `_ConditionalContent` identities — so `isLoaded` flipping DESTROYED the layout and
         // rebuilt it, and the centred loading tin was replaced by a top-anchored scroll view. On an A10
         // iPad that reads as the whole screen popping to the top. The home renders its own skeletons now.
-        DiscoverHomeView(model: model, store: store, collection: collection, wants: wants,
-                         signals: signals)
+        DiscoverHomeView(model: model, store: store, collection: collection, wants: wants)
         .navigationTitle("Discover")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: CardID.self) { cardID in
@@ -28,7 +27,13 @@ struct DiscoverView: View {
                 StreamView(title: route.kind.title,
                            stream: model.makeStream(route.kind),
                            caption: { model.caption(for: $0, kind: route.kind) },
-                           store: store, wants: wants, signals: signals, collection: collection)
+                           // ⚠️ For You ONLY. `dismissed` is passed to `ForYouStream` and nothing
+                           // else, so a thumbs-down on a Full-art or Chase card would silently do
+                           // nothing to the row it was tapped on — the control would promise a
+                           // change it cannot make.
+                           store: store, wants: wants,
+                           signals: route.kind == .forYou ? signals : nil,
+                           collection: collection)
             }
         }
         // The whole browse surface (By Set / By Dex / Sealed / All Cards), not just the filter
@@ -61,7 +66,6 @@ private struct DiscoverHomeView: View {
     let store: CatalogStore
     var collection: CollectionModel?
     var wants: WantsModel?
-    var signals: DiscoverSignalsModel?
 
     private var isLoaded: Bool { model?.isLoaded ?? false }
 
@@ -86,12 +90,12 @@ private struct DiscoverHomeView: View {
                     // *after* loading is dropped.
                     if !isLoaded || !cards.isEmpty {
                         StreamPreviewRow(kind: kind, cards: cards, store: store,
-                                         wants: wants, collection: collection, signals: signals)
+                                         wants: wants, collection: collection)
                     }
                 }
                 if let model, !model.connections.isEmpty {
                     ConnectionsRow(connections: model.connections, store: store,
-                                   wants: wants, collection: collection, signals: signals)
+                                   wants: wants, collection: collection)
                 }
             }
             .padding(.vertical)
@@ -106,7 +110,6 @@ private struct StreamPreviewRow: View {
     let store: CatalogStore
     var wants: WantsModel?
     var collection: CollectionModel?
-    var signals: DiscoverSignalsModel?
 
     var body: some View {
         // Preview price = raw market, falling back to the NM condition price (a separate feed)
@@ -132,7 +135,7 @@ private struct StreamPreviewRow: View {
                     }
                     ForEach(cards) { card in
                         DiscoverTile(card: card, value: prices[card.id], wants: wants,
-                                     collection: collection, store: store, signals: signals)
+                                     collection: collection, store: store)
                     }
                 }
                 .padding(.horizontal)
@@ -165,7 +168,6 @@ private struct ConnectionsRow: View {
     let store: CatalogStore
     var wants: WantsModel?
     var collection: CollectionModel?
-    var signals: DiscoverSignalsModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -180,7 +182,7 @@ private struct ConnectionsRow: View {
                             HStack(spacing: 8) {
                                 ForEach(cards) { card in
                                     DiscoverTile(card: card, value: prices[card.id], wants: wants,
-                                                 collection: collection, store: store, signals: signals)
+                                                 collection: collection, store: store)
                                 }
                             }
                         }
@@ -198,59 +200,26 @@ private struct DiscoverTile: View {
     var wants: WantsModel?
     var collection: CollectionModel?
     var store: CatalogStore?
-    var signals: DiscoverSignalsModel?
-    @State private var askingWhy = false
 
+    /// ⚠️ **No thumbs-down here, deliberately.** These tiles appear on the Full-art, Chase and
+    /// Connections rows as well as For You, and `dismissed` is only ever passed to `ForYouStream` —
+    /// so rejecting a card from the Full-art row would have changed For You and left Full-art
+    /// exactly as it was. The control promised something it could not do. It also had to shrink to
+    /// 9pt type to fit a 110pt tile, which was unreadable. It lives in the For You deck only.
     var body: some View {
         NavigationLink(value: CardID(raw: card.id)) {
             VStack(spacing: 4) {
                 CardImageView(card: card, quality: "low")
                     .frame(width: 110)
-                    // The panel sits ON the card, sized to it — not a screen of its own.
-                    .overlay {
-                        if askingWhy {
-                            DismissReasonOverlay(compact: true) { reason in
-                                signals?.dismiss(card.id, reason: reason)
-                                askingWhy = false
-                            } onCancel: { askingWhy = false }
-                        } else if let signals, signals.isDismissed(card.id) {
-                            // The card holds its slot wearing this, so the thumbs-down is visibly
-                            // captured instead of the tile vanishing from under your finger.
-                            DismissConfirmedOverlay(compact: true, reason: signals.reasons[card.id]) {
-                                signals.restore(card.id)
-                            }
-                        }
-                    }
                 Text(card.name).font(.caption).lineLimit(1)
                 PriceLabel(value: value)
             }
             .frame(width: 120)
         }
         .buttonStyle(.plain)
-        .cardQuickActions(card: card, wants: wants, collection: collection, store: store,
-                          signals: signals)
-        // Mirrors the heart: Want on the right, Not-for-me on the left. The long-press menu still
-        // carries both, but a menu item is not an affordance — it can't be seen.
-        // Badges hide while the panel is open — they sit above it and were clipping its
-        // top row of labels.
-        .overlay(alignment: .topLeading) {
-            if let signals, !askingWhy, !signals.isDismissed(card.id) {
-                Button {
-                    askingWhy = true
-                } label: {
-                    Image(systemName: "hand.thumbsdown")
-                        .padding(6)
-                        .background(.thinMaterial, in: Circle())
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Not for me")
-            }
-        }
-
+        .cardQuickActions(card: card, wants: wants, collection: collection, store: store)
         .overlay(alignment: .topTrailing) {
-            if let wants, !askingWhy, !(signals?.isDismissed(card.id) ?? false) {
+            if let wants {
                 Button {
                     wants.toggle(card.id)
                 } label: {
