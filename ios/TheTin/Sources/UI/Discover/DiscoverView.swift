@@ -43,7 +43,7 @@ struct DiscoverView: View {
         .task(id: tasteSignalKey) {
             let m = model ?? DiscoverModel(store: store)
             await m.load(entries: collection?.entries ?? [], wants: wants?.entries ?? [:],
-                         dismissed: signals?.dismissed ?? [])
+                         dismissed: signals?.dismissed ?? [], reasons: signals?.reasons ?? [:])
             model = m
         }
     }
@@ -170,6 +170,7 @@ private struct DiscoverTile: View {
     var collection: CollectionModel?
     var store: CatalogStore?
     var signals: DiscoverSignalsModel?
+    @State private var askingWhy = false
 
     var body: some View {
         NavigationLink(value: CardID(raw: card.id)) {
@@ -187,9 +188,9 @@ private struct DiscoverTile: View {
         // Mirrors the heart: Want on the right, Not-for-me on the left. The long-press menu still
         // carries both, but a menu item is not an affordance — it can't be seen.
         .overlay(alignment: .topLeading) {
-            if let signals {
+            if signals != nil {
                 Button {
-                    signals.dismiss(card.id)
+                    askingWhy = true
                 } label: {
                     Image(systemName: "hand.thumbsdown")
                         .padding(6)
@@ -200,6 +201,12 @@ private struct DiscoverTile: View {
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Not for me")
             }
+        }
+        .fullScreenCover(isPresented: $askingWhy) {
+            DismissReasonOverlay(card: card) { reason in
+                signals?.dismiss(card.id, reason: reason)
+                askingWhy = false
+            } onCancel: { askingWhy = false }
         }
         .overlay(alignment: .topTrailing) {
             if let wants {

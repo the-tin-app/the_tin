@@ -99,17 +99,17 @@ final class DiscoverModel {
     /// changes. No latch: later Want toggles re-run the assembly. All catalog-touching work runs off the
     /// main thread in a detached task; results are assigned back on the main actor.
     func load(entries: [CollectionEntry], wants: [String: WantEntry],
-              dismissed: Set<String> = []) async {
+              dismissed: Set<String> = [], reasons: [String: DismissReason] = [:]) async {
         // ⚠️ The dismissed COUNT is part of the signal. Without it a thumbs-down changes neither
         // the owned nor the wanted count, the early return fires, and nothing recomputes.
-        let signal = (owned: entries.count, wanted: wants.count + dismissed.count)
+        let signal = (owned: entries.count, wanted: wants.count + dismissed.count + reasons.count)
         if isLoaded, let last = lastSignal, last == signal { return }
 
         let store = self.store
         let seed = self.seed
         let assembled = await Task.detached(priority: .userInitiated) {
             DiscoverModel.assemble(store: store, seed: seed, entries: entries, wants: wants,
-                                   dismissed: dismissed)
+                                   dismissed: dismissed, reasons: reasons)
         }.value
 
         profile = assembled.profile
@@ -144,7 +144,8 @@ final class DiscoverModel {
     nonisolated private static func assemble(store: CatalogStore, seed: UInt64,
                                              entries: [CollectionEntry],
                                              wants: [String: WantEntry],
-                                             dismissed: Set<String>) -> Assembled {
+                                             dismissed: Set<String>,
+                                             reasons: [String: DismissReason]) -> Assembled {
         let ownedIds = entries.map(\.cardId)
         let wantedIds = Set(wants.keys)
         let tasteIds = Set(ownedIds).union(wantedIds)
@@ -152,10 +153,23 @@ final class DiscoverModel {
         let wantedCards = (try? store.cards(ids: Array(wantedIds))) ?? []
         let tasteDex = (try? store.dexIds(forCards: Array(tasteIds))) ?? [:]
         let priorities = wants.mapValues(\.priority)
-        let profile = DiscoverAffinity.profile(owned: ownedCards, wanted: wantedCards,
+        var profile = DiscoverAffinity.profile(owned: ownedCards, wanted: wantedCards,
                                                dexIds: tasteDex, priorities: priorities)
 
-        let band = PriceBand.make(entries: entries, wants: wants, now: Date())
+        var band = PriceBand.make(entries: entries, wants: wants, now: Date())
+
+        // Stated reasons are applied AFTER the profile is built and normalized. Re-normalizing
+        // afterwards would cancel them out — see `DiscoverFeedback.apply`.
+        if !reasons.isEmpty {
+            let ids = Array(reasons.keys)
+            let rejected = Dictionary(uniqueKeysWithValues: ((try? store.cards(ids: ids)) ?? []).map { ($0.id, $0) })
+            let rejectedDex = (try? store.dexIds(forCards: ids)) ?? [:]
+            let rejectedPrices = ((try? store.prices(cardIds: ids)) ?? [:]).compactMapValues(\.rawUsd)
+            let feedback = DiscoverFeedback.derive(reasons: reasons, cards: rejected,
+                                                   dexIds: rejectedDex, prices: rejectedPrices)
+            profile = feedback.apply(to: profile)
+            band = feedback.apply(to: band)
+        }
         let coOccurring = (try? store.coOccurringDexIds(with: Array(profile.species.keys))) ?? []
         let relatedSpecies = DiscoverAffinity.relatedSpecies(seed: profile.species,
                                                             coOccurring: coOccurring)

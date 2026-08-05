@@ -23,6 +23,9 @@ struct StreamView: View {
     @State private var currentIndex: Int?
     @State private var prefetcher = CardImagePrefetcher()
     @State private var wantBump = 0 // bumped on each double-tap to fire the haptic
+    /// The card whose "why not this one?" overlay is open. `CardRecord` is Identifiable, so this
+    /// drives `fullScreenCover(item:)` directly.
+    @State private var askingWhyFor: CardRecord?
     @State private var sharing: SharePayload?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(StreamDensity.storageKey) private var densityRaw = StreamDensity.one.rawValue
@@ -58,6 +61,12 @@ struct StreamView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { densityToggle }
         .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
+        .fullScreenCover(item: $askingWhyFor) { card in
+            DismissReasonOverlay(card: card) { reason in
+                signals?.dismiss(card.id, reason: reason)
+                askingWhyFor = nil
+            } onCancel: { askingWhyFor = nil }
+        }
         .task {
             if pager == nil {
                 pager = StreamPager(stream: stream)
@@ -259,9 +268,9 @@ struct StreamView: View {
     /// A context-menu item is also not an affordance: it cannot be seen, so it cannot be found.
     @ViewBuilder
     private func notForMe(for card: CardRecord) -> some View {
-        if let signals {
+        if signals != nil {
             Button {
-                signals.dismiss(card.id)
+                askingWhyFor = card
             } label: {
                 Image(systemName: "hand.thumbsdown")
                     .font(.title2)
