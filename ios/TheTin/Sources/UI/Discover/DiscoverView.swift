@@ -50,6 +50,7 @@ struct DiscoverView: View {
               setGoals: goals?.setIds ?? [],
               dismissed: signals?.dismissed ?? [],
               reasons: signals?.reasons ?? [:],
+              at: signals?.at ?? [:],
               signalsRevision: signals?.revision ?? 0)
     }
 

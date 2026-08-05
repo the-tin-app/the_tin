@@ -25,26 +25,61 @@ struct DiscoverFeedback: Equatable, Sendable {
     /// invisible in its own recommendations.
     static let minimumMultiplier = 0.05
 
-    /// Derive adjustments from the rejected cards and what the user said about them.
+    /// How long a stated reason keeps half its force. Taste drifts: a rejection from three months
+    /// ago is weaker evidence about what you want today than one from this morning.
+    static let halfLifeDays = 60.0
+
+    /// How many live "too expensive" statements a ceiling needs before it bites.
+    ///
+    /// ⚠️ The ceiling used to be `min()` over every such price, set by a single tap and never
+    /// surfaced or reversible. Measured against a real collection: one tap on a $5.20 card
+    /// permanently removed **66% of the deck**, and that user's band `p25` was $5.13 — a ceiling any
+    /// lower empties For You entirely. This became genuinely dangerous the moment `varietyPicks` was
+    /// fixed: before, taps landed on $4,000 grails and the ceiling was harmlessly out of range;
+    /// now every card shown is in-band, so every tap lands where the blast radius is worst.
+    static let minimumCeilingEvents = 2
+
+    /// Below this an event no longer counts toward the ceiling at all. Equal to one half-life.
+    static let ceilingLiveWeight = 0.5
+
+    /// An event's remaining force: `0.5 ^ (age / halfLife)`.
+    ///
+    /// A future-dated stamp — a clock change, a restored backup — is full strength, never amplified.
+    static func weight(age: TimeInterval) -> Double {
+        guard age > 0 else { return 1.0 }
+        return pow(0.5, age / (halfLifeDays * 86_400))
+    }
+
+    /// Derive adjustments from the rejected cards, what the user said, and when they said it.
     ///
     /// `cards` and `dexIds` cover only the cards that carry a reason — the caller does not need to
-    /// resolve plain hides, which tune nothing.
+    /// resolve plain hides, which tune nothing. An id missing from `at` is full strength; see
+    /// `DiscoverSignalsData.at`.
     static func derive(reasons: [String: DismissReason],
+                       at: [String: Date] = [:],
                        cards: [String: CardRecord],
                        dexIds: [String: [Int]],
-                       prices: [String: Double]) -> DiscoverFeedback {
+                       prices: [String: Double],
+                       now: Date = Date()) -> DiscoverFeedback {
         var out = DiscoverFeedback()
-        func compound(_ current: Double?) -> Double {
-            max((current ?? 1.0) * penalty, minimumMultiplier)
-        }
+        var ceilingPrices: [Double] = []
+
         for (cardId, reason) in reasons.sorted(by: { $0.key < $1.key }) {
             guard let card = cards[cardId] else { continue }
+            let w = at[cardId].map { weight(age: now.timeIntervalSince($0)) } ?? 1.0
+            // `penalty ^ w` rises toward 1.0 as the event fades, so a decayed penalty is a WEAKER
+            // multiplier and never a stronger one.
+            let decayed = pow(penalty, w)
+            func compound(_ current: Double?) -> Double {
+                max((current ?? 1.0) * decayed, minimumMultiplier)
+            }
             switch reason {
             case .tooExpensive:
-                // The cheapest rejection wins: saying "$400 is too much" after "$90 is too much"
-                // must not RAISE the ceiling back to $400.
-                if let price = prices[cardId], price > 0 {
-                    out.priceCeiling = min(out.priceCeiling ?? price, price)
+                // ⚠️ The ceiling does NOT decay in VALUE — a $30 ceiling drifting to $1,920 after
+                // six half-lives is nonsense. Events expire OUT of it instead, which composes with
+                // corroboration for free: an old lone tap simply stops counting.
+                if let price = prices[cardId], price > 0, w >= ceilingLiveWeight {
+                    ceilingPrices.append(price)
                 }
             case .notMySpecies:
                 for dex in dexIds[cardId] ?? [] {
@@ -61,6 +96,24 @@ struct DiscoverFeedback: Equatable, Sendable {
                     out.rarities[rarity] = compound(out.rarities[rarity])
                 }
             }
+        }
+
+        // The ceiling is the **second-cheapest** thing the user called too expensive.
+        //
+        // ⚠️ Not `min()`, and not a percentile either. `min()` lets one mistap on a cheap card set a
+        // permanent cut (measured: a $5.20 tap removed 66% of a real deck). A percentile does not
+        // help: nearest-rank p25 over four samples IS the minimum — it only starts skipping the
+        // lowest at n ≥ 5 — so p25 would obey exactly the mistap it was meant to absorb.
+        //
+        // Second-cheapest states something true and checkable: *at least two cards you rejected are
+        // priced at or above this*. A lone stray tap cannot set it, and a stray tap alongside a
+        // genuine rejection is discarded rather than obeyed — reject $200, mistap $6, and the
+        // ceiling is $200, not $6.
+        //
+        // It errs deliberately toward leniency. A ceiling that is too high shows a few cards the
+        // user did not want; one that is too low empties the whole feature silently.
+        if ceilingPrices.count >= minimumCeilingEvents {
+            out.priceCeiling = ceilingPrices.sorted()[minimumCeilingEvents - 1]
         }
         return out
     }

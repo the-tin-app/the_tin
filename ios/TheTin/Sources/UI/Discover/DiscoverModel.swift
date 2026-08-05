@@ -103,6 +103,9 @@ final class DiscoverModel {
         var setGoals: Set<String> = []
         var dismissed: Set<String> = []
         var reasons: [String: DismissReason] = [:]
+        /// When each reason was given. Absent for signals recorded before timestamps shipped, which
+        /// `DiscoverFeedback` treats as full strength.
+        var at: [String: Date] = [:]
         /// Bumped by `DiscoverSignalsModel` on every write. Load-bearing: a thumbs-down changes
         /// neither the owned nor the wanted count, so without it the recommendations would not
         /// recompute until the user happened to add or heart something.
@@ -166,9 +169,10 @@ final class DiscoverModel {
             let ids = Array(inputs.reasons.keys)
             let rejected = Dictionary(uniqueKeysWithValues: ((try? store.cards(ids: ids)) ?? []).map { ($0.id, $0) })
             let feedback = DiscoverFeedback.derive(
-                reasons: inputs.reasons, cards: rejected,
+                reasons: inputs.reasons, at: inputs.at, cards: rejected,
                 dexIds: (try? store.dexIds(forCards: ids)) ?? [:],
-                prices: ((try? store.prices(cardIds: ids)) ?? [:]).compactMapValues(\.rawUsd))
+                prices: ((try? store.prices(cardIds: ids)) ?? [:]).compactMapValues(\.rawUsd),
+                now: Date())
             profile = feedback.apply(to: profile)
             band = feedback.apply(to: band)
             priceCeiling = feedback.priceCeiling

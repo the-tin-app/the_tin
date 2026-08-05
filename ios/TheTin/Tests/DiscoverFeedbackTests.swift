@@ -7,11 +7,143 @@ final class DiscoverFeedbackTests: XCTestCase {
                    rarity: rarity, artist: nil, imageBase: nil, imageUrl: nil, tcgplayerId: nil)
     }
 
+    private let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    private func daysAgo(_ n: Double) -> Date { now.addingTimeInterval(-n * 86_400) }
+
+    // MARK: decay
+
+    func testWeightHalvesEveryHalfLife() {
+        XCTAssertEqual(DiscoverFeedback.weight(age: 0), 1.0, accuracy: 0.0001)
+        XCTAssertEqual(DiscoverFeedback.weight(age: 60 * 86_400), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(DiscoverFeedback.weight(age: 120 * 86_400), 0.25, accuracy: 0.0001)
+    }
+
+    /// A future-dated event (a clock change, a restored backup) is full strength, never amplified.
+    func testAFutureStampIsFullStrengthNotStronger() {
+        XCTAssertEqual(DiscoverFeedback.weight(age: -86_400), 1.0, accuracy: 0.0001)
+    }
+
+    func testAFreshRejectionHitsHarderThanAnOldOne() throws {
+        func speciesMultiplier(at stamp: Date) -> Double? {
+            DiscoverFeedback.derive(reasons: ["a": .notMySpecies], at: ["a": stamp],
+                                    cards: ["a": card("a")], dexIds: ["a": [25]],
+                                    prices: [:], now: now).species[25]
+        }
+        let fresh = try XCTUnwrap(speciesMultiplier(at: now))
+        let old = try XCTUnwrap(speciesMultiplier(at: daysAgo(120)))
+        XCTAssertEqual(fresh, 0.5, accuracy: 0.0001, "a fresh 'no' is the full penalty")
+        XCTAssertGreaterThan(old, fresh, "an old 'no' must weigh less")
+        XCTAssertLessThan(old, 1.0, "but it has not vanished either")
+    }
+
+    /// ⚠️ The file already on the device carries no stamps. Treating unknown age as old would
+    /// silently void every signal given before decay shipped.
+    func testAMissingStampIsFullStrength() {
+        let f = DiscoverFeedback.derive(reasons: ["a": .notMySpecies], at: [:],
+                                        cards: ["a": card("a")], dexIds: ["a": [25]],
+                                        prices: [:], now: now)
+        XCTAssertEqual(f.species[25], 0.5)
+    }
+
+    func testDecayAppliesToEveryDimensionNotJustSpecies() throws {
+        let f = DiscoverFeedback.derive(
+            reasons: ["a": .wrongEra, "b": .notMyKind], at: ["a": daysAgo(120), "b": daysAgo(120)],
+            cards: ["a": card("a"), "b": card("b", rarity: "Common")],
+            dexIds: ["a": [880]], prices: [:], now: now)
+        XCTAssertGreaterThan(try XCTUnwrap(f.generations[8]), 0.5)
+        XCTAssertGreaterThan(try XCTUnwrap(f.rarities["Common"]), 0.5)
+    }
+
+    // MARK: the ceiling needs corroboration
+
+    /// ⚠️ Measured against the real collection: with `min()`, one tap on a $5.20 card set a
+    /// PERMANENT ceiling that removed 66% of the deck — and that user's band `p25` was $5.13, so a
+    /// ceiling any lower empties For You outright, silently and irreversibly.
+    ///
+    /// This is only dangerous now because the `varietyPicks` fix landed: every card shown is
+    /// in-band, so every tap lands in the window where the blast radius is worst.
+    func testOneTapSetsNoCeiling() {
+        let f = DiscoverFeedback.derive(reasons: ["a": .tooExpensive], at: ["a": now],
+                                        cards: ["a": card("a")], dexIds: [:],
+                                        prices: ["a": 5.20], now: now)
+        XCTAssertNil(f.priceCeiling)
+    }
+
+    /// The ceiling is the SECOND-cheapest rejection, so with exactly two taps it is the higher of
+    /// them. That leniency is deliberate: a ceiling that is too high shows a few unwanted cards,
+    /// one that is too low empties the feature.
+    func testTwoTapsSetTheCeilingAtTheSecondCheapest() throws {
+        let f = DiscoverFeedback.derive(reasons: ["a": .tooExpensive, "b": .tooExpensive],
+                                        at: ["a": now, "b": now],
+                                        cards: ["a": card("a"), "b": card("b")], dexIds: [:],
+                                        prices: ["a": 50, "b": 20], now: now)
+        XCTAssertEqual(try XCTUnwrap(f.priceCeiling), 50, accuracy: 0.0001)
+    }
+
+    /// ⚠️ THE CASE CORROBORATION ALONE DOES NOT FIX. A genuine $200 rejection plus one stray tap on
+    /// a $6 card would give a $6 ceiling under `min()` — and under nearest-rank p25 too, which is
+    /// the minimum for any sample of four or fewer. Second-cheapest discards the outlier.
+    func testAStrayCheapTapAlongsideAGenuineRejectionIsDiscarded() throws {
+        let f = DiscoverFeedback.derive(reasons: ["a": .tooExpensive, "b": .tooExpensive],
+                                        at: ["a": now, "b": now],
+                                        cards: ["a": card("a"), "b": card("b")], dexIds: [:],
+                                        prices: ["a": 200, "b": 6], now: now)
+        XCTAssertEqual(try XCTUnwrap(f.priceCeiling), 200, accuracy: 0.0001)
+    }
+
+    /// The ceiling does NOT decay in value — a $30 ceiling drifting to $1,920 after six half-lives
+    /// is nonsense. Events expire out of it instead, and expiry can drop it below corroboration.
+    func testAnExpiredTapStopsCountingTowardTheCeiling() {
+        let f = DiscoverFeedback.derive(reasons: ["a": .tooExpensive, "b": .tooExpensive],
+                                        at: ["a": now, "b": daysAgo(120)],
+                                        cards: ["a": card("a"), "b": card("b")], dexIds: [:],
+                                        prices: ["a": 50, "b": 20], now: now)
+        XCTAssertNil(f.priceCeiling, "one live event left is not corroboration")
+    }
+
+    /// With several genuine rejections the ceiling settles on the cheapest of THOSE, so the cut
+    /// tracks what the user actually rejects rather than their single worst mistap.
+    func testTheCeilingTracksTheCheapestGenuineRejection() throws {
+        let ids = ["a", "b", "c", "d", "e"]
+        let f = DiscoverFeedback.derive(
+            reasons: Dictionary(uniqueKeysWithValues: ids.map { ($0, DismissReason.tooExpensive) }),
+            at: Dictionary(uniqueKeysWithValues: ids.map { ($0, now) }),
+            cards: Dictionary(uniqueKeysWithValues: ids.map { ($0, card($0)) }),
+            dexIds: [:], prices: ["a": 6, "b": 30, "c": 35, "d": 40, "e": 200], now: now)
+        XCTAssertEqual(try XCTUnwrap(f.priceCeiling), 30, accuracy: 0.0001,
+                       "the $6 mistap is discarded; $30 is the cheapest corroborated rejection")
+    }
+
+    /// The invariant that actually holds, and the one worth having: **the single cheapest rejection
+    /// never sets the ceiling on its own.** (A stronger-sounding "at least two rejections sit at or
+    /// above the ceiling" is FALSE at n = 2, where second-cheapest is the maximum — a test asserting
+    /// it failed here and was wrong, not the code.)
+    func testTheCheapestRejectionAloneNeverSetsTheCeiling() throws {
+        for prices in [[10.0, 20], [5.0, 5, 5], [1.0, 2, 3, 4, 5], [99.0, 1, 50, 2]] {
+            let ids = prices.indices.map { "c\($0)" }
+            let f = DiscoverFeedback.derive(
+                reasons: Dictionary(uniqueKeysWithValues: ids.map { ($0, DismissReason.tooExpensive) }),
+                at: Dictionary(uniqueKeysWithValues: ids.map { ($0, now) }),
+                cards: Dictionary(uniqueKeysWithValues: ids.map { ($0, card($0)) }),
+                dexIds: [:],
+                prices: Dictionary(uniqueKeysWithValues: zip(ids, prices)), now: now)
+            let ceiling = try XCTUnwrap(f.priceCeiling)
+            if Set(prices).count > 1 {
+                XCTAssertGreaterThan(ceiling, prices.min() ?? 0, "\(prices)")
+            } else {
+                XCTAssertEqual(ceiling, prices[0], accuracy: 0.0001, "\(prices)")
+            }
+        }
+    }
+
     // MARK: each reason moves exactly one dimension
 
-    func testTooExpensiveSetsAPriceCeilingAndNothingElse() {
-        let f = DiscoverFeedback.derive(reasons: ["a": .tooExpensive], cards: ["a": card("a", rarity: "Common")],
-                                        dexIds: ["a": [25]], prices: ["a": 400])
+    /// ⚠️ Rewritten: this used to assert that ONE tap sets the ceiling, which is the behaviour the
+    /// corroboration guard removes. See `testOneTapSetsNoCeiling` for why.
+    func testTooExpensiveMovesThePriceAxisAndNothingElse() {
+        let f = DiscoverFeedback.derive(reasons: ["a": .tooExpensive, "b": .tooExpensive],
+                                        cards: ["a": card("a", rarity: "Common"), "b": card("b", rarity: "Common")],
+                                        dexIds: ["a": [25], "b": [25]], prices: ["a": 400, "b": 380])
         XCTAssertEqual(f.priceCeiling, 400)
         XCTAssertTrue(f.species.isEmpty)
         XCTAssertTrue(f.generations.isEmpty)
@@ -56,13 +188,18 @@ final class DiscoverFeedbackTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(f.species[25]), DiscoverFeedback.minimumMultiplier, accuracy: 0.0001)
     }
 
-    /// Saying "$400 is too much" after "$90 is too much" must not RAISE the ceiling back to $400.
-    func testTheCheapestTooExpensiveRejectionWins() {
-        let f = DiscoverFeedback.derive(
+    /// ⚠️ Rewritten. This asserted "the cheapest rejection wins" — `min()` semantics — which is
+    /// exactly the rule that let one mistap gut a real deck. Order of statement still does not
+    /// matter, which is what this now pins.
+    func testTheCeilingDoesNotDependOnTheOrderOfStatement() {
+        let a = DiscoverFeedback.derive(
             reasons: ["a": .tooExpensive, "b": .tooExpensive],
-            cards: ["a": card("a"), "b": card("b")],
-            dexIds: [:], prices: ["a": 400, "b": 90])
-        XCTAssertEqual(f.priceCeiling, 90)
+            cards: ["a": card("a"), "b": card("b")], dexIds: [:], prices: ["a": 400, "b": 90])
+        let b = DiscoverFeedback.derive(
+            reasons: ["a": .tooExpensive, "b": .tooExpensive],
+            cards: ["a": card("a"), "b": card("b")], dexIds: [:], prices: ["a": 90, "b": 400])
+        XCTAssertEqual(a.priceCeiling, b.priceCeiling)
+        XCTAssertEqual(a.priceCeiling, 400)
     }
 
     func testAnUnpricedCardCannotSetACeiling() {
