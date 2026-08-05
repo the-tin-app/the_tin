@@ -8,17 +8,48 @@ final class CollectionModelTests: XCTestCase {
     private var model: CollectionModel!
 
     override func setUp() async throws {
+        // `entries.didSet` writes this, and `CollectionModel` reads it at init — so it outlives the
+        // process and would leak between runs if it weren't pinned at both ends.
+        UserDefaults.standard.set(false, forKey: "hasCards")
         store = try CatalogStore(path: try FixtureCatalog.copyToTemp())
         repo = InMemoryCollectionRepository()
         model = CollectionModel(repository: repo, store: store)
         await model.start()
     }
 
-    override func tearDownWithError() throws { try store?.close() }
+    override func tearDownWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "hasCards")
+        try store?.close()
+    }
 
     private func waitForStreams() async {
         // Streams hop through continuations; yield a few times to let them land.
         for _ in 0..<10 { await Task.yield() }
+    }
+
+    /// `entries` is empty for the frames before the stream delivers, so `entries.isEmpty` alone
+    /// would put a returning user on "Your tin is empty" — the one screen that reads as data loss.
+    func testEmptyEntriesBeforeTheFirstEmissionReadAsLoadingNotEmpty() async throws {
+        UserDefaults.standard.set(true, forKey: "hasCards")
+        let waiting = CollectionModel(repository: InMemoryCollectionRepository(), store: store)
+
+        XCTAssertTrue(waiting.entries.isEmpty)
+        XCTAssertTrue(waiting.isAwaitingFirstLoad)
+
+        await waiting.start()
+        await waitForStreams()
+
+        // Still empty — but now that's an answer rather than an absence.
+        XCTAssertTrue(waiting.entries.isEmpty)
+        XCTAssertFalse(waiting.isAwaitingFirstLoad)
+    }
+
+    /// The other half: a first run must NOT be held on a placeholder waiting for a tin it never had.
+    func testFirstRunFallsStraightThroughToTheEmptyTin() async throws {
+        UserDefaults.standard.set(false, forKey: "hasCards")
+        let fresh = CollectionModel(repository: InMemoryCollectionRepository(), store: store)
+
+        XCTAssertFalse(fresh.isAwaitingFirstLoad)
     }
 
     func testCreateGroupAndAddEntryComputesValue() async throws {
