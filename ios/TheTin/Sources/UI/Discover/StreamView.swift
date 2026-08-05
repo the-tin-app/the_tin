@@ -17,6 +17,9 @@ struct StreamView: View {
     let store: CatalogStore
     var wants: WantsModel?
     var signals: DiscoverSignalsModel?
+    /// Bumped by `DiscoverModel` when a fresh assembly LANDS. Keyed off the completed recompute,
+    /// not the user's tap, so `stream` is already rebuilt by the time this changes.
+    var recomputeToken: Int = 0
     var collection: CollectionModel?
 
     @State private var pager: StreamPager?
@@ -27,6 +30,9 @@ struct StreamView: View {
     /// drives `fullScreenCover(item:)` directly.
     @State private var askingWhyFor: CardRecord?
     @State private var sharing: SharePayload?
+    /// Shown briefly after the deck restreams, because otherwise a recompute is invisible and
+    /// there is no way to tell whether the feedback did anything.
+    @State private var showUpdatedPill = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(StreamDensity.storageKey) private var densityRaw = StreamDensity.one.rawValue
 
@@ -68,6 +74,28 @@ struct StreamView: View {
                 prefetchAround(0)
             }
         }
+        .onChange(of: recomputeToken) {
+            guard let pager else { return }
+            pager.restream(stream)
+            showUpdatedPill = true
+            Task {
+                await pager.loadNextPage()
+                try? await Task.sleep(for: .seconds(2))
+                showUpdatedPill = false
+            }
+        }
+        .overlay(alignment: .top) {
+            if showUpdatedPill {
+                Label("Picks updated", systemImage: "sparkles")
+                    .font(.footnote.bold())
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .accessibilityAddTraits(.isStaticText)
+            }
+        }
+        .animation(.snappy, value: showUpdatedPill)
         .onChange(of: currentIndex) {
             guard let i = currentIndex, let pager else { return }
             prefetchAround(i)

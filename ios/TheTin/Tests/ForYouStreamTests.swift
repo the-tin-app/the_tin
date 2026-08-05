@@ -128,3 +128,56 @@ final class ForYouStreamTests: XCTestCase {
         XCTAssertEqual(withDefaults.map(\.id), explicitNil.map(\.id))
     }
 }
+
+/// `StreamPager.restream` — the deck must pick up a rebuilt stream without losing the reader's
+/// place or repeating cards.
+@MainActor
+final class StreamPagerRestreamTests: XCTestCase {
+    /// Yields `pages[i]` for page i, empty beyond.
+    private struct FakeStream: CardStream {
+        let pages: [[String]]
+        func page(_ index: Int) -> [CardRecord] {
+            guard index < pages.count else { return [] }
+            return pages[index].map {
+                CardRecord(id: $0, setId: "S", number: "1", name: $0, hp: nil, types: [],
+                           rarity: nil, artist: nil, imageBase: nil, imageUrl: nil, tcgplayerId: nil)
+            }
+        }
+    }
+
+    func testRestreamKeepsCardsAlreadyOnScreen() async {
+        let pager = StreamPager(stream: FakeStream(pages: [["a", "b"]]))
+        await pager.loadNextPage()
+        pager.restream(FakeStream(pages: [["c", "d"]]))
+        XCTAssertEqual(pager.cards.map(\.id), ["a", "b"], "the reader's place must survive")
+    }
+
+    /// ⚠️ The whole point. Before `restream` the pager held its stream as a `let`, so a thumbs-down
+    /// never reached any page the reader had not already seen — the recompute was invisible because
+    /// in the deck it did not happen.
+    func testPagesAfterARestreamComeFromTheNewStream() async {
+        let pager = StreamPager(stream: FakeStream(pages: [["a"], ["stale"]]))
+        await pager.loadNextPage()
+        pager.restream(FakeStream(pages: [["fresh"]]))
+        await pager.loadNextPage()
+        XCTAssertEqual(pager.cards.map(\.id), ["a", "fresh"])
+    }
+
+    func testARestreamDoesNotRepeatACardAlreadyShown() async {
+        let pager = StreamPager(stream: FakeStream(pages: [["a", "b"]]))
+        await pager.loadNextPage()
+        pager.restream(FakeStream(pages: [["a", "b", "c"]]))
+        await pager.loadNextPage()
+        XCTAssertEqual(pager.cards.map(\.id), ["a", "b", "c"], "seen ids stay filtered")
+    }
+
+    func testRestreamClearsExhaustion() async {
+        // Two empty pages latch the pager closed; a fresh stream must be able to page again.
+        let pager = StreamPager(stream: FakeStream(pages: []))
+        await pager.loadNextPage()
+        await pager.loadNextPage()
+        pager.restream(FakeStream(pages: [["fresh"]]))
+        await pager.loadNextPage()
+        XCTAssertEqual(pager.cards.map(\.id), ["fresh"])
+    }
+}

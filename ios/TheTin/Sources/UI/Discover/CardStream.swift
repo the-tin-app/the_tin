@@ -16,9 +16,25 @@ final class StreamPager {
     private var seen: Set<String> = []
     private var exhaustedRuns = 0
     private var isLoading = false
-    private let stream: CardStream
+    private var stream: CardStream
 
     init(stream: CardStream) { self.stream = stream }
+
+    /// Swap in a freshly-built stream, keeping the cards already on screen and where the reader is.
+    ///
+    /// ⚠️ Without this the deck is FROZEN against feedback. `pager` is created once (`if pager ==
+    /// nil`) and held the stream it was built with, so a thumbs-down recomputed the model and the
+    /// pages ahead of you still came from the old one — the rejected card's price ceiling and
+    /// species penalty never applied to anything you had not already seen. It looked like nothing
+    /// happened because, in the deck, nothing did.
+    ///
+    /// Paging restarts at page 0 of the new stream; `seen` is kept, so already-shown cards are
+    /// filtered out rather than repeated, and the reader's scroll position survives.
+    func restream(_ stream: CardStream) {
+        self.stream = stream
+        nextIndex = 0
+        exhaustedRuns = 0
+    }
 
     /// True once at least one page has been requested and it (and any it triggered) yielded no
     /// cards — the signal for a "no matches" empty state rather than an endless spinner.

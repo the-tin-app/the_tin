@@ -33,6 +33,7 @@ struct DiscoverView: View {
                            // change it cannot make.
                            store: store, wants: wants,
                            signals: route.kind == .forYou ? signals : nil,
+                           recomputeToken: model.recomputeCount,
                            collection: collection)
             }
         }

@@ -21,6 +21,12 @@ final class DiscoverModel {
     private(set) var connections: [Connection] = []
     private(set) var previews: [StreamKind: [CardRecord]] = [:]
     private(set) var isLoaded = false
+    /// Bumped every time an assembly finishes. Consumers key off this rather than off the signals
+    /// revision, because the revision changes when the user acts and this changes when the new
+    /// recommendations actually exist.
+    private(set) var recomputeCount = 0
+    /// True for the duration of an assembly, so a surface can say it is working.
+    private(set) var isRecomputing = false
 
     /// Taste state, recomputed on every signal change and reused by `makeStream` on the main actor.
     private(set) var profile = DiscoverAffinity.Profile()
@@ -110,6 +116,8 @@ final class DiscoverModel {
 
         let store = self.store
         let seed = self.seed
+        isRecomputing = true
+        defer { isRecomputing = false }
         let assembled = await Task.detached(priority: .userInitiated) {
             DiscoverModel.assemble(store: store, seed: seed, entries: entries, wants: wants,
                                    dismissed: dismissed, reasons: reasons)
@@ -126,6 +134,7 @@ final class DiscoverModel {
         connections = assembled.connections
         previews = assembled.previews
         isLoaded = true
+        recomputeCount += 1
         lastSignal = signal
     }
 
