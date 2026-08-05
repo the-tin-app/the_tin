@@ -5,6 +5,7 @@ struct DiscoverView: View {
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
     var goals: SetGoalsModel? = nil
+    var signals: DiscoverSignalsModel? = nil
     @State private var model: DiscoverModel?
 
     var body: some View {
@@ -38,13 +39,27 @@ struct DiscoverView: View {
         }
         .task(id: tasteSignalKey) {
             let m = model ?? DiscoverModel(store: store)
-            await m.load(ownedIds: (collection?.entries ?? []).map(\.cardId), wantedIds: wants?.wanted ?? [])
+            await m.load(inputs)
             model = m
         }
     }
 
+    private var inputs: DiscoverModel.Inputs {
+        .init(entries: collection?.entries ?? [],
+              wants: wants?.entries ?? [:],
+              setGoals: goals?.setIds ?? [],
+              dismissed: signals?.dismissed ?? [],
+              reasons: signals?.reasons ?? [:],
+              signalsRevision: signals?.revision ?? 0)
+    }
+
+    /// ⚠️ `signals.revision` and the goal count are load-bearing, not decoration. Counting owned and
+    /// wanted cards cannot see a thumbs-down or a newly-chased set — neither changes either count —
+    /// so without them the recommendations would not recompute until the user happened to add or
+    /// heart something, and the gesture would read as doing nothing.
     private var tasteSignalKey: String {
         "\(collection?.entries.count ?? 0)-\(wants?.wanted.count ?? 0)"
+            + "-\(goals?.setIds.count ?? 0)-\(signals?.revision ?? 0)"
     }
 }
 
