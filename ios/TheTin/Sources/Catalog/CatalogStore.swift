@@ -618,6 +618,125 @@ final class CatalogStore {
         }
     }
 
+    // MARK: - Shelf queries
+    //
+    // Each For You shelf is ONE bounded query. This replaces `ForYouStream`'s pool-in-memory:
+    // measured against the real served catalog, that pool held 3,960 cards on page 0 and 9,615 by
+    // page 5, of which 39 and 182 respectively survived the diversity cap — ~98% of the scoring
+    // work was discarded by a rule that was not the score.
+
+    /// Cards whose raw price sits inside the user's buying range. Cheapest-first is deliberately
+    /// NOT the order: the caller ranks by affinity, and price has already done its job by being
+    /// the filter.
+    func cardsInPriceBand(_ band: PriceBand, limit: Int) throws -> [CardRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT c.* FROM card c JOIN price_latest p ON p.card_id = c.id
+                WHERE p.raw_usd BETWEEN ? AND ? ORDER BY c.id LIMIT ?
+                """, arguments: [band.p25, band.p75, limit]).map(Self.cardRecord)
+        }
+    }
+
+    /// The gap in a chased set.
+    ///
+    /// ⚠️ Ordering is in-band-first, NOT cheapest-first. Measured on the real catalog, cheapest-first
+    /// on `sv10` returned 7 Commons and 5 Uncommons at $0.02–$0.06 — a vendor bulk bin rather than a
+    /// shelf. `band = nil` returns the whole gap, which is the caller's fallback when the in-band
+    /// slice is too thin to fill a row (`me05` yields only 4).
+    func cardsMissingFromSet(_ setId: String, owned: Set<String>, band: PriceBand?,
+                             limit: Int) throws -> [CardRecord] {
+        let rows: [CardRecord] = try dbQueue.read { db in
+            if let band {
+                return try Row.fetchAll(db, sql: """
+                    SELECT c.* FROM card c JOIN price_latest p ON p.card_id = c.id
+                    WHERE c.set_id = ? AND p.raw_usd BETWEEN ? AND ?
+                    ORDER BY CAST(c.number AS INTEGER), c.number
+                    """, arguments: [setId, band.p25, band.p75]).map(Self.cardRecord)
+            }
+            return try Row.fetchAll(db, sql: """
+                SELECT * FROM card WHERE set_id = ? ORDER BY CAST(number AS INTEGER), number
+                """, arguments: [setId]).map(Self.cardRecord)
+        }
+        return Array(rows.lazy.filter { !owned.contains($0.id) }.prefix(limit))
+    }
+
+    /// How many weekly rows a card needs before its six-month low means anything. Below this the
+    /// "low" is just the only price we ever saw.
+    static let historicLowMinRows = 8
+
+    /// Candidate ids whose current price is within `withinPct` of their lowest price in ~6 months.
+    ///
+    /// Candidate-restricted on purpose: this scans up to ~26 weekly rows per card, and the A10 iPad
+    /// is the canary. Returns ids only — the caller already holds the records.
+    func cardsNearHistoricLow(candidateIds: [String], withinPct: Double, limit: Int) throws -> [String] {
+        guard !candidateIds.isEmpty else { return [] }
+        let marks = databaseQuestionMarks(count: candidateIds.count)
+        return try dbQueue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT h.card_id FROM price_history h
+                JOIN price_latest p ON p.card_id = h.card_id
+                WHERE h.card_id IN (\(marks)) AND h.date >= date('now', '-182 day')
+                GROUP BY h.card_id
+                HAVING COUNT(*) >= ? AND p.raw_usd <= MIN(h.raw_usd) * (1.0 + ?)
+                LIMIT ?
+                """, arguments: StatementArguments(candidateIds)
+                    + [Self.historicLowMinRows, withinPct, limit])
+        }
+    }
+
+    /// Candidate ids that fell more than `maxPct` over 7 days, biggest drop first.
+    ///
+    /// ⚠️ `pct_7d` is a FRACTION (`-0.05` is a 5% drop — see `DiscoverConstants.dealsMaxPct7d`, which
+    /// was wrong by 100× until 2026-08-01), and `price_delta` carries five `kind`s. Filtering without
+    /// `kind = 'raw' AND key = ''` mixes graded and per-condition series into a raw-price shelf.
+    func cardsDroppedThisWeek(candidateIds: [String], maxPct: Double,
+                              limit: Int) throws -> [(id: String, pct: Double)] {
+        guard !candidateIds.isEmpty else { return [] }
+        let marks = databaseQuestionMarks(count: candidateIds.count)
+        return try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT card_id, pct_7d FROM price_delta
+                WHERE kind = 'raw' AND key = '' AND card_id IN (\(marks)) AND pct_7d < ?
+                ORDER BY pct_7d ASC LIMIT ?
+                """, arguments: StatementArguments(candidateIds) + [maxPct, limit])
+                .map { (id: $0["card_id"], pct: $0["pct_7d"]) }
+        }
+    }
+
+    /// Cards carrying any of the given dex ids, optionally restricted to the buying range.
+    /// `DISTINCT` because a multi-dex card (a tag team) joins once per matching species.
+    func cardsForDexIds(_ dexIds: [Int], band: PriceBand?, limit: Int) throws -> [CardRecord] {
+        guard !dexIds.isEmpty else { return [] }
+        let marks = databaseQuestionMarks(count: dexIds.count)
+        return try dbQueue.read { db in
+            if let band {
+                return try Row.fetchAll(db, sql: """
+                    SELECT DISTINCT c.* FROM card c
+                    JOIN card_dex x ON x.card_id = c.id
+                    JOIN price_latest p ON p.card_id = c.id
+                    WHERE x.dex_id IN (\(marks)) AND p.raw_usd BETWEEN ? AND ?
+                    ORDER BY c.id LIMIT ?
+                    """, arguments: StatementArguments(dexIds) + [band.p25, band.p75, limit])
+                    .map(Self.cardRecord)
+            }
+            return try Row.fetchAll(db, sql: """
+                SELECT DISTINCT c.* FROM card c JOIN card_dex x ON x.card_id = c.id
+                WHERE x.dex_id IN (\(marks)) ORDER BY c.id LIMIT ?
+                """, arguments: StatementArguments(dexIds) + [limit]).map(Self.cardRecord)
+        }
+    }
+
+    /// Newest sets first, for the For You first-run picker. A collector starting out is buying
+    /// current product, so recency is the right offer.
+    func recentSets(limit: Int) throws -> [SetRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM set_info WHERE release_date IS NOT NULL
+                ORDER BY release_date DESC, id LIMIT ?
+                """, arguments: [limit]).map(Self.setRecord)
+        }
+    }
+
     /// Distinct set eras that actually have cards, newest era first — populates the Browse filter.
     func distinctEras() throws -> [String] {
         try dbQueue.read { db in
