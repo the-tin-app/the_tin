@@ -16,6 +16,7 @@ struct StreamView: View {
     let caption: (CardRecord) -> String?
     let store: CatalogStore
     var wants: WantsModel?
+    var signals: DiscoverSignalsModel?
     var collection: CollectionModel?
 
     @State private var pager: StreamPager?
@@ -138,6 +139,7 @@ struct StreamView: View {
         NavigationLink(value: CardID(raw: card.id)) {
             VStack(spacing: 4) {
                 CardImageView(card: card, quality: "high")
+                    .overlay(alignment: .topLeading) { notForMe(for: card) }
                     .overlay(alignment: .topTrailing) { heart(for: card) }
                 Text(card.name).font(.caption).lineLimit(1)
                 PriceLabel(value: try? store.price(cardId: card.id)?.rawUsd)
@@ -148,7 +150,8 @@ struct StreamView: View {
             wants?.toggle(card.id)
             wantBump += 1
         })
-        .cardQuickActions(card: card, wants: nil, collection: collection, store: store)
+        .cardQuickActions(card: card, wants: nil, collection: collection, store: store,
+                          signals: signals)
     }
 
     /// Set name for the share link's `?set=` (the web preview renders it under the card name).
@@ -185,6 +188,7 @@ struct StreamView: View {
                 .frame(maxWidth: 420)
                 .frame(maxWidth: .infinity)   // …then re-centre in the page
                 .padding(.horizontal, 40)
+                .overlay(alignment: .topLeading) { notForMe(for: card) }
                 .overlay(alignment: .topTrailing) { heart(for: card) }
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
@@ -194,7 +198,8 @@ struct StreamView: View {
                 .sensoryFeedback(.impact, trigger: wantBump)
                 // Wanted is already the double tap + heart here, so the shared menu is used for
                 // its save sheet only — passing `wants: nil` keeps the long-press to one action.
-                .cardQuickActions(card: card, wants: nil, collection: collection, store: store)
+                .cardQuickActions(card: card, wants: nil, collection: collection, store: store,
+                          signals: signals)
 
             VStack(spacing: 4) {
                 Text(card.name).font(.title3.bold()).multilineTextAlignment(.center)
@@ -245,6 +250,31 @@ struct StreamView: View {
         .padding(.horizontal, 12)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// The visible "no" affordance, mirroring `heart` on the opposite corner.
+    ///
+    /// ⚠️ This screen never received `signals` at all when the thumbs-down first shipped, so the
+    /// deck — where you actually browse — had no way to reject a card, in the menu or anywhere.
+    /// A context-menu item is also not an affordance: it cannot be seen, so it cannot be found.
+    @ViewBuilder
+    private func notForMe(for card: CardRecord) -> some View {
+        if let signals {
+            Button {
+                signals.dismiss(card.id)
+            } label: {
+                Image(systemName: "hand.thumbsdown")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .background(.thinMaterial, in: Circle())
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(12)
+            .accessibilityLabel("Not for me")
+        }
     }
 
     /// A real button (not just a double-tap echo): the only VoiceOver-reachable Want control

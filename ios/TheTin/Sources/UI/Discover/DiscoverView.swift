@@ -30,7 +30,7 @@ struct DiscoverView: View {
                 StreamView(title: route.kind.title,
                            stream: model.makeStream(route.kind),
                            caption: { model.caption(for: $0, kind: route.kind) },
-                           store: store, wants: wants, collection: collection)
+                           store: store, wants: wants, signals: signals, collection: collection)
             }
         }
         // The whole browse surface (By Set / By Dex / Sealed / All Cards), not just the filter
@@ -184,6 +184,23 @@ private struct DiscoverTile: View {
         .buttonStyle(.plain)
         .cardQuickActions(card: card, wants: wants, collection: collection, store: store,
                           signals: signals)
+        // Mirrors the heart: Want on the right, Not-for-me on the left. The long-press menu still
+        // carries both, but a menu item is not an affordance — it can't be seen.
+        .overlay(alignment: .topLeading) {
+            if let signals {
+                Button {
+                    signals.dismiss(card.id)
+                } label: {
+                    Image(systemName: "hand.thumbsdown")
+                        .padding(6)
+                        .background(.thinMaterial, in: Circle())
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Not for me")
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if let wants {
                 Button {
