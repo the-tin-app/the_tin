@@ -81,6 +81,13 @@ struct DiscoverSignalsData: Codable, Equatable {
     /// choice and will change. Deriving them at load means retuning is a constant edit rather than a
     /// file migration.
     var reasons: [String: String]?
+    /// `cardId` → when the user said it. Feeds the half-life in `DiscoverFeedback`.
+    ///
+    /// ⚠️ A PARALLEL map rather than restructuring `reasons` into objects, so a file written before
+    /// this existed decodes untouched — the one already on the device is 99 bytes of `dismissed` +
+    /// `reasons`. A MISSING entry means **full strength**, not fully decayed: treating an unknown
+    /// age as old would silently void every signal given before decay shipped.
+    var at: [String: Date]?
 }
 
 /// Reads and writes `discover-signals.json`. Follows `SetGoalsModel` (one small whole-file atomic
@@ -90,6 +97,8 @@ struct DiscoverSignalsData: Codable, Equatable {
 final class DiscoverSignalsModel {
     private(set) var dismissed: Set<String> = []
     private(set) var reasons: [String: DismissReason] = [:]
+    /// When each signal was given. Absent for anything recorded before timestamps shipped.
+    private(set) var at: [String: Date] = [:]
 
     /// Bumped on every successful write.
     ///
@@ -109,6 +118,7 @@ final class DiscoverSignalsModel {
         let data = Self.load(from: paths.fileURL)
         self.dismissed = data.dismissed ?? []
         self.reasons = (data.reasons ?? [:]).compactMapValues(DismissReason.init(rawValue:))
+        self.at = data.at ?? [:]
     }
 
     /// A missing or corrupt file yields empty signals. No alert, no migration, no recovery attempt —
@@ -127,11 +137,16 @@ final class DiscoverSignalsModel {
 
     /// Thumb a card down, optionally saying why. Idempotent on the id, but a later call CAN attach
     /// or change the reason — answering the overlay after a plain hide should still tune.
-    func dismiss(_ cardId: String, reason: DismissReason? = nil) {
+    /// `now` is injected so the decay in `DiscoverFeedback` is testable without a clock.
+    ///
+    /// Attaching a reason to an already-hidden card RESTAMPS it: that is a new statement about the
+    /// card, and filing it under the original hide's date would start the answer half-decayed.
+    func dismiss(_ cardId: String, reason: DismissReason? = nil, now: Date = Date()) {
         let wasNew = dismissed.insert(cardId).inserted
         let reasonChanged = reason != nil && reasons[cardId] != reason
         guard wasNew || reasonChanged else { return }
         if let reason { reasons[cardId] = reason }
+        at[cardId] = now
         persist()
     }
 
@@ -139,6 +154,7 @@ final class DiscoverSignalsModel {
     func restore(_ cardId: String) {
         let removed = dismissed.remove(cardId) != nil
         let hadReason = reasons.removeValue(forKey: cardId) != nil
+        at.removeValue(forKey: cardId)
         guard removed || hadReason else { return }
         persist()
     }
@@ -147,7 +163,8 @@ final class DiscoverSignalsModel {
         revision &+= 1
         do {
             let payload = DiscoverSignalsData(dismissed: dismissed,
-                                              reasons: reasons.mapValues(\.rawValue))
+                                              reasons: reasons.mapValues(\.rawValue),
+                                              at: at)
             try JSONEncoder().encode(payload).write(to: fileURL, options: .atomic)
         } catch {
             onWriteError?("Couldn't save your Discover preferences: \(error.localizedDescription)")

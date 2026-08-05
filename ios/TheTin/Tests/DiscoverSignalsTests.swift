@@ -60,4 +60,53 @@ final class DiscoverSignalsTests: XCTestCase {
         try Data("{}".utf8).write(to: paths.fileURL)
         XCTAssertTrue(DiscoverSignalsModel(paths: paths).dismissed.isEmpty)
     }
+
+    // MARK: Timestamps
+
+    /// ⚠️ The file already on the device is 99 bytes of `dismissed` + `reasons` with no timestamps
+    /// at all. It has to keep decoding, and its events must keep counting at FULL strength — treating
+    /// an unknown age as old would silently void every signal given before decay shipped.
+    func testTheRealDeviceFileWithNoTimestampsStillDecodes() throws {
+        let paths = tempPaths()
+        let json = #"{"dismissed":["neo4-113","ex7-108"],"reasons":{"ex7-108":"tooExpensive"}}"#
+        try Data(json.utf8).write(to: paths.fileURL)
+
+        let m = DiscoverSignalsModel(paths: paths)
+        XCTAssertEqual(m.dismissed, ["neo4-113", "ex7-108"])
+        XCTAssertEqual(m.reasons["ex7-108"], .tooExpensive)
+        XCTAssertTrue(m.at.isEmpty, "no stamps recorded, and that is a valid state")
+    }
+
+    func testDismissRecordsWhenAndItSurvivesAReload() {
+        let paths = tempPaths()
+        let stamp = Date(timeIntervalSinceReferenceDate: 807_568_576)
+        let m = DiscoverSignalsModel(paths: paths)
+        m.dismiss("a-1", reason: .tooExpensive, now: stamp)
+        XCTAssertEqual(m.at["a-1"], stamp)
+
+        let reloaded = DiscoverSignalsModel(paths: paths)
+        XCTAssertEqual(reloaded.at["a-1"]?.timeIntervalSinceReferenceDate ?? -1,
+                       stamp.timeIntervalSinceReferenceDate, accuracy: 0.001)
+    }
+
+    func testRestoreForgetsWhenTooSoThereIsNoOrphanStamp() {
+        let paths = tempPaths()
+        let m = DiscoverSignalsModel(paths: paths)
+        m.dismiss("a-1", reason: .tooExpensive, now: Date())
+        m.restore("a-1")
+        XCTAssertNil(m.at["a-1"])
+        XCTAssertNil(DiscoverSignalsModel(paths: paths).at["a-1"])
+    }
+
+    /// Attaching a reason to an already-hidden card is a NEW statement about it, so it restamps —
+    /// otherwise answering the panel later would file the answer under the original hide's date and
+    /// start it half-decayed.
+    func testAttachingAReasonLaterRestamps() {
+        let m = DiscoverSignalsModel(paths: tempPaths())
+        let first = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let second = first.addingTimeInterval(3_600)
+        m.dismiss("a-1", now: first)
+        m.dismiss("a-1", reason: .tooExpensive, now: second)
+        XCTAssertEqual(m.at["a-1"], second)
+    }
 }
