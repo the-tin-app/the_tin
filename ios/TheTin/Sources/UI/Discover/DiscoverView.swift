@@ -51,7 +51,8 @@ struct DiscoverView: View {
               dismissed: signals?.dismissed ?? [],
               reasons: signals?.reasons ?? [:],
               at: signals?.at ?? [:],
-              signalsRevision: signals?.revision ?? 0)
+              signalsRevision: signals?.revision ?? 0,
+              seedBudget: AppConfig.discoverBudget)
     }
 
     /// ⚠️ `signals.revision` and the goal count are load-bearing, not decoration. Counting owned and

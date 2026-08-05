@@ -108,6 +108,16 @@ enum AppConfig {
     }
     private static let catalogTierKey = "catalogTier"
 
+    /// What the collector said they spend, from the For You first-run picker.
+    ///
+    /// `nil` means **never asked**, which is exactly the condition for showing the picker — `.skipped`
+    /// is a stored answer, so a skip is remembered and never asked again. One value, no second flag.
+    static var discoverBudget: DiscoverBudget? {
+        get { UserDefaults.standard.string(forKey: discoverBudgetKey).flatMap(DiscoverBudget.init(rawValue:)) }
+        set { UserDefaults.standard.set(newValue?.rawValue, forKey: discoverBudgetKey) }
+    }
+    private static let discoverBudgetKey = "discoverBudget"
+
     /// Grading fee used by the "Grade it?" panel (PSA bulk-tier default), user-editable inline.
     /// Clamped to GradingROI.feeRange on read and write. `object(forKey:)` rather than
     /// `double(forKey:)` so an explicitly saved $0 survives (double(forKey:) returns 0 for unset).

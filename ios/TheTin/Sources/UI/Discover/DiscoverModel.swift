@@ -110,6 +110,9 @@ final class DiscoverModel {
         /// neither the owned nor the wanted count, so without it the recommendations would not
         /// recompute until the user happened to add or heart something.
         var signalsRevision: Int = 0
+        /// The first-run budget answer, the last-resort source of a `PriceBand`. Read from
+        /// `AppConfig` at the call site so the assembly stays a pure function of its inputs.
+        var seedBudget: DiscoverBudget?
 
         var ownedIds: [String] { entries.map(\.cardId) }
     }
@@ -160,7 +163,8 @@ final class DiscoverModel {
                                                dexIds: tasteDex,
                                                priorities: inputs.wants.mapValues(\.priority))
 
-        var band = PriceBand.make(entries: inputs.entries, wants: inputs.wants, now: Date())
+        var band = PriceBand.make(entries: inputs.entries, wants: inputs.wants,
+                                  seed: inputs.seedBudget, now: Date())
         var priceCeiling: Double?
 
         // Stated reasons are applied AFTER the profile is built and normalized. Re-normalizing
