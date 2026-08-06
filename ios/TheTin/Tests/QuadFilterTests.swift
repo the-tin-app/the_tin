@@ -47,6 +47,28 @@ final class QuadFilterTests: XCTestCase {
         XCTAssertEqual(QuadFilter.select([left, right]).count, 2)
     }
 
+    /// Pins the merge boundary itself, at the DEFAULT `mergeDistanceRatio` (0.5) — the two tests
+    /// above never get near it (~0.018 and ~1.06), so a materially different implementation
+    /// (fixed-pixel radius, IoU test, or any ratio from ~0.02 to ~1.0) would pass both of them
+    /// while merging real detector jitter differently. Both quads are 660x920, so
+    /// mergeRadius = shortSide(660) * 0.5 = 330. Centre distance here is 264 = 0.4 * 660 —
+    /// inside the radius — so these must merge.
+    func testMergesQuadsJustInsideDefaultMergeRadius() {
+        let a = quad(x: 0, y: 0, w: 660, h: 920, conf: 0.7)
+        let b = quad(x: 264, y: 0, w: 660, h: 920, conf: 0.95)   // centre distance 264 < 330
+        let kept = QuadFilter.select([a, b])
+        XCTAssertEqual(kept.count, 1)
+    }
+
+    /// Same boundary, other side. Centre distance here is 396 = 0.6 * 660 — outside the 330
+    /// radius — so these must NOT merge.
+    func testDoesNotMergeQuadsJustOutsideDefaultMergeRadius() {
+        let a = quad(x: 0, y: 0, w: 660, h: 920)
+        let b = quad(x: 396, y: 0, w: 660, h: 920)   // centre distance 396 > 330
+        let kept = QuadFilter.select([a, b])
+        XCTAssertEqual(kept.count, 2)
+    }
+
     func testCapIsHighestConfidenceFirstNotArbitrary() {
         var input: [ScoredQuad] = []
         for i in 0..<10 {
