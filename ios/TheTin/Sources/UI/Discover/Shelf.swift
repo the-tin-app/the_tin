@@ -7,7 +7,7 @@ import OSLog
 /// invisible and unexplainable.
 struct Shelf: Identifiable, Equatable {
     enum Kind: String, CaseIterable {
-        case setGoal, band, historicLow, weeklyDrop, species, artist, explore
+        case setGoal, easyAdds, worthAThink, someday, historicLow, weeklyDrop, species, artist, explore
     }
     let id: String
     let kind: Kind
@@ -23,7 +23,9 @@ struct Shelf: Identifiable, Equatable {
         let base: String
         switch kind {
         case .setGoal:     base = subject.map { "Finish \($0)" } ?? "Finish a set you collect"
-        case .band:        base = subject.map { "Under \($0) · your usual range" } ?? "Your usual range"
+        case .easyAdds:    base = subject.map { "Easy adds · under \($0)" } ?? "Easy adds"
+        case .worthAThink: base = subject.map { "Worth a think · \($0)" } ?? "Worth a think"
+        case .someday:     base = "Someday"
         case .historicLow: base = "Cheapest in 6 months"
         case .weeklyDrop:  base = "Down this week"
         case .species:     base = subject.map { "Because you like \($0)" } ?? "A species you like"
@@ -50,7 +52,9 @@ struct Shelf: Identifiable, Equatable {
     var caption: String {
         switch kind {
         case .setGoal:     return subject.map { "Finishing \($0)" } ?? "Finishing a set you collect"
-        case .band:        return "In your usual range"
+        case .easyAdds:    return "You wouldn't blink"
+        case .worthAThink: return "Worth a think"
+        case .someday:     return "Someday"
         case .historicLow: return "Cheapest in 6 months"
         case .weeklyDrop:  return "Down this week"
         case .species:     return subject.map { "Because you like \($0)" } ?? "A species you like"
@@ -96,15 +100,18 @@ enum ShelfBuilder {
     /// How many artist shelves to render at most.
     static let maxArtistShelves = 2
 
-    /// Does this card survive the filters every shelf shares?
+    /// May this card appear on a **buying** row?
     ///
-    /// The ceiling is a hard cut, not a multiplier. Measured: the cards a collector rejects are
-    /// already far above `band.p75`, so tightening the band changed nothing — and they were already
-    /// pinned at the price floor yet still ranked top, because a 3× species match swamps any
-    /// multiplier. An unpriced card is neutral, matching `PriceBand.fit`.
-    static func admits(price: Double?, priceCeiling: Double?) -> Bool {
-        guard let price, let priceCeiling else { return true }
-        return price < priceCeiling
+    /// ⚠️ Every shelf except `someday` is capped at `PriceTiers.buyingCeiling`, and that single rule
+    /// is what makes each buying row genuinely a buying row. Before tiers, expensive cards leaked
+    /// into every row and the only defence was a hidden per-user price cut derived from thumbs-down
+    /// taps — which is now deleted, because the tiers state the same thing visibly and editably.
+    ///
+    /// An unpriced card is admitted: we do not know what it costs, and exiling it to Someday would
+    /// be a claim we cannot support.
+    static func admitsToBuyingRow(price: Double?, tiers: PriceTiers?) -> Bool {
+        guard let price, let tiers else { return true }
+        return price <= tiers.buyingCeiling
     }
 
     /// Which species get their own shelf: walk by weight, skipping any whose family window overlaps
@@ -145,7 +152,7 @@ enum ShelfBuilder {
                       owned: Set<String>,
                       tasteIds: Set<String>,
                       dismissed: Set<String>,
-                      priceCeiling: Double?,
+                      tiers: PriceTiers?,
                       relatedSpecies: [Int: Double],
                       maxCards: Int = maxCardsPerShelf) -> [Shelf] {
         var out: [Shelf] = []
@@ -164,6 +171,16 @@ enum ShelfBuilder {
         /// `speciesSeeds`.
         var used: Set<String> = []
 
+        /// Whole dollars, for row titles. "$10", never "$10.00".
+        func money(_ amount: Double) -> String { "$\(Int(amount.rounded()))" }
+
+        /// Memoized so splitting `bandCards` into two tiers does not re-query per predicate call.
+        var pricesCache: [String: Double]?
+        func pricesFor(_ cards: [CardRecord]) -> [String: Double] {
+            if let pricesCache { return pricesCache }
+            let p = prices(cards); pricesCache = p; return p
+        }
+
         /// Prices for a candidate set, fetched once and reused by both the seam and the ranking.
         func prices(_ cards: [CardRecord]) -> [String: Double] {
             guard !cards.isEmpty else { return [:] }
@@ -174,10 +191,14 @@ enum ShelfBuilder {
         }
 
         /// The seam. Nothing reaches a shelf except through here.
-        func admit(_ cards: [CardRecord], _ priced: [String: Double]) -> [CardRecord] {
+        ///
+        /// `buyingRow: false` is passed only by `someday`, the one row allowed above the ceiling —
+        /// which is the whole point of it existing.
+        func admit(_ cards: [CardRecord], _ priced: [String: Double],
+                   buyingRow: Bool = true) -> [CardRecord] {
             cards.filter {
-                !excluded.contains($0.id) && !used.contains($0.id)
-                    && admits(price: priced[$0.id], priceCeiling: priceCeiling)
+                guard !excluded.contains($0.id), !used.contains($0.id) else { return false }
+                return !buyingRow || admitsToBuyingRow(price: priced[$0.id], tiers: tiers)
             }
         }
 
@@ -200,7 +221,7 @@ enum ShelfBuilder {
         func append(_ kind: Shelf.Kind, id: String, subject: String? = nil,
                     detail: String? = nil, cards: [CardRecord]) {
             let priced = prices(cards)
-            let ids = rank(admit(cards, priced), priced)
+            let ids = rank(admit(cards, priced, buyingRow: kind != .someday), priced)
             guard !ids.isEmpty else { return }
             used.formUnion(ids)
             out.append(Shelf(id: id, kind: kind, subject: subject, detail: detail, cardIds: ids))
@@ -258,7 +279,30 @@ enum ShelfBuilder {
                                  detail: nil, cardIds: dropIds))
             }
 
-            append(.band, id: "band", subject: "$\(Int(band.p75))", cards: bandCards)
+        }
+
+        // 2b. The three intentions. `bandCards` is the in-band slice, which is not wide enough for
+        //     Someday — that needs everything ABOVE the buying ceiling, which no band query returns.
+        if let tiers {
+            let routine = bandCards.filter { (pricesFor(bandCards)[$0.id] ?? 0) <= tiers.routineCeiling }
+            append(.easyAdds, id: "easyAdds", subject: money(tiers.routineCeiling), cards: routine)
+
+            let occasional = bandCards.filter {
+                let p = pricesFor(bandCards)[$0.id] ?? 0
+                return p > tiers.routineCeiling && p <= tiers.occasionalCeiling
+            }
+            append(.worthAThink, id: "worthAThink",
+                   subject: "\(money(tiers.routineCeiling))–\(money(tiers.occasionalCeiling))",
+                   cards: occasional)
+
+            // ⚠️ Ranked by AFFINITY, not by price. Modelled on real data this opens on an $85
+            // Charizard & Braixen rather than the catalog's $3,510 top card — Someday is the user's
+            // dreams, not the most expensive objects in existence. Leading with the latter is
+            // precisely the mistake the deleted cold-start `popularMix` made.
+            let dreams = read("cardsAboveCeiling") {
+                try store.cardsAbovePrice(tiers.buyingCeiling, limit: buySignalCandidateLimit)
+            }
+            append(.someday, id: "someday", cards: dreams)
         }
 
         // 3. Inferred similarity.

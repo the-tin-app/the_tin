@@ -68,12 +68,12 @@ final class DiscoverSignalsTests: XCTestCase {
     /// an unknown age as old would silently void every signal given before decay shipped.
     func testTheRealDeviceFileWithNoTimestampsStillDecodes() throws {
         let paths = tempPaths()
-        let json = #"{"dismissed":["neo4-113","ex7-108"],"reasons":{"ex7-108":"tooExpensive"}}"#
+        let json = #"{"dismissed":["neo4-113","ex7-108"],"reasons":{"ex7-108":"notWorthThisPrice"}}"#
         try Data(json.utf8).write(to: paths.fileURL)
 
         let m = DiscoverSignalsModel(paths: paths)
         XCTAssertEqual(m.dismissed, ["neo4-113", "ex7-108"])
-        XCTAssertEqual(m.reasons["ex7-108"], .tooExpensive)
+        XCTAssertEqual(m.reasons["ex7-108"], .notWorthThisPrice)
         XCTAssertTrue(m.at.isEmpty, "no stamps recorded, and that is a valid state")
     }
 
@@ -81,7 +81,7 @@ final class DiscoverSignalsTests: XCTestCase {
         let paths = tempPaths()
         let stamp = Date(timeIntervalSinceReferenceDate: 807_568_576)
         let m = DiscoverSignalsModel(paths: paths)
-        m.dismiss("a-1", reason: .tooExpensive, now: stamp)
+        m.dismiss("a-1", reason: .notWorthThisPrice, now: stamp)
         XCTAssertEqual(m.at["a-1"], stamp)
 
         let reloaded = DiscoverSignalsModel(paths: paths)
@@ -92,7 +92,7 @@ final class DiscoverSignalsTests: XCTestCase {
     func testRestoreForgetsWhenTooSoThereIsNoOrphanStamp() {
         let paths = tempPaths()
         let m = DiscoverSignalsModel(paths: paths)
-        m.dismiss("a-1", reason: .tooExpensive, now: Date())
+        m.dismiss("a-1", reason: .notWorthThisPrice, now: Date())
         m.restore("a-1")
         XCTAssertNil(m.at["a-1"])
         XCTAssertNil(DiscoverSignalsModel(paths: paths).at["a-1"])
@@ -106,7 +106,7 @@ final class DiscoverSignalsTests: XCTestCase {
         let first = Date(timeIntervalSinceReferenceDate: 800_000_000)
         let second = first.addingTimeInterval(3_600)
         m.dismiss("a-1", now: first)
-        m.dismiss("a-1", reason: .tooExpensive, now: second)
+        m.dismiss("a-1", reason: .notWorthThisPrice, now: second)
         XCTAssertEqual(m.at["a-1"], second)
     }
 }

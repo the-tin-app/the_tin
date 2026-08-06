@@ -14,51 +14,69 @@ struct DiscoverSignalsPaths {
 ///
 /// ⚠️ Adding a case is fine; **renaming a `rawValue` is not** — stored reasons decode by raw value,
 /// and an unknown one degrades to "hidden, no reason", silently losing the tuning.
+/// Why a card was rejected.
+///
+/// ⚠️ **Two of these tune nothing, deliberately.** `notMySpecies` and `wrongEra` name a dimension
+/// the ranker holds, so they move it. `dontLikeArt` and `notWorthThisPrice` do not, and Tomas's
+/// reasoning is why: *"maybe I just don't like that art by that artist but I like other art by that
+/// artist."* An artist-level penalty would be wrong and a rarity-level one would be guessing, so
+/// they hide the card and record the statement without acting on it.
+///
+/// **The recording is the point.** Reasons are stored as raw EVENTS with timestamps, so a later
+/// version can learn from accumulated history — nine "don't like the art" taps that turn out to
+/// share a finish — without re-teaching. This is what raw-event storage was for.
+///
+/// ⚠️ `tooExpensive` was REMOVED. It duplicated, invisibly, what `PriceTiers` now states visibly and
+/// editably. Stored events with that raw value decode to nil and degrade to a plain hide, which is
+/// the correct outcome: the card stays hidden, no hidden price cut is derived from it.
+///
+/// ⚠️ Adding a case is fine; **renaming a `rawValue` is not** — stored reasons decode by raw value,
+/// and an unknown one silently becomes "hidden, no reason".
 enum DismissReason: String, Codable, CaseIterable, Identifiable, Sendable {
-    case tooExpensive
     case notMySpecies
     case wrongEra
-    case notMyKind
+    case dontLikeArt
+    case notWorthThisPrice
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .tooExpensive: return "Too expensive"
-        case .notMySpecies: return "Not my Pokémon"
-        case .wrongEra:     return "Wrong era"
-        case .notMyKind:    return "Not my kind of card"
+        case .notMySpecies:      return "I don't like this Pokémon"
+        case .wrongEra:          return "I don't like this generation"
+        case .dontLikeArt:       return "I just don't like the art"
+        case .notWorthThisPrice: return "Not worth this price"
         }
     }
 
-    /// Two-line label for the card-sized overlay, where the whole panel is ~110pt wide on the
-    /// Discover home row. `label` is used wherever there is room for one line.
+    /// Two-line label for the card-sized 2×2 panel, which is ~110pt wide on the Discover home row.
     var shortLabel: String {
         switch self {
-        case .tooExpensive: return "Too\npricey"
-        case .notMySpecies: return "Not my\nPokémon"
-        case .wrongEra:     return "Wrong\nera"
-        case .notMyKind:    return "Not my\nkind"
+        case .notMySpecies:      return "Not my\nPokémon"
+        case .wrongEra:          return "Wrong\ngeneration"
+        case .dontLikeArt:       return "Don't like\nthe art"
+        case .notWorthThisPrice: return "Not worth\nthis price"
         }
     }
 
-    /// What this answer actually moves, shown under the label so the gesture never feels like a
-    /// black box.
+    /// What this answer actually moves, shown under the label so the gesture is never a black box.
+    ///
+    /// ⚠️ The two hide-only cases say so honestly rather than implying a tuning that will not happen.
     var effect: String {
         switch self {
-        case .tooExpensive: return "Show me cheaper cards"
-        case .notMySpecies: return "Less of this Pokémon"
-        case .wrongEra:     return "Less from this generation"
-        case .notMyKind:    return "Less of this rarity"
+        case .notMySpecies:      return "Less of this Pokémon"
+        case .wrongEra:          return "Less from this generation"
+        case .dontLikeArt:       return "Hides this card"
+        case .notWorthThisPrice: return "Hides this card"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .tooExpensive: return "dollarsign.circle"
-        case .notMySpecies: return "bolt.circle"
-        case .wrongEra:     return "clock.arrow.circlepath"
-        case .notMyKind:    return "square.stack"
+        case .notMySpecies:      return "bolt.circle"
+        case .wrongEra:          return "clock.arrow.circlepath"
+        case .dontLikeArt:       return "paintpalette"
+        case .notWorthThisPrice: return "dollarsign.circle"
         }
     }
 }

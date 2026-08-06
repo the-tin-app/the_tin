@@ -70,29 +70,48 @@ final class ShelfBuilderTests: XCTestCase {
     private let band = PriceBand(p25: 10, p50: 20, p75: 30)
 
     private func build(store: CatalogStore, dismissed: Set<String> = [],
-                       priceCeiling: Double? = nil, tasteIds: Set<String> = [],
+                       tiers: PriceTiers? = PriceTiers(routineCeiling: 21, occasionalCeiling: 100), tasteIds: Set<String> = [],
                        setGoals: Set<String> = ["s1"],
                        band: PriceBand? = nil,
                        profile: DiscoverAffinity.Profile = .init(sets: ["s1": 1.0],
                                                                  artists: ["Artist A": 1.0])) -> [Shelf] {
         ShelfBuilder.build(store: store, profile: profile, band: band ?? self.band, setGoals: setGoals,
                            owned: [], tasteIds: tasteIds, dismissed: dismissed,
-                           priceCeiling: priceCeiling, relatedSpecies: [:])
+                           tiers: tiers, relatedSpecies: [:])
     }
 
     // MARK: The seam
 
     /// ⚠️ THE REGRESSION THAT MATTERS. `ForYouStream.varietyPicks` drew from
-    /// `topPricedCards(offset: 0, limit: 300)` and was appended AFTER the ceiling was applied to the
-    /// candidate pool, so a $4,500 card sat at slot 4 of page 0 of a deck whose band was $5–$34, and
-    /// each dismissal merely promoted the next grail — 300 deep. Every shelf must pass one seam.
-    func testACardAboveTheCeilingAppearsInNoShelfIncludingExplore() throws {
-        let shelves = build(store: try makeStore(), priceCeiling: 100)
+    /// `topPricedCards(offset: 0, limit: 300)` and was appended AFTER the price cap was applied to
+    /// the candidate pool, so a $4,500 card sat at slot 4 of page 0 of a deck banded at $5–$34, and
+    /// each dismissal merely promoted the next grail — 300 deep.
+    ///
+    /// ⚠️ Amended for tiers: **`someday` is now the one row allowed above the line, and that is the
+    /// point of it.** Expensive cards are not suppressed, they are given one honest home instead of
+    /// leaking into every row that claims to be a shopping list. So the assertion is no longer "no
+    /// shelf has it" but "no BUYING shelf has it, and someday does".
+    func testAnExpensiveCardReachesOnlySomeday() throws {
+        let shelves = build(store: try makeStore(),
+                            tiers: PriceTiers(routineCeiling: 21, occasionalCeiling: 100))
         XCTAssertFalse(shelves.isEmpty, "the fixture must produce shelves or this asserts nothing")
-        for shelf in shelves {
+        for shelf in shelves where shelf.kind != .someday {
             XCTAssertFalse(shelf.cardIds.contains("s2-1"),
-                           "\(shelf.kind.rawValue) leaked a card above the price ceiling")
+                           "\(shelf.kind.rawValue) is a buying row and leaked a $4,500 card")
         }
+        let someday = try XCTUnwrap(shelves.first { $0.kind == .someday })
+        XCTAssertTrue(someday.cardIds.contains("s2-1"),
+                      "the daydream row must actually hold the daydream")
+    }
+
+    /// Someday is the ONLY row above the line, and it must be entirely above it — a row that mixes
+    /// $6 cards into the dreams is not a daydream row, it is a leak with a nice name.
+    func testSomedayHoldsNothingBelowTheLine() throws {
+        let tiers = PriceTiers(routineCeiling: 21, occasionalCeiling: 100)
+        let shelves = build(store: try makeStore(), tiers: tiers)
+        let someday = try XCTUnwrap(shelves.first { $0.kind == .someday })
+        // The fixture's only above-line card is s2-1 at $4,500; everything else is $20–$22.
+        XCTAssertEqual(someday.cardIds, ["s2-1"])
     }
 
     func testDismissedCardsAppearInNoShelf() throws {
@@ -111,13 +130,15 @@ final class ShelfBuilderTests: XCTestCase {
         }
     }
 
-    func testAdmitsRejectsAtOrAboveTheCeilingAndAllowsUnpriced() {
-        XCTAssertFalse(ShelfBuilder.admits(price: 100, priceCeiling: 100))
-        XCTAssertFalse(ShelfBuilder.admits(price: 101, priceCeiling: 100))
-        XCTAssertTrue(ShelfBuilder.admits(price: 99, priceCeiling: 100))
-        // An unpriced card is neutral, not bad — the rule `PriceBand.fit` already follows.
-        XCTAssertTrue(ShelfBuilder.admits(price: nil, priceCeiling: 100))
-        XCTAssertTrue(ShelfBuilder.admits(price: 5000, priceCeiling: nil))
+    func testBuyingRowsAreCappedAtTheOccasionalLine() {
+        let t = PriceTiers(routineCeiling: 10, occasionalCeiling: 100)
+        XCTAssertTrue(ShelfBuilder.admitsToBuyingRow(price: 100, tiers: t), "the line itself is in")
+        XCTAssertFalse(ShelfBuilder.admitsToBuyingRow(price: 101, tiers: t))
+        XCTAssertTrue(ShelfBuilder.admitsToBuyingRow(price: 99, tiers: t))
+        // Unpriced is admitted: we do not know what it costs, and exiling it would be a claim we
+        // cannot support.
+        XCTAssertTrue(ShelfBuilder.admitsToBuyingRow(price: nil, tiers: t))
+        XCTAssertTrue(ShelfBuilder.admitsToBuyingRow(price: 5000, tiers: nil))
     }
 
     // MARK: Caps and shape
@@ -191,7 +212,7 @@ final class ShelfBuilderTests: XCTestCase {
     /// A shelf-level fact belongs in the row header, never under a single card: how many cards are
     /// left in a set is a property of the shelf, not of the card in your hand.
     func testCaptionDropsShelfLevelDetail() {
-        for kind in [Shelf.Kind.setGoal, .band, .species, .artist] {
+        for kind in [Shelf.Kind.setGoal, .easyAdds, .worthAThink, .species, .artist] {
             let shelf = Shelf(id: "x", kind: kind, subject: "Subject", detail: "99 left", cardIds: ["a"])
             XCTAssertFalse(shelf.caption.contains("99 left"), "\(kind.rawValue) leaked shelf detail")
             XCTAssertTrue(shelf.title.contains("99 left"), "\(kind.rawValue) dropped it from the header")
@@ -200,12 +221,15 @@ final class ShelfBuilderTests: XCTestCase {
 
     func testEveryKindHasABothTitleAndCaption() {
         let subjects: [Shelf.Kind: String?] = [
-            .setGoal: "Pitch Black", .band: "$33", .historicLow: nil,
-            .weeklyDrop: nil, .species: "Articuno", .artist: "5ban Graphics", .explore: nil,
+            .setGoal: "Pitch Black", .easyAdds: "$10", .worthAThink: "$10–$60",
+            .someday: nil, .historicLow: nil, .weeklyDrop: nil,
+            .species: "Articuno", .artist: "5ban Graphics", .explore: nil,
         ]
         let expected: [Shelf.Kind: (String, String)] = [
             .setGoal:     ("Finish Pitch Black", "Finishing Pitch Black"),
-            .band:        ("Under $33 · your usual range", "In your usual range"),
+            .easyAdds:    ("Easy adds · under $10", "You wouldn't blink"),
+            .worthAThink: ("Worth a think · $10–$60", "Worth a think"),
+            .someday:     ("Someday", "Someday"),
             .historicLow: ("Cheapest in 6 months", "Cheapest in 6 months"),
             .weeklyDrop:  ("Down this week", "Down this week"),
             .species:     ("Because you like Articuno", "Because you like Articuno"),
@@ -237,7 +261,7 @@ final class ShelfBuilderTests: XCTestCase {
         XCTAssertEqual(shelves.first { $0.kind == .setGoal }?.caption, "Finishing Pitch Black")
         XCTAssertEqual(shelves.first { $0.kind == .species }?.caption, "Because you like Articuno")
         XCTAssertEqual(shelves.first { $0.kind == .artist }?.caption, "More from Artist A")
-        XCTAssertEqual(shelves.first { $0.kind == .band }?.caption, "In your usual range")
+        XCTAssertEqual(shelves.first { $0.kind == .easyAdds }?.caption, "You wouldn't blink")
     }
 
     func testShelvesWithNoDataAreAbsentNotEmpty() throws {
@@ -251,7 +275,7 @@ final class ShelfBuilderTests: XCTestCase {
     func testShelfOrderPutsTheMostExplicitSignalFirst() throws {
         let kinds = build(store: try makeStore()).map(\.kind)
         let goal = try XCTUnwrap(kinds.firstIndex(of: .setGoal))
-        let bandIndex = try XCTUnwrap(kinds.firstIndex(of: .band))
+        let bandIndex = try XCTUnwrap(kinds.firstIndex(of: .easyAdds))
         let explore = try XCTUnwrap(kinds.firstIndex(of: .explore))
         XCTAssertLessThan(goal, bandIndex, "a set the user named outranks an inferred band")
         XCTAssertLessThan(bandIndex, explore, "a buy signal outranks exploration")
@@ -270,16 +294,16 @@ final class ShelfBuilderTests: XCTestCase {
         let shelves = ShelfBuilder.build(store: try makeStore(),
                                          profile: .init(sets: ["s1": 1.0]), band: nil,
                                          setGoals: ["s1"], owned: [], tasteIds: [],
-                                         dismissed: [], priceCeiling: nil, relatedSpecies: [:])
+                                         dismissed: [], tiers: nil, relatedSpecies: [:])
         XCTAssertNotNil(shelves.first { $0.kind == .setGoal })
-        XCTAssertNil(shelves.first { $0.kind == .band })
+        XCTAssertNil(shelves.first { $0.kind == .easyAdds })
         XCTAssertNil(shelves.first { $0.kind == .explore })
     }
 
     func testAnEmptyProfileWithNoGoalsProducesNoShelves() throws {
         let shelves = ShelfBuilder.build(store: try makeStore(), profile: .init(), band: nil,
                                          setGoals: [], owned: [], tasteIds: [], dismissed: [],
-                                         priceCeiling: nil, relatedSpecies: [:])
+                                         tiers: nil, relatedSpecies: [:])
         XCTAssertTrue(shelves.isEmpty, "cold start renders no For You row at all — it does not guess")
     }
 

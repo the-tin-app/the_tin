@@ -9,7 +9,7 @@ struct DiscoverView: View {
     @State private var model: DiscoverModel?
     /// Shown once, when nothing has ever been asked or answered. `.skipped` is a stored answer, so
     /// a skip is remembered and this stays false thereafter.
-    @State private var showSeed = AppConfig.discoverBudget == nil
+    @State private var showSeed = AppConfig.priceTiers == nil
 
     var body: some View {
         // One view, loaded or not. This used to be `Group { if isLoaded { home } else { TinLoadingView } }`,
@@ -42,10 +42,12 @@ struct DiscoverView: View {
         }
         .navigationDestination(for: ShelfRoute.self) { route in
             if let model, let shelf = model.shelves.first(where: { $0.id == route.shelfId }) {
+                // `signals:` only on For You surfaces — a thumbs-down on Full-art or Chase would
+                // promise tuning that only the personalised ranker can deliver.
                 StreamView(title: shelf.title,
                            stream: model.makeStream(for: shelf),
                            caption: { _ in shelf.caption },
-                           store: store, wants: wants, collection: collection)
+                           store: store, wants: wants, collection: collection, signals: signals)
             }
         }
         // The whole browse surface (By Set / By Dex / Sealed / All Cards), not just the filter
@@ -64,9 +66,7 @@ struct DiscoverView: View {
         // would be a second `_ConditionalContent` identity, which destroys and rebuilds the whole
         // Discover layout underneath it.
         .sheet(isPresented: $showSeed) {
-            ForYouSeedView(sets: (try? store.recentSets(limit: 10)) ?? [], goals: goals) {
-                showSeed = false
-            }
+            ForYouSeedView { showSeed = false }
         }
     }
 
@@ -78,7 +78,7 @@ struct DiscoverView: View {
               reasons: signals?.reasons ?? [:],
               at: signals?.at ?? [:],
               signalsRevision: signals?.revision ?? 0,
-              seedBudget: AppConfig.discoverBudget)
+              tiers: AppConfig.priceTiers)
     }
 
     /// ⚠️ `signals.revision` and the goal count are load-bearing, not decoration. Counting owned and

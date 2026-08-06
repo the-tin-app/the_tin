@@ -95,7 +95,7 @@ final class DiscoverModelTests: XCTestCase {
         let goal = try XCTUnwrap(model.shelves.first { $0.kind == .setGoal })
         XCTAssertEqual(goal.title, "Finish Set One · 3 left")
         XCTAssertNil(model.band, "no purchases means no band")
-        XCTAssertNil(model.shelves.first { $0.kind == .band })
+        XCTAssertNil(model.shelves.first { $0.kind == .easyAdds })
     }
 
     /// ⚠️ The recompute trigger this replaces could not see a dismissal at all. `lastSignal` was

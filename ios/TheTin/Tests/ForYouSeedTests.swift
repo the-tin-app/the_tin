@@ -1,10 +1,10 @@
 import XCTest
 @testable import TheTin
 
-/// The first-run seed: what a collector says they spend, before there is any purchase history to
-/// infer it from.
+/// The two price lines a collector states at first run, and the three intentions they create.
 final class ForYouSeedTests: XCTestCase {
     private let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    private let tiers = PriceTiers(routineCeiling: 10, occasionalCeiling: 60)
 
     private func entry(_ id: String, paid: Double?) -> CollectionEntry {
         CollectionEntry(id: UUID().uuidString, cardId: id, groupId: "", qty: 1,
@@ -12,75 +12,85 @@ final class ForYouSeedTests: XCTestCase {
                         acquiredFrom: nil, addedAt: now)
     }
 
-    // MARK: budget → band
+    // MARK: which intention a price falls under
 
-    func testEachBudgetMapsToAUsableBand() throws {
-        XCTAssertEqual(DiscoverBudget.under10.band, PriceBand(p25: 2, p50: 5, p75: 10))
-        XCTAssertEqual(DiscoverBudget.tenToFifty.band, PriceBand(p25: 10, p50: 25, p75: 50))
-        XCTAssertEqual(DiscoverBudget.fiftyToTwoHundred.band, PriceBand(p25: 50, p50: 100, p75: 200))
+    func testEveryPriceLandsInExactlyOneTier() {
+        XCTAssertEqual(tiers.tier(for: 0.50), .routine)
+        XCTAssertEqual(tiers.tier(for: 10), .routine, "the line itself is inclusive")
+        XCTAssertEqual(tiers.tier(for: 10.01), .occasional)
+        XCTAssertEqual(tiers.tier(for: 60), .occasional)
+        XCTAssertEqual(tiers.tier(for: 60.01), .someday)
+        XCTAssertEqual(tiers.tier(for: 4500), .someday)
     }
 
-    /// ⚠️ `.more` yields NO band on purpose. There is no honest range to infer above $200 from one
-    /// tap, and no band is better than a wrong one: a band that matches everything is precisely what
-    /// made the first build of this feature measure as inert.
-    func testMoreAndSkippedYieldNoBand() {
-        XCTAssertNil(DiscoverBudget.more.band)
-        XCTAssertNil(DiscoverBudget.skipped.band)
-    }
-
-    func testEveryBandIsOrderedAndPositive() throws {
-        for option in DiscoverBudget.allCases {
-            guard let band = option.band else { continue }
-            XCTAssertLessThan(band.p25, band.p50, option.rawValue)
-            XCTAssertLessThan(band.p50, band.p75, option.rawValue)
-            XCTAssertGreaterThan(band.p25, 0, option.rawValue)
+    /// ⚠️ The reason this is two thresholds rather than three ranges. Stated as ranges ("$1–10",
+    /// "$30–60") a $20 card belongs to none of them and the app has to guess silently.
+    func testNothingFallsBetweenTheTiers() {
+        for price in stride(from: 0.5, through: 200, by: 0.5) {
+            XCTAssertNotNil(tiers.tier(for: price), "\(price) fell through")
         }
+        XCTAssertEqual(tiers.tier(for: 20), .occasional, "the old gap between $10 and $30")
     }
 
-    func testEveryOptionHasALabel() {
-        for option in DiscoverBudget.allCases {
-            XCTAssertFalse(option.label.isEmpty, option.rawValue)
-        }
+    /// An unpriced card is routine, not a daydream: we do not know what it costs, and exiling it
+    /// to Someday would be a claim we cannot support.
+    func testAnUnpricedCardIsRoutineNotSomeday() {
+        XCTAssertEqual(tiers.tier(for: nil), .routine)
     }
 
-    // MARK: precedence — purchases → targets → seed → nil
-
-    func testTheSeedCarriesTheBandWhenThereIsNoHistory() {
-        XCTAssertEqual(PriceBand.make(entries: [], wants: [:], seed: .tenToFifty, now: now),
-                       PriceBand(p25: 10, p50: 25, p75: 50))
+    func testTheBuyingCeilingIsTheOccasionalLine() {
+        XCTAssertEqual(tiers.buyingCeiling, 60)
     }
 
-    /// The seed evaporates on its own: once three real purchases exist the first branch wins and it
-    /// is never consulted again. Nothing to migrate, nothing to expire.
-    func testThreePurchasesOverrideTheSeed() throws {
+    /// A hand-edited or restored value must not be able to invert the two lines.
+    func testNormalizedKeepsTheLinesInOrder() {
+        let inverted = PriceTiers(routineCeiling: 100, occasionalCeiling: 5).normalized
+        XCTAssertLessThan(inverted.routineCeiling, inverted.occasionalCeiling)
+        let zeroed = PriceTiers(routineCeiling: 0, occasionalCeiling: 0).normalized
+        XCTAssertGreaterThan(zeroed.routineCeiling, 0)
+        XCTAssertGreaterThan(zeroed.occasionalCeiling, zeroed.routineCeiling)
+    }
+
+    func testDefaultsAreTheOnesThePickerPreselects() {
+        XCTAssertTrue(PriceTiers.choicesRoutine.contains(PriceTiers.default.routineCeiling))
+        XCTAssertTrue(PriceTiers.choicesOccasional.contains(PriceTiers.default.occasionalCeiling))
+        XCTAssertLessThan(PriceTiers.default.routineCeiling, PriceTiers.default.occasionalCeiling)
+    }
+
+    // MARK: precedence — purchases → targets → stated tiers → nil
+
+    func testTheStatedTiersCarryTheBandWhenThereIsNoHistory() throws {
+        let band = try XCTUnwrap(PriceBand.make(entries: [], wants: [:], seed: tiers, now: now))
+        XCTAssertEqual(band.p75, 60, "the band spans the whole buying range")
+        XCTAssertEqual(band.p50, 10)
+    }
+
+    /// The seed evaporates on its own: three real purchases win the first branch and it is never
+    /// consulted again. Nothing to migrate, nothing to expire.
+    func testThreePurchasesOverrideTheStatedTiers() throws {
         let entries = [entry("a", paid: 5), entry("b", paid: 6), entry("c", paid: 7)]
         let band = try XCTUnwrap(PriceBand.make(entries: entries, wants: [:],
-                                                seed: .fiftyToTwoHundred, now: now))
-        XCTAssertLessThan(band.p75, 50, "purchase history must beat a seeded guess")
+                                                seed: PriceTiers(routineCeiling: 50,
+                                                                 occasionalCeiling: 500),
+                                                now: now))
+        XCTAssertLessThan(band.p75, 50, "purchase history must beat a stated guess")
     }
 
-    /// Two purchases are below `minimumSamples`, so the seed still carries.
-    func testTooFewPurchasesFallThroughToTheSeed() {
+    func testTooFewPurchasesFallThroughToTheStatedTiers() throws {
         let entries = [entry("a", paid: 5), entry("b", paid: 6)]
-        XCTAssertEqual(PriceBand.make(entries: entries, wants: [:], seed: .under10, now: now),
-                       PriceBand(p25: 2, p50: 5, p75: 10))
+        let band = try XCTUnwrap(PriceBand.make(entries: entries, wants: [:], seed: tiers, now: now))
+        XCTAssertEqual(band.p75, 60)
     }
 
-    /// Wishlist targets sit between purchases and the seed — an aspirational number the user typed
-    /// still beats a range they tapped once.
-    func testTargetsBeatTheSeed() throws {
+    func testTargetsBeatTheStatedTiers() throws {
         let wants = ["a": WantEntry(targetUsd: 90, addedAt: now),
                      "b": WantEntry(targetUsd: 200, addedAt: now),
                      "c": WantEntry(targetUsd: 250, addedAt: now)]
-        let band = try XCTUnwrap(PriceBand.make(entries: [], wants: wants, seed: .under10, now: now))
-        XCTAssertGreaterThan(band.p75, 10, "targets outrank the seeded range")
+        let band = try XCTUnwrap(PriceBand.make(entries: [], wants: wants, seed: tiers, now: now))
+        XCTAssertGreaterThan(band.p75, 60, "a number the user typed outranks a range they tapped")
     }
 
-    func testNoHistoryAndNoSeedIsStillNil() {
+    func testNoHistoryAndNoStatedTiersIsStillNil() {
         XCTAssertNil(PriceBand.make(entries: [], wants: [:], seed: nil, now: now))
-    }
-
-    func testSkippingThePickerLeavesNoBandRatherThanAGuess() {
-        XCTAssertNil(PriceBand.make(entries: [], wants: [:], seed: .skipped, now: now))
     }
 }

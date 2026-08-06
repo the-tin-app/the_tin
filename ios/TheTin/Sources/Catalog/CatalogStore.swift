@@ -741,6 +741,22 @@ final class CatalogStore {
         }
     }
 
+    /// Cards priced above the user's buying ceiling — the Someday pool.
+    ///
+    /// ⚠️ Ordered **cheapest-first**, which is the opposite of what "grails" suggests and is
+    /// deliberate. The caller ranks by affinity, so ordering only matters when `limit` truncates —
+    /// and if it does, the right end to lose is the fantasy end. "Someday" means *budget for it and
+    /// talk to my wife*, which is an $85 card, not a $3,510 one. Measured on the real catalog: 1,240
+    /// cards sit above a $60 ceiling, so at the default settings this never truncates at all.
+    func cardsAbovePrice(_ amount: Double, limit: Int) throws -> [CardRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT c.* FROM card c JOIN price_latest p ON p.card_id = c.id
+                WHERE p.raw_usd > ? ORDER BY p.raw_usd ASC, c.id LIMIT ?
+                """, arguments: [amount, limit]).map(Self.cardRecord)
+        }
+    }
+
     /// Newest sets first, for the For You first-run picker. A collector starting out is buying
     /// current product, so recency is the right offer.
     func recentSets(limit: Int) throws -> [SetRecord] {

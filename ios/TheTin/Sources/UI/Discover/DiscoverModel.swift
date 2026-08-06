@@ -110,9 +110,9 @@ final class DiscoverModel {
         /// neither the owned nor the wanted count, so without it the recommendations would not
         /// recompute until the user happened to add or heart something.
         var signalsRevision: Int = 0
-        /// The first-run budget answer, the last-resort source of a `PriceBand`. Read from
-        /// `AppConfig` at the call site so the assembly stays a pure function of its inputs.
-        var seedBudget: DiscoverBudget?
+        /// The two stated price lines. Read from `AppConfig` at the call site so the assembly stays
+        /// a pure function of its inputs. `nil` only before the picker has ever been answered.
+        var tiers: PriceTiers?
 
         var ownedIds: [String] { entries.map(\.cardId) }
     }
@@ -163,9 +163,8 @@ final class DiscoverModel {
                                                dexIds: tasteDex,
                                                priorities: inputs.wants.mapValues(\.priority))
 
-        var band = PriceBand.make(entries: inputs.entries, wants: inputs.wants,
-                                  seed: inputs.seedBudget, now: Date())
-        var priceCeiling: Double?
+        let band = PriceBand.make(entries: inputs.entries, wants: inputs.wants,
+                                  seed: inputs.tiers, now: Date())
 
         // Stated reasons are applied AFTER the profile is built and normalized. Re-normalizing
         // afterwards would cancel them out — see `DiscoverFeedback.apply`.
@@ -178,8 +177,6 @@ final class DiscoverModel {
                 prices: ((try? store.prices(cardIds: ids)) ?? [:]).compactMapValues(\.rawUsd),
                 now: Date())
             profile = feedback.apply(to: profile)
-            band = feedback.apply(to: band)
-            priceCeiling = feedback.priceCeiling
         }
 
         let coOccurring = (try? store.coOccurringDexIds(with: Array(profile.species.keys))) ?? []
@@ -189,7 +186,7 @@ final class DiscoverModel {
         let shelves = ShelfBuilder.build(store: store, profile: profile, band: band,
                                          setGoals: inputs.setGoals, owned: Set(ownedIds),
                                          tasteIds: tasteIds, dismissed: inputs.dismissed,
-                                         priceCeiling: priceCeiling, relatedSpecies: relatedSpecies)
+                                         tiers: inputs.tiers, relatedSpecies: relatedSpecies)
 
         // One entry per card, from the shelf that placed it. ShelfBuilder dedupes across shelves,
         // so this is 1:1 and the later shelf never overwrites an earlier, stronger reason.

@@ -59,8 +59,8 @@ final class ForYouReplayTests: XCTestCase {
 
         let reasons = (signals.reasons ?? [:]).compactMapValues(DismissReason.init(rawValue:))
         let dismissed = signals.dismissed ?? []
-        var band = PriceBand.make(entries: entries, wants: wants, now: Date())
-        var ceiling: Double?
+        let tiers = AppConfig.priceTiers ?? PriceTiers.default
+        let band = PriceBand.make(entries: entries, wants: wants, seed: tiers, now: Date())
         if !reasons.isEmpty {
             let ids = Array(reasons.keys)
             let cards = Dictionary(uniqueKeysWithValues: (try store.cards(ids: ids)).map { ($0.id, $0) })
@@ -69,8 +69,6 @@ final class ForYouReplayTests: XCTestCase {
                 dexIds: try store.dexIds(forCards: ids),
                 prices: (try store.prices(cardIds: ids)).compactMapValues(\.rawUsd))
             profile = feedback.apply(to: profile)
-            band = feedback.apply(to: band)
-            ceiling = feedback.priceCeiling
         }
         let related = DiscoverAffinity.relatedSpecies(
             seed: profile.species,
@@ -78,7 +76,7 @@ final class ForYouReplayTests: XCTestCase {
 
         let shelves = ShelfBuilder.build(store: store, profile: profile, band: band, setGoals: goals,
                                          owned: Set(ownedIds), tasteIds: tasteIds,
-                                         dismissed: dismissed, priceCeiling: ceiling,
+                                         dismissed: dismissed, tiers: tiers,
                                          relatedSpecies: related)
 
         let prices = try store.previewPrices(cardIds: shelves.flatMap(\.cardIds))
@@ -87,7 +85,7 @@ final class ForYouReplayTests: XCTestCase {
         ── REPLAY ────────────────────────────────────────────────────────────
         entries=\(entries.count) wants=\(wants.count) goals=\(goals.sorted()) \
         dismissed=\(dismissed.count) species=\(profile.species.count)→\(related.count)
-        band=\(band.map { "$\($0.p25)–$\($0.p75)" } ?? "nil") ceiling=\(ceiling.map { "$\($0)" } ?? "nil")
+        tiers=routine≤$\(Int(tiers.routineCeiling)) occasional≤$\(Int(tiers.occasionalCeiling))
         """)
         for shelf in shelves {
             let head = shelf.cardIds.prefix(3)
@@ -126,10 +124,13 @@ final class ForYouReplayTests: XCTestCase {
             XCTAssertTrue(shelf.cardIds.allSatisfy { !dismissed.contains($0) }, shelf.id)
             XCTAssertTrue(shelf.cardIds.allSatisfy { !tasteIds.contains($0) },
                           "\(shelf.id) recommends something already owned or wanted")
-            if let ceiling {
+            // ⚠️ Every row except `someday` is a BUYING row and must obey the occasional line.
+            // `someday` is the one place above it, which is the whole point of the row existing.
+            if shelf.kind != .someday {
                 for id in shelf.cardIds {
                     if let price = prices[id] {
-                        XCTAssertLessThan(price, ceiling, "\(shelf.kind.rawValue) leaked \(id)")
+                        XCTAssertLessThanOrEqual(price, tiers.buyingCeiling,
+                                                 "\(shelf.kind.rawValue) leaked \(id) at $\(price)")
                     }
                 }
             }
@@ -142,12 +143,12 @@ final class ForYouReplayTests: XCTestCase {
 
         // The band must actually bite. If nearly everything passes it, it is decorative — which is
         // exactly what the first build of this feature measured as.
-        if let band {
-            let priced = shelves.filter { $0.kind != .setGoal }.flatMap(\.cardIds).compactMap { prices[$0] }
-            let inBand = priced.filter { $0 >= band.p25 && $0 <= band.p75 }.count
-            print("in-band (excluding goal shelves): \(inBand)/\(priced.count)")
-            XCTAssertGreaterThan(Double(inBand) / Double(max(priced.count, 1)), 0.5,
-                                 "most of what For You shows should sit in the buying range")
+        // Someday must actually exist and actually be above the line — otherwise the row is
+        // pretending, which is the failure mode this whole design exists to avoid.
+        if let someday = shelves.first(where: { $0.kind == .someday }) {
+            let dreamPrices = someday.cardIds.compactMap { prices[$0] }
+            print("someday: \(someday.cardIds.count) cards, $\(Int(dreamPrices.min() ?? 0))–$\(Int(dreamPrices.max() ?? 0))")
+            XCTAssertTrue(dreamPrices.allSatisfy { $0 > tiers.buyingCeiling })
         }
     }
 }

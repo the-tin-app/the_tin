@@ -1,39 +1,47 @@
 import Foundation
 
-/// What the collector says they spend, asked once at first run.
+/// The two lines a collector draws through the catalog, and the three intentions they create.
 ///
-/// This exists because cold start had no band at all, and For You fell back to `topPricedCards` —
-/// so a brand-new user's first impression of a feature about *what you would actually buy* was a
-/// wall of $3,000–$4,500 grails.
+/// ⚠️ **This replaces a single `PriceBand` seed, and the change is a change of purpose.** A band
+/// treats price as a way of SUPPRESSING cards — everything outside it is demoted. That is wrong:
 ///
-/// ⚠️ `.skipped` is a real case, not an absence. "Show the picker" is "the stored value is nil", so
-/// skipping is recorded and never asked again — one value, not a value plus a bookkeeping flag.
-enum DiscoverBudget: String, CaseIterable, Sendable {
-    case under10, tenToFifty, fiftyToTwoHundred, more, skipped
+/// > "for more than that I would have to really think about it and budget for it and talk to my
+/// > wife, **but it's still fun to look at them**"
+///
+/// Expensive cards are not noise, they are a different *intention*. Price sorts cards into moods.
+///
+/// ⚠️ **Two thresholds, not three ranges.** Stated as ranges ("$1–10", "$30–60") a $20 card belongs
+/// to no tier and the app has to guess silently. Thresholds partition the catalog with nothing
+/// falling through.
+struct PriceTiers: Equatable, Sendable, Codable {
+    /// "I'd buy one without thinking, up to…"
+    var routineCeiling: Double
+    /// "Now and then, I'd go up to…" — and above this is Someday.
+    var occasionalCeiling: Double
 
-    var label: String {
-        switch self {
-        case .under10:           return "Under $10"
-        case .tenToFifty:        return "$10 – $50"
-        case .fiftyToTwoHundred: return "$50 – $200"
-        case .more:              return "More than that"
-        case .skipped:           return "Skip — let it learn"
-        }
+    static let choicesRoutine: [Double] = [5, 10, 25, 50]
+    static let choicesOccasional: [Double] = [30, 60, 150, 500]
+    static let `default` = PriceTiers(routineCeiling: 10, occasionalCeiling: 60)
+
+    /// Which intention a price falls under. An unpriced card is `routine`: it is not a daydream,
+    /// we simply do not know, and hiding it in Someday would be a claim we cannot support.
+    func tier(for price: Double?) -> Tier {
+        guard let price else { return .routine }
+        if price <= routineCeiling { return .routine }
+        if price <= occasionalCeiling { return .occasional }
+        return .someday
     }
 
-    /// Wide enough to be useful, narrow enough to bite.
-    ///
-    /// ⚠️ `.more` yields **nil**, deliberately. There is no honest range to infer above $200 from a
-    /// single tap, and no band is better than a wrong one: a band matching the whole catalog is
-    /// exactly what made the first build of this feature measure as inert (`fit()` returned 1.0
-    /// everywhere). A collector at that level gets no price filter until their purchases say more.
-    var band: PriceBand? {
-        switch self {
-        case .under10:           return PriceBand(p25: 2, p50: 5, p75: 10)
-        case .tenToFifty:        return PriceBand(p25: 10, p50: 25, p75: 50)
-        case .fiftyToTwoHundred: return PriceBand(p25: 50, p50: 100, p75: 200)
-        case .more, .skipped:    return nil
-        }
+    enum Tier: String, Sendable { case routine, occasional, someday }
+
+    /// The cap every buying row shares. `someday` is the only shelf allowed above it, which is what
+    /// stops expensive cards leaking into rows that claim to be shopping lists.
+    var buyingCeiling: Double { occasionalCeiling }
+
+    /// Guards a hand-edited or restored value: the occasional line must sit above the routine one.
+    var normalized: PriceTiers {
+        PriceTiers(routineCeiling: max(routineCeiling, 0.01),
+                   occasionalCeiling: max(occasionalCeiling, max(routineCeiling, 0.01) + 0.01))
     }
 }
 
@@ -117,7 +125,7 @@ struct PriceBand: Equatable {
     /// the first branch wins and the seed is never consulted again. Nothing to migrate, nothing to
     /// expire, no stale guess outliving the evidence that replaced it.
     static func make(entries: [CollectionEntry], wants: [String: WantEntry],
-                     seed: DiscoverBudget? = nil, now: Date) -> PriceBand? {
+                     seed: PriceTiers? = nil, now: Date) -> PriceBand? {
         let cutoff = now.addingTimeInterval(-Double(purchaseWindowMonths) * 30.4 * 86_400)
         let purchases: [Double] = entries.compactMap { entry in
             guard !entry.isSold, let paid = entry.pricePaid else { return nil }
@@ -127,7 +135,12 @@ struct PriceBand: Equatable {
         if let fromPurchases = make(purchases: purchases, targets: []) { return fromPurchases }
         if let fromTargets = make(purchases: purchases,
                                   targets: wants.values.compactMap(\.targetUsd)) { return fromTargets }
-        return seed?.band
+        // A seeded band spans the whole buying range: the tiers themselves do the splitting, so
+        // this only needs to exist for the shelves that still rank against a band.
+        guard let seed else { return nil }
+        return PriceBand(p25: seed.routineCeiling / 2,
+                         p50: seed.routineCeiling,
+                         p75: seed.occasionalCeiling)
     }
 
     /// Multiplier applied to an affinity score: 1.0 inside the band, falling off linearly to

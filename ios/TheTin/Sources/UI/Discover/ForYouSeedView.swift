@@ -1,98 +1,110 @@
 import SwiftUI
 
-/// Asked once, the first time For You has nothing to go on.
+/// Asked once, the first time For You has nothing to go on — and reopenable from Settings.
 ///
-/// Cold start used to fall back to `topPricedCards`, so a brand-new user's first impression of a
-/// feature about *what you would actually buy* was a wall of $3,000–$4,500 grails. Rather than
-/// guess, this asks — once — and writes into two things that already exist.
+/// ⚠️ **It asks about price and nothing else.** An earlier version also asked which sets you were
+/// collecting; that was removed at Tomas's call for 4.1(a) reasons. This is the first screen a new
+/// user meets and therefore the first screen an App Review reviewer meets, and a list of product
+/// names on it reads as an official product. A price question names nothing. Set goals still drive
+/// the top rows of For You — they are just set from a set screen instead.
 ///
-/// ⚠️ **It asks about sets, never species, and that is a review decision as much as a product one.**
-/// This is the first screen a new user meets, and therefore the first screen an App Review reviewer
-/// meets. Build 21 deliberately scrubbed the branded vocabulary from the running app
-/// ("Pokédex"→"Dex", region names→"Gen N") after three 4.1(a) rejections; a first-run grid of
-/// Pokémon names and art would be the densest possible version of exactly that, on the one screen a
-/// reviewer cannot miss.
-///
-/// The set answer is worth more anyway: it writes `SetGoals` — previously the biggest unused signal
-/// in the app — it gives the goal shelves content on day one, and a set implies its species, era and
-/// rarity mix for free through `Profile.sets`.
+/// ⚠️ **Two thresholds, not three ranges.** Stated as ranges ("$1–10", "$30–60") a $20 card belongs
+/// to no tier and the app has to guess silently. Two cut-off points partition the catalog with
+/// nothing falling through, while still reading as the three sentences a collector would say.
 struct ForYouSeedView: View {
-    let sets: [SetRecord]
-    let goals: SetGoalsModel?
+    var initial: PriceTiers? = nil
     let onDone: () -> Void
 
-    @State private var budget: DiscoverBudget?
-    @State private var chosen: Set<String> = []
+    @State private var routine: Double = PriceTiers.default.routineCeiling
+    @State private var occasional: Double = PriceTiers.default.occasionalCeiling
+
+    /// Only the choices above the routine line: offering "$30" as an occasional ceiling when the
+    /// routine ceiling is already $50 would let the user state something incoherent.
+    private var occasionalChoices: [Double] {
+        PriceTiers.choicesOccasional.filter { $0 > routine }
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    ForEach(sets) { record in
-                        Button { toggle(record.id) } label: {
-                            HStack {
-                                Text(record.name).foregroundStyle(.primary)
-                                Spacer()
-                                if chosen.contains(record.id) {
-                                    Image(systemName: "checkmark").foregroundStyle(.tint)
-                                }
-                            }
-                        }
-                        .accessibilityAddTraits(chosen.contains(record.id) ? .isSelected : [])
-                    }
+                    amountRow(choices: PriceTiers.choicesRoutine, selection: $routine)
                 } header: {
-                    Text("Which sets are you working on?")
+                    Text("I'd buy one without thinking, up to")
                 } footer: {
-                    Text("We'll show you what's missing from them.")
+                    Text("These fill your \"Easy adds\" row.")
                 }
 
                 Section {
-                    ForEach(DiscoverBudget.allCases.filter { $0 != .skipped }, id: \.self) { option in
-                        Button { budget = option } label: {
-                            HStack {
-                                Text(option.label).foregroundStyle(.primary)
-                                Spacer()
-                                if budget == option {
-                                    Image(systemName: "checkmark").foregroundStyle(.tint)
-                                }
-                            }
-                        }
-                        .accessibilityAddTraits(budget == option ? .isSelected : [])
-                    }
+                    amountRow(choices: occasionalChoices, selection: $occasional)
                 } header: {
-                    Text("Roughly what do you spend on a card?")
+                    Text("Now and then, I'd go up to")
                 } footer: {
-                    Text("Only used to pick what to show you. It updates itself once you've recorded a few purchases.")
+                    Text("A treat rather than a habit — your \"Worth a think\" row.")
+                }
+
+                Section {
+                    // The third tier needs no number: it is everything above the second line. Saying
+                    // so plainly is also the promise that expensive cards are NOT being hidden.
+                    Label {
+                        Text("Above \(money(occasional)) — **someday**. Still shown, in their own row.")
+                    } icon: {
+                        Image(systemName: "sparkles")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Text("You can change these any time in Settings. Once you've recorded a few purchases, For You uses what you actually paid instead.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Set up For You")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Skip") { finish(.skipped) }
+                    // Skip still STORES a value — the defaults. That is what makes "have we asked?"
+                    // a single nil check with no second bookkeeping flag beside it.
+                    Button("Skip") { save(PriceTiers.default) }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    // `.skipped` is a real stored answer, so tapping Done with nothing chosen is
-                    // recorded and never asked again.
-                    Button("Done") { finish(budget ?? .skipped) }
+                    Button("Done") {
+                        save(PriceTiers(routineCeiling: routine, occasionalCeiling: occasional))
+                    }
                 }
+            }
+            .onAppear {
+                guard let initial else { return }
+                routine = initial.routineCeiling
+                occasional = initial.occasionalCeiling
+            }
+            .onChange(of: routine) { _, new in
+                // Keep the two lines coherent: raising the first past the second drags the second up.
+                if occasional <= new { occasional = occasionalChoices.first ?? new * 4 }
             }
         }
         .interactiveDismissDisabled()
     }
 
-    private func toggle(_ setId: String) {
-        if chosen.contains(setId) { chosen.remove(setId) } else { chosen.insert(setId) }
+    @ViewBuilder
+    private func amountRow(choices: [Double], selection: Binding<Double>) -> some View {
+        // A segmented picker rather than a keypad: a decimal-pad TextField has no return key, so in
+        // a Form there is no way to dismiss it without a keyboard toolbar — a bad first screen.
+        Picker("", selection: selection) {
+            ForEach(choices, id: \.self) { amount in
+                Text(money(amount)).tag(amount)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
     }
 
-    /// Goals are written on the way out, not per tap: `SetGoalsModel.toggle` persists on every call,
-    /// so tapping five sets would be five whole-file writes and a half-finished picker would leave
-    /// goals behind if the user backed out.
-    private func finish(_ answer: DiscoverBudget) {
-        for setId in chosen.sorted() where !(goals?.isCollecting(setId) ?? false) {
-            goals?.toggle(setId)
-        }
-        AppConfig.discoverBudget = answer
+    private func money(_ amount: Double) -> String { "$\(Int(amount.rounded()))" }
+
+    private func save(_ tiers: PriceTiers) {
+        AppConfig.priceTiers = tiers
         onDone()
     }
 }
