@@ -24,6 +24,14 @@ final class LensPhotoSource: NSObject {
     // racing two independent detached tasks against the session.
     private let sessionQueue = DispatchQueue(label: "lens.session")
     private var pending: CheckedContinuation<CIImage?, Never>?
+    // Tags `pending` with the settings' own uniqueID. Reusing one LensPhotoSource across a
+    // stop() → start() → capture() cycle (exactly what a SwiftUI @State-held screen does on
+    // disappear/appear) can leave an earlier capture's delegate callback still outstanding when
+    // a newer capture begins. Without this tag, that stale callback would read whatever
+    // `pending` holds AT THE MOMENT IT RUNS and resume the newer capture with the older image
+    // (or a spurious nil) — no crash, just the wrong photo silently delivered. Both delegate
+    // methods below ignore any callback whose uniqueID doesn't match this.
+    private var pendingID: Int64?
 
     override init() {
         super.init()
@@ -76,6 +84,7 @@ final class LensPhotoSource: NSObject {
     func stop() {
         if let c = pending {
             pending = nil
+            pendingID = nil
             c.resume(returning: nil)
         }
         sessionQueue.async { [session] in
@@ -90,6 +99,7 @@ final class LensPhotoSource: NSObject {
         guard isAvailable, session.isRunning, pending == nil else { return nil }
         let settings = AVCapturePhotoSettings()
         let image = await withCheckedContinuation { (c: CheckedContinuation<CIImage?, Never>) in
+            pendingID = settings.uniqueID
             pending = c
             output.capturePhoto(with: settings, delegate: self)
         }
@@ -102,25 +112,34 @@ extension LensPhotoSource: AVCapturePhotoCaptureDelegate {
     nonisolated func photoOutput(_ output: AVCapturePhotoOutput,
                                  didFinishProcessingPhoto photo: AVCapturePhoto,
                                  error: Error?) {
+        let uniqueID = photo.resolvedSettings.uniqueID
         let image = photo.fileDataRepresentation().flatMap { CIImage(data: $0) }
         Task { @MainActor in
-            let c = self.pending
+            // Drop this callback if it doesn't belong to the capture currently pending — a stop()
+            // that already resumed the continuation, followed by a fresh capture(), does not stop
+            // AVFoundation's underlying capture; its callback still arrives, tagged with the OLD
+            // uniqueID, and must not be allowed to resolve the NEW capture with stale data.
+            guard self.pendingID == uniqueID, let c = self.pending else { return }
             self.pending = nil
-            c?.resume(returning: image)
+            self.pendingID = nil
+            c.resume(returning: image)
         }
     }
 
     /// Terminal callback for a `capturePhoto` call — Apple documents this as firing exactly once
     /// per call regardless of success or failure, independent of whether
     /// `didFinishProcessingPhoto` fired at all. Backstop only: the happy path already resumed
-    /// and cleared `pending` above, so this is a no-op then. If some error path never calls
-    /// through to `didFinishProcessingPhoto`, this is what keeps `capture()` from hanging forever.
+    /// and cleared `pending`/`pendingID` above, so this is a no-op then. If some error path never
+    /// calls through to `didFinishProcessingPhoto`, this is what keeps `capture()` from hanging
+    /// forever — and the uniqueID guard keeps it from resolving a capture it doesn't belong to.
     nonisolated func photoOutput(_ output: AVCapturePhotoOutput,
                                  didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
                                  error: Error?) {
+        let uniqueID = resolvedSettings.uniqueID
         Task { @MainActor in
-            guard let c = self.pending else { return }
+            guard self.pendingID == uniqueID, let c = self.pending else { return }
             self.pending = nil
+            self.pendingID = nil
             c.resume(returning: nil)
         }
     }
