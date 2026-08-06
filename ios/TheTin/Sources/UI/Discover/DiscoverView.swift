@@ -5,7 +5,11 @@ struct DiscoverView: View {
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
     var goals: SetGoalsModel? = nil
+    var signals: DiscoverSignalsModel? = nil
     @State private var model: DiscoverModel?
+    /// Shown once, when nothing has ever been asked or answered. `.skipped` is a stored answer, so
+    /// a skip is remembered and this stays false thereafter.
+    @State private var showSeed = AppConfig.priceTiers == nil
 
     var body: some View {
         // One view, loaded or not. This used to be `Group { if isLoaded { home } else { TinLoadingView } }`,
@@ -23,10 +27,27 @@ struct DiscoverView: View {
         }
         .navigationDestination(for: StreamRoute.self) { route in
             if let model {
-                StreamView(title: route.kind.title,
-                           stream: model.makeStream(route.kind),
-                           caption: { model.caption(for: $0, kind: route.kind) },
-                           store: store, wants: wants, collection: collection)
+                // For You's "See all" opens the shelves screen, where the reason is the row header.
+                // Full-art and Chase keep their existing decks.
+                if route.kind == .forYou {
+                    ForYouShelvesView(shelves: model.shelves, store: store,
+                                      wants: wants, collection: collection)
+                } else {
+                    StreamView(title: route.kind.title,
+                               stream: model.makeStream(route.kind),
+                               caption: { model.caption(for: $0, kind: route.kind) },
+                               store: store, wants: wants, collection: collection)
+                }
+            }
+        }
+        .navigationDestination(for: ShelfRoute.self) { route in
+            if let model, let shelf = model.shelves.first(where: { $0.id == route.shelfId }) {
+                // `signals:` only on For You surfaces — a thumbs-down on Full-art or Chase would
+                // promise tuning that only the personalised ranker can deliver.
+                StreamView(title: shelf.title,
+                           stream: model.makeStream(for: shelf),
+                           caption: { _ in shelf.caption },
+                           store: store, wants: wants, collection: collection, signals: signals)
             }
         }
         // The whole browse surface (By Set / By Dex / Sealed / All Cards), not just the filter
@@ -36,16 +57,30 @@ struct DiscoverView: View {
             BrowseView(store: store, entries: collection?.entries ?? [],
                        collection: collection, wants: wants, goals: goals)
         }
-        .task(id: tasteSignalKey) {
+        .task(id: inputs.recomputeKey) {
             let m = model ?? DiscoverModel(store: store)
-            await m.load(ownedIds: (collection?.entries ?? []).map(\.cardId), wantedIds: wants?.wanted ?? [])
+            await m.load(inputs)
             model = m
+        }
+        // A `.sheet` modifier rather than a branch in the body: swapping the surface for a picker
+        // would be a second `_ConditionalContent` identity, which destroys and rebuilds the whole
+        // Discover layout underneath it.
+        .sheet(isPresented: $showSeed) {
+            ForYouSeedView { showSeed = false }
         }
     }
 
-    private var tasteSignalKey: String {
-        "\(collection?.entries.count ?? 0)-\(wants?.wanted.count ?? 0)"
+    private var inputs: DiscoverModel.Inputs {
+        .init(entries: collection?.entries ?? [],
+              wants: wants?.entries ?? [:],
+              setGoals: goals?.setIds ?? [],
+              dismissed: signals?.dismissed ?? [],
+              reasons: signals?.reasons ?? [:],
+              at: signals?.at ?? [:],
+              signalsRevision: signals?.revision ?? 0,
+              tiers: AppConfig.priceTiers)
     }
+
 }
 
 private struct DiscoverHomeView: View {
@@ -136,7 +171,7 @@ private struct StreamPreviewRow: View {
 /// A `DiscoverTile` with the data taken out: same metrics, so nothing moves when the real tile
 /// replaces it. Built from the real `Text`/`PriceLabel` under `.redacted` rather than hand-sized
 /// bars, which is how the line heights stay exact for free.
-private struct SkeletonTile: View {
+struct SkeletonTile: View {
     var body: some View {
         VStack(spacing: 4) {
             RoundedRectangle(cornerRadius: 8)
@@ -183,7 +218,7 @@ private struct ConnectionsRow: View {
     }
 }
 
-private struct DiscoverTile: View {
+struct DiscoverTile: View {
     let card: CardRecord
     let value: Double?
     var wants: WantsModel?

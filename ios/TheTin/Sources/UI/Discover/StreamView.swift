@@ -23,6 +23,22 @@ struct StreamView: View {
     @State private var prefetcher = CardImagePrefetcher()
     @State private var wantBump = 0 // bumped on each double-tap to fire the haptic
     @State private var sharing: SharePayload?
+    /// Which card is showing which panel. One at a time, and never both — the two gestures are
+    /// mutually exclusive acts.
+    @State private var panel: FeedbackPanel?
+
+    /// Explicit feedback, when the host wired it. `nil` on Full-art / Chase / shelf decks that do
+    /// not personalise, so the thumbs-down never promises tuning it cannot deliver.
+    var signals: DiscoverSignalsModel?
+
+    private enum FeedbackPanel: Equatable {
+        case reason(cardId: String)
+        case priority(cardId: String)
+
+        var cardId: String {
+            switch self { case .reason(let id), .priority(let id): return id }
+        }
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(StreamDensity.storageKey) private var densityRaw = StreamDensity.one.rawValue
 
@@ -139,6 +155,11 @@ struct StreamView: View {
             VStack(spacing: 4) {
                 CardImageView(card: card, quality: "high")
                     .overlay(alignment: .topTrailing) { heart(for: card) }
+                    // ⚠️ The grid needs this too, and forgetting it made the thumbs-down INVISIBLE
+                    // on iPad — `StreamDensity` is `@AppStorage`, so a device left in grid mode
+                    // never renders the 1-up page where the button used to live only.
+                    .overlay(alignment: .topLeading) { thumbsDown(for: card) }
+                    .overlay(alignment: .bottom) { feedbackPanel(for: card) }
                 Text(card.name).font(.caption).lineLimit(1)
                 PriceLabel(value: try? store.price(cardId: card.id)?.rawUsd)
             }
@@ -186,6 +207,7 @@ struct StreamView: View {
                 .frame(maxWidth: .infinity)   // …then re-centre in the page
                 .padding(.horizontal, 40)
                 .overlay(alignment: .topTrailing) { heart(for: card) }
+                .overlay(alignment: .topLeading) { thumbsDown(for: card) }
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
                     wants?.toggle(card.id)
@@ -195,6 +217,13 @@ struct StreamView: View {
                 // Wanted is already the double tap + heart here, so the shared menu is used for
                 // its save sheet only — passing `wants: nil` keeps the long-press to one action.
                 .cardQuickActions(card: card, wants: nil, collection: collection, store: store)
+                // ⚠️ ABOVE the gesture modifiers, and inset rather than full-bleed. The panel this
+                // replaces was applied BELOW them and not one of its buttons responded — not even
+                // Cancel — because `.contentShape`/`.onTapGesture`/`.contextMenu` wrap what precedes
+                // them and take the touch first. Hoisting a FULL-BLEED panel then ate the deck's
+                // horizontal pan, since `Text` and `Image` are hit-testable. Inset + real buttons is
+                // the shape that satisfies both.
+                .overlay(alignment: .bottom) { feedbackPanel(for: card) }
 
             VStack(spacing: 4) {
                 Text(card.name).font(.title3.bold()).multilineTextAlignment(.center)
@@ -233,6 +262,77 @@ struct StreamView: View {
         }
     }
 
+    @ViewBuilder
+    private func feedbackPanel(for card: CardRecord) -> some View {
+        if let panel, panel.cardId == card.id {
+            switch panel {
+            case .priority:
+                if let wants {
+                    CardFeedbackPanel(title: "Priority",
+                                      options: WantPriority.panelOrder,
+                                      label: { $0.panelLabel },
+                                      systemImage: { $0.panelImage },
+                                      effect: { _ in nil },
+                                      selected: wants.entries[card.id]?.priority ?? .normal,
+                                      onPick: { priority in
+                                          wants.update(card.id) { $0.priority = priority }
+                                          withAnimation(.snappy) { self.panel = nil }
+                                      },
+                                      onDismiss: { withAnimation(.snappy) { self.panel = nil } })
+                }
+            case .reason:
+                CardFeedbackPanel(title: "Why?",
+                                  options: DismissReason.allCases,
+                                  label: { $0.shortLabel },
+                                  systemImage: { $0.systemImage },
+                                  effect: { $0.effect },
+                                  selected: nil,
+                                  onPick: { reason in
+                                      signals?.dismiss(card.id, reason: reason)
+                                      dismissCard(card.id)
+                                  },
+                                  // Closing without answering still stands: the card was hidden the
+                                  // moment you tapped, and naming a reason is the optional part.
+                                  onDismiss: { dismissCard(card.id) })
+            }
+        }
+    }
+
+    /// Take the rejected card out of the deck once the panel is done with it.
+    ///
+    /// ⚠️ Deferred to panel close rather than done on the tap, because the panel is attached to that
+    /// card's page — removing the card immediately would destroy the panel before it could be read
+    /// or answered.
+    private func dismissCard(_ cardId: String) {
+        withAnimation(.snappy) {
+            panel = nil
+            pager?.remove(cardId)
+        }
+    }
+
+    /// Thumbs-down. Like the heart, the act is immediate — the card is hidden the moment you tap —
+    /// and naming a reason afterwards is optional.
+    @ViewBuilder
+    private func thumbsDown(for card: CardRecord) -> some View {
+        if let signals {
+            Button {
+                signals.dismiss(card.id)
+                withAnimation(.snappy) { panel = .reason(cardId: card.id) }
+            } label: {
+                Image(systemName: "hand.thumbsdown")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .background(.thinMaterial, in: Circle())
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(12)
+            .accessibilityLabel("Not for me")
+        }
+    }
+
     /// Faint ‹ › affordance signalling the deck swipes horizontally. Fixed to the deck, not a page.
     private var chevrons: some View {
         HStack {
@@ -254,8 +354,12 @@ struct StreamView: View {
     private func heart(for card: CardRecord) -> some View {
         if let wants {
             Button {
+                let wasWanted = wants.isWanted(card.id)
                 wants.toggle(card.id)
                 wantBump += 1
+                // The action already happened. The panel is the OPTIONAL refinement — ignore it and
+                // the card stays on the wishlist at Normal. Removing a card offers nothing.
+                withAnimation(.snappy) { panel = wasWanted ? nil : .priority(cardId: card.id) }
             } label: {
                 Image(systemName: wants.isWanted(card.id) ? "heart.fill" : "heart")
                     .font(.title2)

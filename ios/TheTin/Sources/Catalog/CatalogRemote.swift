@@ -108,6 +108,34 @@ enum AppConfig {
     }
     private static let catalogTierKey = "catalogTier"
 
+    /// The two price lines from the For You first-run picker.
+    ///
+    /// `nil` means **never asked**, which is exactly the condition for showing the picker. A user
+    /// who taps Skip is stored as `PriceTiers.default` so the skip is remembered and never asked
+    /// again — one value, no second bookkeeping flag.
+    ///
+    /// Editable afterwards from Settings, which is the whole reason the per-card "Too expensive"
+    /// thumbs-down could be deleted: price now lives in one visible, changeable place instead of
+    /// accumulating as an invisible cut.
+    static var priceTiers: PriceTiers? {
+        get {
+            let d = UserDefaults.standard
+            guard d.object(forKey: routineKey) != nil else { return nil }
+            return PriceTiers(routineCeiling: d.double(forKey: routineKey),
+                              occasionalCeiling: d.double(forKey: occasionalKey)).normalized
+        }
+        set {
+            let d = UserDefaults.standard
+            guard let newValue = newValue?.normalized else {
+                d.removeObject(forKey: routineKey); d.removeObject(forKey: occasionalKey); return
+            }
+            d.set(newValue.routineCeiling, forKey: routineKey)
+            d.set(newValue.occasionalCeiling, forKey: occasionalKey)
+        }
+    }
+    private static let routineKey = "discoverRoutineCeiling"
+    private static let occasionalKey = "discoverOccasionalCeiling"
+
     /// Grading fee used by the "Grade it?" panel (PSA bulk-tier default), user-editable inline.
     /// Clamped to GradingROI.feeRange on read and write. `object(forKey:)` rather than
     /// `double(forKey:)` so an explicitly saved $0 survives (double(forKey:) returns 0 for unset).
