@@ -14,10 +14,12 @@ settings:
     # stretched-but-native iPhone layout is a respectable thing to ship, and a second layout is a
     # maintenance cost forever.
     TARGETED_DEVICE_FAMILY: "1,2"
-    # The App Store version. Train 1.0 closed for new build submissions the moment v1.0 went
-    # READY_FOR_SALE, so every upload from build 27 on must carry something higher — this is now
-    # load-bearing, not decorative. Bump it for each App Store release.
-    MARKETING_VERSION: 1.0.1
+    # The App Store version. A train closes for new build submissions the MOMENT its version goes
+    # READY_FOR_SALE — 1.0 closed at build 27, and 1.0.1 closed on 2026-08-03 when it was approved.
+    # So this is load-bearing, not decorative: bump it for each App Store release, and check
+    # /v1/apps/<id>/appStoreVersions before an upload rather than trusting a note. Build 30 failed
+    # export against a closed 1.0.1 train for exactly that reason.
+    MARKETING_VERSION: 1.0.2
     CURRENT_PROJECT_VERSION: 1
 packages:
   GRDB:
