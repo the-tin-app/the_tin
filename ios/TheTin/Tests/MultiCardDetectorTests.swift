@@ -48,4 +48,25 @@ final class MultiCardDetectorTests: XCTestCase {
         let blank = CIImage(color: .gray).cropped(to: CGRect(x: 0, y: 0, width: 1000, height: 1000))
         XCTAssertTrue(MultiCardDetector.cells(in: blank, context: CIContext()).isEmpty)
     }
+
+    /// The whole point of `MultiCardDetector` is that `OrientationNormalizer.orientUpright`'s
+    /// expensive scoring (two full-resolution renders + two Vision text passes) runs ONCE per
+    /// photo, not once per card — paying it 40 times is what makes the feature unusable on an
+    /// A10. Counts the real calls through an injected orienter rather than trusting the source.
+    func testOrientationScoringRunsOnceAndIsReusedForEveryOtherCell() throws {
+        var preferredArgs: [Int?] = []
+        let countingOrienter: (CIImage, CIContext, Int?) -> (image: CIImage, degrees: Int)? = { corrected, context, preferred in
+            preferredArgs.append(preferred)
+            return OrientationNormalizer.orientUpright(corrected, context: context, preferred: preferred)
+        }
+
+        let cells = MultiCardDetector.cells(in: syntheticPage(rows: 3, cols: 3), context: CIContext(),
+                                            orienter: countingOrienter)
+
+        XCTAssertGreaterThanOrEqual(cells.count, 8, "expected ~9 pockets, got \(cells.count)")
+        let nilCalls = preferredArgs.filter { $0 == nil }.count
+        XCTAssertEqual(nilCalls, 1, "the expensive scoring pass must run exactly once per photo, ran \(nilCalls) times")
+        XCTAssertTrue(preferredArgs.dropFirst().allSatisfy { $0 != nil },
+                      "every cell after the first must reuse the shared rotation instead of re-scoring")
+    }
 }

@@ -21,10 +21,17 @@ enum MultiCardDetector {
     ///     short side. The single-card detector uses `VNDetectRectanglesRequest.minimumSize = 0.15`,
     ///     which caps a photo at ~6 cards across — far too strict here. 0.04 is the starting point
     ///     and is calibrated against real fixtures in Task 8.
+    ///   - orienter: injected so `sharedRotation` reuse (see below) is verifiable by a test rather
+    ///     than trusted by inspection — same seam pattern as `ScanStagingStore`'s injected persist
+    ///     sink. Defaults to the real `OrientationNormalizer.orientUpright`; no production caller
+    ///     needs to pass this.
     static func cells(in ci: CIImage,
                       context: CIContext,
                       maxCards: Int = 48,
-                      minShortSideFraction: Double = 0.04) -> [DetectedCell] {
+                      minShortSideFraction: Double = 0.04,
+                      orienter: (CIImage, CIContext, Int?) -> (image: CIImage, degrees: Int)? = { corrected, context, preferred in
+                          OrientationNormalizer.orientUpright(corrected, context: context, preferred: preferred)
+                      }) -> [DetectedCell] {
         let ext = ci.extent
         guard ext.width > 0, ext.height > 0 else { return [] }
         let handler = VNImageRequestHandler(ciImage: ci, options: [:])
@@ -75,8 +82,7 @@ enum MultiCardDetector {
         var out: [DetectedCell] = []
         for q in selected {
             guard let corrected = perspectiveCorrect(q.quad, in: ci) else { continue }
-            guard let oriented = OrientationNormalizer.orientUpright(
-                corrected, context: context, preferred: sharedRotation) else { continue }
+            guard let oriented = orienter(corrected, context, sharedRotation) else { continue }
             sharedRotation = oriented.degrees
             guard let plate = render(oriented.image, context: context,
                                      quadConfidence: q.confidence) else { continue }
@@ -86,8 +92,7 @@ enum MultiCardDetector {
     }
 
     /// Perspective-corrects `quad` out of `ci` to a natural-aspect image (orientation not yet
-    /// resolved). `internal`, not `private` — the signature form future callers/tests reach for
-    /// is `rectify`; this file names the two halves `perspectiveCorrect`/`render` instead of one
+    /// resolved). This file names the two halves `perspectiveCorrect`/`render` instead of one
     /// combined `rectify`, mirroring `CardRectifier`'s own internal `correct(...)` rather than
     /// `PerspectiveCorrector.canonicalBGRA` — that helper scales straight to the canonical W×H,
     /// which throws away the natural-aspect extent `OrientationNormalizer.orientUpright` needs to
