@@ -115,6 +115,38 @@ final class DiscoverModel {
         var tiers: PriceTiers?
 
         var ownedIds: [String] { entries.map(\.cardId) }
+
+        /// What `DiscoverView.task(id:)` keys off.
+        ///
+        /// ⚠️ **Derived from every field on purpose.** A hand-written key has now failed twice on
+        /// this feature, the same way both times: it counted owned and wanted cards, so a change it
+        /// did not enumerate never triggered a rebuild and the surface silently kept a stale
+        /// assembly.
+        ///
+        /// - A thumbs-down changes neither count, so feedback never reached the deck.
+        /// - Answering the first-run picker changes neither count, so **the three price-tier rows
+        ///   did not appear until the app was relaunched** — found on device, first run, which is
+        ///   the worst possible place for it.
+        ///
+        /// Adding one more term each time is how it recurs. Every field is folded in here, and
+        /// `DiscoverModelTests` asserts that changing any of them changes the key — so a new input
+        /// that forgets to appear fails a test rather than a first launch.
+        var recomputeKey: String {
+            var hasher = Hasher()
+            hasher.combine(entries.count)
+            hasher.combine(entries.map(\.cardId))
+            hasher.combine(entries.map(\.pricePaid))
+            hasher.combine(wants.count)
+            hasher.combine(wants.keys.sorted())
+            hasher.combine(wants.values.map(\.priority))
+            hasher.combine(setGoals.sorted())
+            hasher.combine(dismissed.sorted())
+            hasher.combine(reasons.map { "\($0.key)=\($0.value.rawValue)" }.sorted())
+            hasher.combine(signalsRevision)
+            hasher.combine(tiers?.routineCeiling)
+            hasher.combine(tiers?.occasionalCeiling)
+            return String(hasher.finalize())
+        }
     }
 
     /// Rebuild the profile, band, shelves, connections and previews whenever any input changes.

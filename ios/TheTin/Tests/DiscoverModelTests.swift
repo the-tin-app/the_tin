@@ -124,6 +124,68 @@ final class DiscoverModelTests: XCTestCase {
         XCTAssertEqual(model.shelves.map(\.id), first)
     }
 
+    /// ⚠️ **This is the test that should have existed two bugs ago.**
+    ///
+    /// `DiscoverView.task(id:)` used a hand-written key that counted owned and wanted cards. Twice,
+    /// a change it did not enumerate failed to trigger a rebuild and the surface silently kept a
+    /// stale assembly: a thumbs-down never reached the deck, and answering the first-run picker left
+    /// the three price-tier rows missing until the app was relaunched — found on device, on first
+    /// run. Adding one more term each time is how it recurs.
+    ///
+    /// Every input must move the key. A new field that forgets to appear fails here rather than on
+    /// someone's first launch.
+    func testEveryInputChangesTheRecomputeKey() {
+        let base = inputs(owned: [("s1-1", 20)], wants: ["s1-2"], goals: ["s1"],
+                          dismissed: ["s1-3"], reasons: ["s1-3": .notMySpecies], revision: 1)
+        var withTiers = base
+        withTiers.tiers = PriceTiers(routineCeiling: 10, occasionalCeiling: 60)
+
+        var variants: [String: DiscoverModel.Inputs] = [:]
+        variants["entries"] = { var i = base; i.entries = []; return i }()
+        variants["pricePaid"] = { var i = base; i.entries[0].pricePaid = 99; return i }()
+        variants["wants"] = { var i = base; i.wants = [:]; return i }()
+        variants["priority"] = {
+            var i = base; i.wants["s1-2"]?.priority = .grail; return i
+        }()
+        variants["setGoals"] = { var i = base; i.setGoals = ["s2"]; return i }()
+        variants["dismissed"] = { var i = base; i.dismissed = []; return i }()
+        variants["reasons"] = { var i = base; i.reasons = ["s1-3": .wrongEra]; return i }()
+        variants["revision"] = { var i = base; i.signalsRevision = 2; return i }()
+        variants["tiers"] = withTiers
+        variants["tiers changed"] = {
+            var i = withTiers
+            i.tiers = PriceTiers(routineCeiling: 25, occasionalCeiling: 60)
+            return i
+        }()
+
+        for (name, variant) in variants {
+            XCTAssertNotEqual(variant.recomputeKey, name == "tiers changed" ? withTiers.recomputeKey
+                                                                           : base.recomputeKey,
+                              "changing \(name) must trigger a rebuild")
+        }
+    }
+
+    func testTheSameInputsProduceTheSameKey() {
+        let a = inputs(owned: [("s1-1", 20)], wants: ["s1-2"], goals: ["s1"])
+        let b = inputs(owned: [("s1-1", 20)], wants: ["s1-2"], goals: ["s1"])
+        XCTAssertEqual(a.recomputeKey, b.recomputeKey, "a stable input must not churn the surface")
+    }
+
+    /// The device bug, at model level: stating your price tiers must produce the tier rows without
+    /// anything else changing.
+    @MainActor
+    func testStatingTiersAloneProducesTheTierRows() async throws {
+        let model = DiscoverModel(store: try makeStore())
+        var noTiers = inputs(owned: [("s1-1", 20), ("s1-3", 18), ("s2-1", 30)])
+        await model.load(noTiers)
+        XCTAssertNil(model.shelves.first { $0.kind == .easyAdds })
+
+        noTiers.tiers = PriceTiers(routineCeiling: 25, occasionalCeiling: 100)
+        await model.load(noTiers)
+        XCTAssertNotNil(model.shelves.first { $0.kind == .easyAdds },
+                        "answering the picker must build the tier rows immediately")
+    }
+
     /// ⚠️ The caption must name the reason the card was CHOSEN, not describe the card.
     ///
     /// This is the bug I watched on the simulator against real data: every card in the round-robin

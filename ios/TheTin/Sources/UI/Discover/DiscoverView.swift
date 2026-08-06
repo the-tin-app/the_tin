@@ -57,7 +57,7 @@ struct DiscoverView: View {
             BrowseView(store: store, entries: collection?.entries ?? [],
                        collection: collection, wants: wants, goals: goals)
         }
-        .task(id: tasteSignalKey) {
+        .task(id: inputs.recomputeKey) {
             let m = model ?? DiscoverModel(store: store)
             await m.load(inputs)
             model = m
@@ -81,14 +81,6 @@ struct DiscoverView: View {
               tiers: AppConfig.priceTiers)
     }
 
-    /// ⚠️ `signals.revision` and the goal count are load-bearing, not decoration. Counting owned and
-    /// wanted cards cannot see a thumbs-down or a newly-chased set — neither changes either count —
-    /// so without them the recommendations would not recompute until the user happened to add or
-    /// heart something, and the gesture would read as doing nothing.
-    private var tasteSignalKey: String {
-        "\(collection?.entries.count ?? 0)-\(wants?.wanted.count ?? 0)"
-            + "-\(goals?.setIds.count ?? 0)-\(signals?.revision ?? 0)"
-    }
 }
 
 private struct DiscoverHomeView: View {
