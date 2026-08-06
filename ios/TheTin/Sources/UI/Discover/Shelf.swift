@@ -213,13 +213,6 @@ enum ShelfBuilder {
         /// Whole dollars, for row titles. "$10", never "$10.00".
         func money(_ amount: Double) -> String { "$\(Int(amount.rounded()))" }
 
-        /// Memoized so splitting `bandCards` into two tiers does not re-query per predicate call.
-        var pricesCache: [String: Double]?
-        func pricesFor(_ cards: [CardRecord]) -> [String: Double] {
-            if let pricesCache { return pricesCache }
-            let p = prices(cards); pricesCache = p; return p
-        }
-
         /// Prices for a candidate set, fetched once and reused by both the seam and the ranking.
         func prices(_ cards: [CardRecord]) -> [String: Double] {
             guard !cards.isEmpty else { return [:] }
@@ -294,14 +287,23 @@ enum ShelfBuilder {
                    detail: "\(remaining) left", cards: cards)
         }
 
-        // 2. Buy signals against a stated budget.
-        var bandCards: [CardRecord] = []
-        if let band {
-            bandCards = read("cardsInPriceBand") {
-                try store.cardsInPriceBand(band, limit: buySignalCandidateLimit)
+        // 2. Buy signals, and the three intentions.
+        //
+        // ⚠️ **Each row queries its OWN price range.** One shared candidate window cannot serve two
+        // tiers, and assuming it could emptied a row on a real device: that collector's band came
+        // from purchases ($5.13–$33.55, centred on $6.24), so the 600-card window spanned $5.36–
+        // $7.12 and contained ZERO cards above $10. "Worth a think" was structurally impossible to
+        // fill. A window centred on one number cannot reach a tier defined by another.
+        //
+        // The band still exists, but only for AFFINITY SCORING — it describes typical spend. What
+        // is *buyable* is defined by the stated tiers, and they are what select candidates.
+        var buyingCards: [CardRecord] = []
+        let buyingRange = tiers?.band ?? band
+        if let buyingRange {
+            buyingCards = read("cardsInPriceBand") {
+                try store.cardsInPriceBand(buyingRange, limit: buySignalCandidateLimit)
             }
-            let bandPrices = prices(bandCards)
-            let candidates = admit(bandCards, bandPrices)
+            let candidates = admit(buyingCards, prices(buyingCards))
             let candidateIds = candidates.map(\.id)
             let byId = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
 
@@ -324,18 +326,25 @@ enum ShelfBuilder {
                 out.append(Shelf(id: "weeklyDrop", kind: .weeklyDrop, subject: nil,
                                  detail: nil, cardIds: dropIds))
             }
-
         }
 
-        // 2b. The three intentions. `bandCards` is the in-band slice, which is not wide enough for
-        //     Someday — that needs everything ABOVE the buying ceiling, which no band query returns.
         if let tiers {
-            let routine = bandCards.filter { (pricesFor(bandCards)[$0.id] ?? 0) <= tiers.routineCeiling }
-            append(.easyAdds, id: "easyAdds", subject: money(tiers.routineCeiling), cards: routine)
+            // Its own query, centred on the middle of its own range so the window cannot drift out
+            // of the tier it is meant to fill.
+            let easy = read("cardsInPriceBand(routine)") {
+                try store.cardsInPriceBand(PriceBand(p25: 0.01,
+                                                     p50: tiers.routineCeiling / 2,
+                                                     p75: tiers.routineCeiling),
+                                           limit: buySignalCandidateLimit)
+            }
+            append(.easyAdds, id: "easyAdds", subject: money(tiers.routineCeiling), cards: easy)
 
-            let occasional = bandCards.filter {
-                let p = pricesFor(bandCards)[$0.id] ?? 0
-                return p > tiers.routineCeiling && p <= tiers.occasionalCeiling
+            let midpoint = (tiers.routineCeiling + tiers.occasionalCeiling) / 2
+            let occasional = read("cardsInPriceBand(occasional)") {
+                try store.cardsInPriceBand(PriceBand(p25: tiers.routineCeiling + 0.01,
+                                                     p50: midpoint,
+                                                     p75: tiers.occasionalCeiling),
+                                           limit: buySignalCandidateLimit)
             }
             append(.worthAThink, id: "worthAThink",
                    subject: "\(money(tiers.routineCeiling))–\(money(tiers.occasionalCeiling))",
@@ -376,8 +385,8 @@ enum ShelfBuilder {
         // 4. Exploration: a set AND artist never touched — but IN BAND. Novelty comes from the
         //    dimension, never from the price. `varietyPicks` made "something new" mean "something
         //    expensive", which is how a $4,500 card became a recurring recommendation.
-        if band != nil {
-            let fresh = bandCards.filter {
+        if buyingRange != nil {
+            let fresh = buyingCards.filter {
                 profile.sets[$0.setId] == nil && ($0.artist.map { profile.artists[$0] == nil } ?? true)
             }
             append(.explore, id: "explore", cards: fresh)

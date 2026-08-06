@@ -184,6 +184,34 @@ final class ShelfBuilderTests: XCTestCase {
         XCTAssertTrue(ShelfBuilder.admitsToBuyingRow(price: 5000, tiers: nil))
     }
 
+    /// ⚠️ **One candidate window cannot serve two tiers, and assuming it could emptied a row on a
+    /// real device.** That collector's band came from purchases ($5.13–$33.55, centred on $6.24), so
+    /// the shared 600-card window spanned $5.36–$7.12 and held ZERO cards above $10 — "Worth a
+    /// think" was structurally impossible to fill. Each tier queries its own range now.
+    ///
+    /// The fixture makes this fail the old way: s1/s4/s5 are all $20–$22, far above a $5 routine
+    /// line, so a window centred on the cheap end would starve the occasional row.
+    func testBothTiersFillEvenWhenTheBandSitsInOnlyOneOfThem() throws {
+        let shelves = build(store: try makeStore(),
+                            tiers: PriceTiers(routineCeiling: 21, occasionalCeiling: 100),
+                            // A band pinned at the very bottom of the routine tier — the shape that
+                            // starved the occasional row on device.
+                            band: PriceBand(p25: 0.01, p50: 1, p75: 2))
+        let easy = try XCTUnwrap(shelves.first { $0.kind == .easyAdds })
+        let think = try XCTUnwrap(shelves.first { $0.kind == .worthAThink })
+        XCTAssertFalse(easy.cardIds.isEmpty)
+        XCTAssertFalse(think.cardIds.isEmpty, "the occasional row must not depend on where the band sits")
+    }
+
+    /// The two tiers must not overlap: a card belongs to exactly one intention.
+    func testTheTiersDoNotShareCards() throws {
+        let shelves = build(store: try makeStore(),
+                            tiers: PriceTiers(routineCeiling: 21, occasionalCeiling: 100))
+        let easy = Set(shelves.first { $0.kind == .easyAdds }?.cardIds ?? [])
+        let think = Set(shelves.first { $0.kind == .worthAThink }?.cardIds ?? [])
+        XCTAssertTrue(easy.isDisjoint(with: think))
+    }
+
     // MARK: Caps and shape
 
     func testShelfCapIsEnforcedInTheBuilder() throws {
