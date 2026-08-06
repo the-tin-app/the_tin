@@ -289,10 +289,24 @@ struct StreamView: View {
                                   selected: nil,
                                   onPick: { reason in
                                       signals?.dismiss(card.id, reason: reason)
-                                      withAnimation(.snappy) { self.panel = nil }
+                                      dismissCard(card.id)
                                   },
-                                  onDismiss: { withAnimation(.snappy) { self.panel = nil } })
+                                  // Closing without answering still stands: the card was hidden the
+                                  // moment you tapped, and naming a reason is the optional part.
+                                  onDismiss: { dismissCard(card.id) })
             }
+        }
+    }
+
+    /// Take the rejected card out of the deck once the panel is done with it.
+    ///
+    /// ⚠️ Deferred to panel close rather than done on the tap, because the panel is attached to that
+    /// card's page — removing the card immediately would destroy the panel before it could be read
+    /// or answered.
+    private func dismissCard(_ cardId: String) {
+        withAnimation(.snappy) {
+            panel = nil
+            pager?.remove(cardId)
         }
     }
 

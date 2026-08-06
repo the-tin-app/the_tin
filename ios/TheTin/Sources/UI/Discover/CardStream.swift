@@ -36,6 +36,19 @@ final class StreamPager {
         exhaustedRuns = 0
     }
 
+    /// Drop a card the user has just rejected, so the deck visibly responds.
+    ///
+    /// ⚠️ **Without this, feedback appears to do nothing**, which is precisely what a user reported:
+    /// thumbs-down a card, answer the panel, and the card is still sitting there. The dismissal WAS
+    /// recorded and the shelves behind did rebuild — but the deck holds its own loaded `cards`
+    /// array, so the one thing in front of you never changed. An action with no visible consequence
+    /// reads as a broken button, however correct the bookkeeping.
+    ///
+    /// The id stays in `seen`, so a later page cannot bring it back.
+    func remove(_ cardId: String) {
+        cards.removeAll { $0.id == cardId }
+    }
+
     /// True once at least one page has been requested and it (and any it triggered) yielded no
     /// cards — the signal for a "no matches" empty state rather than an endless spinner.
     var isEmptyResult: Bool { nextIndex > 0 && cards.isEmpty && !isLoading }
