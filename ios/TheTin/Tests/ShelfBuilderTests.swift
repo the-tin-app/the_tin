@@ -104,6 +104,48 @@ final class ShelfBuilderTests: XCTestCase {
                       "the daydream row must actually hold the daydream")
     }
 
+    /// ⚠️ Ranked purely by affinity, Someday opens on the PLANNABLE end — measured on real data,
+    /// $61–$126 — and a genuine grail never surfaces. But "it's still fun to look at them" is the
+    /// whole reason the row exists, so a few slots at the END hold the actual dreams.
+    ///
+    /// At the end, deliberately: leading a row with a $2,300 card is exactly the failure this rework
+    /// deleted, where `varietyPicks` put one at slot 4 of page 0.
+    func testSomedayReservesItsTailForRealGrails() throws {
+        let store = try makeStore()
+        let profile = DiscoverAffinity.Profile(sets: ["s1": 1.0], species: [144: 1.0],
+                                               artists: ["Artist A": 1.0])
+        // s2-1 is $4,500 but carries no dex, so it is not "a Pokémon you love" — s6-1 is.
+        try store.dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO set_info VALUES ('s6','Grail Two','2026-01-01',1,'Mega','s6-1');
+                INSERT INTO card VALUES ('s6-1','s6','1','Dream',60,'','Ultra Rare','Artist Z','i',777);
+                INSERT INTO price_latest VALUES ('s6-1',2300.0,NULL,NULL,NULL,NULL,NULL,'2026-08-01');
+                INSERT INTO card_dex VALUES ('s6-1',144);
+                """)
+        }
+        let shelves = build(store: store, tiers: PriceTiers(routineCeiling: 21, occasionalCeiling: 100),
+                            profile: profile)
+        let someday = try XCTUnwrap(shelves.first { $0.kind == .someday })
+        XCTAssertTrue(someday.cardIds.contains("s6-1"), "a $2,300 card of a loved species must appear")
+        XCTAssertEqual(someday.cardIds.last, "s6-1", "and it belongs at the END, not the front")
+    }
+
+    func testGrailsRequireAnExactSpeciesMatchNotTheWidenedFamily() throws {
+        let store = try makeStore()
+        // dex 6 (Charizard) is in the profile; 144 is not, so a 144 grail must not qualify.
+        let grails = ShelfBuilder.grails(store: store,
+                                         tiers: PriceTiers(routineCeiling: 21, occasionalCeiling: 100),
+                                         excluded: [],
+                                         profile: DiscoverAffinity.Profile(species: [6: 1.0]))
+        XCTAssertFalse(grails.contains("s2-1"), "s2-1 carries no dex at all")
+    }
+
+    func testNoGrailSlotsWithoutASpeciesProfile() throws {
+        XCTAssertTrue(ShelfBuilder.grails(store: try makeStore(),
+                                          tiers: PriceTiers(routineCeiling: 21, occasionalCeiling: 100),
+                                          excluded: [], profile: .init()).isEmpty)
+    }
+
     /// Someday is the ONLY row above the line, and it must be entirely above it — a row that mixes
     /// $6 cards into the dreams is not a daydream row, it is a leak with a nice name.
     func testSomedayHoldsNothingBelowTheLine() throws {
@@ -112,6 +154,7 @@ final class ShelfBuilderTests: XCTestCase {
         let someday = try XCTUnwrap(shelves.first { $0.kind == .someday })
         // The fixture's only above-line card is s2-1 at $4,500; everything else is $20–$22.
         XCTAssertEqual(someday.cardIds, ["s2-1"])
+
     }
 
     func testDismissedCardsAppearInNoShelf() throws {

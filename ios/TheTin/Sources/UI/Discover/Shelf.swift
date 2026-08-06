@@ -94,6 +94,19 @@ enum ShelfBuilder {
     /// up to ~26 weekly rows per candidate and the A10 iPad is the canary.
     static let buySignalCandidateLimit = 600
 
+    /// Slots at the END of `someday` reserved for genuine top-end cards of a species the collector
+    /// loves.
+    ///
+    /// ⚠️ Without this the row is honest but joyless. Ranked purely by affinity, Someday opens on
+    /// $61–$126 cards — the plannable end — and a real grail never surfaces at all. But "it's still
+    /// fun to look at them" was the whole reason this row exists, so a few slots hold the actual
+    /// dreams.
+    ///
+    /// ⚠️ At the END, deliberately. Leading a row with a $2,300 card is exactly the failure this
+    /// rework deleted (`varietyPicks` put one at slot 4 of page 0). Here you scroll to the end of
+    /// your daydream row and find it, which is a reward rather than an interruption.
+    static let somedayGrailSlots = 4
+
     /// How many species shelves to render at most.
     static let maxSpeciesShelves = 4
 
@@ -143,6 +156,32 @@ enum ShelfBuilder {
             log.error("shelf read failed: \(what, privacy: .public) — \(error.localizedDescription, privacy: .public)")
             return []
         }
+    }
+
+    /// Candidates for `someday`. Larger than the buy-signal limit because the pool above a low
+    /// ceiling is big — measured, 1,240 cards sit above $60 on the real catalog.
+    static let somedayCandidateLimit = 1_500
+
+    /// The genuine top-end cards of a species the collector actually collects.
+    ///
+    /// Drawn from `topPricedCards` (price-descending) rather than from the cheapest-first Someday
+    /// pool, so these survive even when a low ceiling makes that pool truncate. Requires an **exact**
+    /// species match, not the widened family: a grail should be a Pokémon you actually love, not one
+    /// two dex ids away from one.
+    static func grails(store: CatalogStore, tiers: PriceTiers, excluded: Set<String>,
+                       profile: DiscoverAffinity.Profile,
+                       slots: Int = somedayGrailSlots) -> [String] {
+        guard slots > 0, !profile.species.isEmpty else { return [] }
+        let top = (try? store.topPricedCards(limit: 300)) ?? []
+        guard !top.isEmpty else { return [] }
+        let prices = (try? store.previewPrices(cardIds: top.map(\.id))) ?? [:]
+        let dex = (try? store.dexIds(forCards: top.map(\.id))) ?? [:]
+        return top.lazy
+            .filter { !excluded.contains($0.id) }
+            .filter { (prices[$0.id] ?? 0) > tiers.buyingCeiling }
+            .filter { (dex[$0.id] ?? []).contains { profile.species[$0] != nil } }
+            .prefix(slots)
+            .map(\.id)
     }
 
     static func build(store: CatalogStore,
@@ -219,9 +258,16 @@ enum ShelfBuilder {
         /// the rule the Supporters row already follows. Distinct from the Movers case, where a bold
         /// `+$0.00` was a lie about movement; here there is no claim to get wrong.
         func append(_ kind: Shelf.Kind, id: String, subject: String? = nil,
-                    detail: String? = nil, cards: [CardRecord]) {
+                    detail: String? = nil, cards: [CardRecord], tail: [String] = []) {
             let priced = prices(cards)
-            let ids = rank(admit(cards, priced, buyingRow: kind != .someday), priced)
+            let keep = maxCards - tail.count
+            // ⚠️ The reserved ids are removed from the BODY candidates first. Deduping the other way
+            // round — ranking everything, then dropping tail ids already present — silently voids the
+            // reservation whenever a reserved card also ranks well, which for a grail of a loved
+            // species is most of the time. The slot has to be reserved, not merely appended.
+            let body = cards.filter { !tail.contains($0.id) }
+            var ids = Array(rank(admit(body, priced, buyingRow: kind != .someday), priced).prefix(keep))
+            ids += tail
             guard !ids.isEmpty else { return }
             used.formUnion(ids)
             out.append(Shelf(id: id, kind: kind, subject: subject, detail: detail, cardIds: ids))
@@ -300,9 +346,10 @@ enum ShelfBuilder {
             // dreams, not the most expensive objects in existence. Leading with the latter is
             // precisely the mistake the deleted cold-start `popularMix` made.
             let dreams = read("cardsAboveCeiling") {
-                try store.cardsAbovePrice(tiers.buyingCeiling, limit: buySignalCandidateLimit)
+                try store.cardsAbovePrice(tiers.buyingCeiling, limit: somedayCandidateLimit)
             }
-            append(.someday, id: "someday", cards: dreams)
+            append(.someday, id: "someday", cards: dreams,
+                   tail: grails(store: store, tiers: tiers, excluded: excluded, profile: profile))
         }
 
         // 3. Inferred similarity.

@@ -9,6 +9,9 @@ struct SettingsView: View {
     let pack: ScannerPackModel
     @State private var model = SettingsModel()
     @State private var confirmingClear = false
+    @State private var editingPriceTiers = false
+    /// Mirrors `AppConfig.priceTiers` so the row updates the moment the sheet saves.
+    @State private var priceTiers = AppConfig.priceTiers
     #if DEBUG
     @State private var confirmingCatalogWipe = false
     @State private var confirmingPackRewind = false
@@ -33,6 +36,7 @@ struct SettingsView: View {
     /// tipped the type-checker into "unable to type-check this expression in reasonable time".
     @ViewBuilder private var sections: some View {
         appSection
+        discoverSection
         connectionSection
         tierSection
         scannerPackSection
@@ -159,6 +163,42 @@ struct SettingsView: View {
     // MARK: App
 
     @AppStorage(Appearance.storageKey) private var appearance = Appearance.system
+
+    /// The one place price lives.
+    ///
+    /// ⚠️ This section is what made deleting the per-card "Too expensive" thumbs-down safe. That
+    /// gesture accumulated an *invisible* price cut nobody could review or undo; these two numbers
+    /// say the same thing where the user can see them and change them. Shipping the deletion without
+    /// this row would have left no way to state a price preference at all.
+    private var discoverSection: some View {
+        Section {
+            Button { editingPriceTiers = true } label: {
+                HStack {
+                    Label("What you'd spend", systemImage: "slider.horizontal.3")
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    if let tiers = priceTiers {
+                        Text("$\(Int(tiers.routineCeiling)) · $\(Int(tiers.occasionalCeiling))")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    } else {
+                        Text("Not set").foregroundStyle(.secondary)
+                    }
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+        } header: {
+            Text("Discover")
+        } footer: {
+            Text("Sorts For You into what you'd grab without thinking, what's worth a think, and what you'd plan for. Once you've recorded a few purchases, what you actually paid takes over.")
+        }
+        .sheet(isPresented: $editingPriceTiers) {
+            ForYouSeedView(initial: priceTiers) {
+                priceTiers = AppConfig.priceTiers
+                editingPriceTiers = false
+            }
+        }
+    }
 
     private var appSection: some View {
         Section("App") {
