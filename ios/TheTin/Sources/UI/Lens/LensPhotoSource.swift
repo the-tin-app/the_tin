@@ -18,6 +18,11 @@ final class LensPhotoSource: NSObject {
     let session = AVCaptureSession()
     private let output = AVCapturePhotoOutput()
     private(set) var isAvailable = false
+    // Serial, off-main queue for start/stop — same pattern as AVCaptureFrameSource. Apple
+    // documents startRunning()/stopRunning() as blocking; a shared serial queue is what makes
+    // "start, then immediately stop" (a fast tab switch) resolve in call order instead of
+    // racing two independent detached tasks against the session.
+    private let sessionQueue = DispatchQueue(label: "lens.session")
     private var pending: CheckedContinuation<CIImage?, Never>?
 
     override init() {
@@ -47,20 +52,42 @@ final class LensPhotoSource: NSObject {
         isAvailable = true
     }
 
-    func start() {
-        guard isAvailable, !session.isRunning else { return }
-        Task.detached { [session] in session.startRunning() }
+    /// Starts the session and suspends until `startRunning()` has actually returned. Callers
+    /// MUST await this before the first `capture()` — `startRunning()` is documented as blocking
+    /// and potentially slow, and `capturePhoto(with:delegate:)` against a session that hasn't
+    /// started yet throws synchronously (a crash, not a recoverable error), so a fire-and-forget
+    /// start plus an immediate shutter tap is a real race. Runs on `sessionQueue`, not a bare
+    /// detached task, so it can never race a concurrent `stop()`.
+    func start() async {
+        guard isAvailable else { return }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            sessionQueue.async { [session] in
+                if !session.isRunning { session.startRunning() }
+                c.resume()
+            }
+        }
     }
 
+    /// Stops the session. Settles any in-flight `capture()` with nil FIRST: `AVCapturePhotoOutput`
+    /// does not retain its delegate for the duration of a capture (Apple puts that on the caller),
+    /// so a screen tearing down mid-shutter-press — ordinary navigation, not an error — can
+    /// deallocate `self` before the delegate ever fires. Without this, that leaks the awaiting
+    /// task silently: no crash, no callback, just a hang.
     func stop() {
-        guard session.isRunning else { return }
-        Task.detached { [session] in session.stopRunning() }
+        if let c = pending {
+            pending = nil
+            c.resume(returning: nil)
+        }
+        sessionQueue.async { [session] in
+            if session.isRunning { session.stopRunning() }
+        }
     }
 
-    /// One shutter press. Returns nil on the simulator, on an AVFoundation error, or if a capture
-    /// is already in flight.
+    /// One shutter press. A nil return means "not ready" — the lens is unavailable, the session
+    /// hasn't finished starting (see `start()`), or a capture is already in flight — NOT
+    /// "failed"; callers should not surface it as an error.
     func capture() async -> (id: UUID, image: CIImage)? {
-        guard isAvailable, pending == nil else { return nil }
+        guard isAvailable, session.isRunning, pending == nil else { return nil }
         let settings = AVCapturePhotoSettings()
         let image = await withCheckedContinuation { (c: CheckedContinuation<CIImage?, Never>) in
             pending = c
@@ -80,6 +107,21 @@ extension LensPhotoSource: AVCapturePhotoCaptureDelegate {
             let c = self.pending
             self.pending = nil
             c?.resume(returning: image)
+        }
+    }
+
+    /// Terminal callback for a `capturePhoto` call — Apple documents this as firing exactly once
+    /// per call regardless of success or failure, independent of whether
+    /// `didFinishProcessingPhoto` fired at all. Backstop only: the happy path already resumed
+    /// and cleared `pending` above, so this is a no-op then. If some error path never calls
+    /// through to `didFinishProcessingPhoto`, this is what keeps `capture()` from hanging forever.
+    nonisolated func photoOutput(_ output: AVCapturePhotoOutput,
+                                 didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+                                 error: Error?) {
+        Task { @MainActor in
+            guard let c = self.pending else { return }
+            self.pending = nil
+            c.resume(returning: nil)
         }
     }
 }
