@@ -29,11 +29,24 @@ enum LensMatcher {
     }
 
     /// Pass B. Open-set identification against the whole pack.
-    static func identify(fingerprint: CardFingerprint, matcher: Matcher, floor: Int) -> LensCellState {
+    ///
+    /// Exhaustive `Matcher.match`, deliberately NOT the early-exit `matchRanked`. `matchRanked`'s
+    /// own doc comment says `rankedIds` MUST arrive in narrowing-agreement order — its early exit
+    /// is only sound because the true card sits in the top tier once the name OCRs. This feature
+    /// has no OCR gate, and `FingerprintStore.allCardIds` is documented "in no particular order",
+    /// so an early exit here has nothing to make it safe: any candidate that clears `floor` and
+    /// dominates its batch ends the search, whether or not a much better match sits later in the
+    /// list. `Matcher.match` has no early exit and so nothing for candidate order to break — don't
+    /// swap this back to `matchRanked` without an ordering source as strong as OCR narrowing.
+    ///
+    /// `candidateIds` defaults to the whole pack; it exists purely as a test seam (same pattern as
+    /// `MultiCardDetector.cells`'s `orienter` parameter) so a test can pin that the result does not
+    /// depend on candidate order. No production caller passes it.
+    static func identify(fingerprint: CardFingerprint, matcher: Matcher, floor: Int,
+                         candidateIds: [String]? = nil) -> LensCellState {
         guard fingerprint.count > 0 else { return .noMatch }
-        guard let best = (try? matcher.matchRanked(query: fingerprint,
-                                                   rankedIds: matcher.allCardIds,
-                                                   stopFloor: floor))?.first,
+        guard let best = (try? matcher.match(query: fingerprint,
+                                             candidateIds: candidateIds ?? matcher.allCardIds))?.first,
               best.inliers >= floor else { return .noMatch }
         return .identified(cardId: best.cardId, inliers: best.inliers)
     }

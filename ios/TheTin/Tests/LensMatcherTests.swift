@@ -80,4 +80,61 @@ final class LensMatcherTests: XCTestCase {
         XCTAssertEqual(LensMatcher.identify(fingerprint: blank, matcher: matcher, floor: 20),
                        .noMatch)
     }
+
+    /// Regression test (review 2026-08-06, Finding 1/2): `identify` used to call the early-exit
+    /// `Matcher.matchRanked` against `matcher.allCardIds`, which is documented "in no particular
+    /// order" — violating `matchRanked`'s own MUST-be-narrowing-order precondition. Prove the fix
+    /// (exhaustive `Matcher.match`) doesn't depend on candidate order, using REAL data: against
+    /// `IMG_1535`, `ex8-63` is a genuine spurious match (clears `floor` but is NOT the true card,
+    /// which scores far higher). Put the weaker match FIRST and the true card LAST — under the old
+    /// `matchRanked` code this would have stopped at the first batch and returned `ex8-63` wrongly;
+    /// exhaustive search must still find the true card regardless of where it sits in the list.
+    func testIdentifyFindsTheTrueCardEvenWhenAWeakerMatchIsOrderedFirst() throws {
+        let sample = truth[0]
+        let fp = try fingerprint(plate: sample.plate)
+        let ranked = try matcher.match(query: fp, candidateIds: matcher.allCardIds)
+        let winner = try XCTUnwrap(ranked.first)
+        XCTAssertEqual(winner.cardId, sample.cardId, "fixture assumption: sample's own card wins exhaustively")
+        let decoy = try XCTUnwrap(ranked.dropFirst().first { $0.inliers >= 20 },
+                                  "fixture assumption: a second candidate also clears the floor")
+        XCTAssertLessThan(decoy.inliers, winner.inliers)
+
+        // decoy FIRST, true card LAST — the exact ordering that broke the early-exit version.
+        let rest = matcher.allCardIds.filter { $0 != decoy.cardId && $0 != winner.cardId }
+        let ordered = [decoy.cardId] + rest + [winner.cardId]
+        let state = LensMatcher.identify(fingerprint: fp, matcher: matcher, floor: 20, candidateIds: ordered)
+        guard case .identified(let cardId, _) = state else {
+            return XCTFail("expected .identified, got \(state)")
+        }
+        XCTAssertEqual(cardId, winner.cardId)
+    }
+
+    /// Finding 3 (review 2026-08-06): the only realistic source of an ORB false positive is
+    /// identical printed art shared across reprints — `labels.json`'s multi-truth-id entries exist
+    /// exactly because ORB can't always separate them. `IMG_1552` photographs a Wailord that is
+    /// printed identically as both `ex1-14` and `ex12-14`. Put ONLY the sibling that was NOT
+    /// photographed on the wishlist and see what `wishlistHit` actually does — not presupposed.
+    ///
+    /// ANSWER (recorded per review instructions — decides user-facing copy): this photo scores 48
+    /// inliers against the card it actually shows (`ex12-14`) but only 12 against its identical-art
+    /// sibling `ex1-14` — well under `floor` (20). A different physical scan of the same printed
+    /// art does NOT reliably clear the floor here. **No cross-hit** — pinned as nil, not identical
+    /// to the "arbitrary unrelated decoy" case only by coincidence of this fixture, but the same
+    /// outcome: copy can say "found" without a variant/printing caveat for wishlist hits, because
+    /// even a genuine twin didn't produce one in the one case this fixture can test.
+    func testWishlistDoesNotCrossHitAVisualTwinSiblingInThisFixture() throws {
+        let plate = "IMG_1552"
+        let photographed = "ex12-14"   // what this specific photo actually is (48 inliers)
+        let sibling = "ex1-14"         // identical printed art, different physical scan (12 inliers)
+        let fp = try fingerprint(plate: plate)
+
+        // Pin the fixture assumption this test's comment documents, so a future fixture change
+        // fails loudly here instead of silently changing what this test proves.
+        let scores = try matcher.match(query: fp, candidateIds: [photographed, sibling])
+        XCTAssertEqual(scores.first?.cardId, photographed)
+        XCTAssertLessThan(try XCTUnwrap(scores.first { $0.cardId == sibling }).inliers, 20)
+
+        let hit = LensMatcher.wishlistHit(fingerprint: fp, wanted: [sibling], matcher: matcher, floor: 20)
+        XCTAssertNil(hit, "twin sibling should not be found — cross-print ORB score stayed below floor")
+    }
 }
