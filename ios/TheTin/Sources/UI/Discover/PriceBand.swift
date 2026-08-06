@@ -39,6 +39,12 @@ struct PriceTiers: Equatable, Sendable, Codable {
     var buyingCeiling: Double { occasionalCeiling }
 
     /// Guards a hand-edited or restored value: the occasional line must sit above the routine one.
+    /// The band these tiers imply — spanning the whole buying range, since the tiers themselves do
+    /// the splitting into rows. Used for candidate selection and for affinity scoring.
+    var band: PriceBand {
+        PriceBand(p25: max(routineCeiling / 2, 0.01), p50: routineCeiling, p75: occasionalCeiling)
+    }
+
     var normalized: PriceTiers {
         PriceTiers(routineCeiling: max(routineCeiling, 0.01),
                    occasionalCeiling: max(occasionalCeiling, max(routineCeiling, 0.01) + 0.01))
@@ -133,14 +139,20 @@ struct PriceBand: Equatable {
             return paid
         }
         if let fromPurchases = make(purchases: purchases, targets: []) { return fromPurchases }
-        if let fromTargets = make(purchases: purchases,
-                                  targets: wants.values.compactMap(\.targetUsd)) { return fromTargets }
-        // A seeded band spans the whole buying range: the tiers themselves do the splitting, so
-        // this only needs to exist for the shelves that still rank against a band.
-        guard let seed else { return nil }
-        return PriceBand(p25: seed.routineCeiling / 2,
-                         p50: seed.routineCeiling,
-                         p75: seed.occasionalCeiling)
+        // ⚠️ The STATED tiers outrank inferred targets, and getting this backwards broke six of
+        // nine rows on a real device. That user had one priced purchase (below the 3 needed), so
+        // the band fell through to two aspirational wishlist targets — $90 and $200 — producing a
+        // band of $90–$200 while they had explicitly stated a $60 buying ceiling. Every candidate
+        // the band returned was then thrown away by that cap, and Easy adds, Worth a think,
+        // Cheapest in 6 months, Down this week, the species rows and Something new all vanished.
+        //
+        // This file's own reasoning already said why: a `targetUsd` is the ceiling set for ONE
+        // specific expensive card and says nothing about typical spend. It must not outrank a
+        // direct statement of what the collector spends.
+        if let seed { return seed.band }
+        // Last resort: aspirational targets, for someone with no purchases who has somehow never
+        // been asked (a backup restored from before the picker existed).
+        return make(purchases: purchases, targets: wants.values.compactMap(\.targetUsd))
     }
 
     /// Multiplier applied to an affinity score: 1.0 inside the band, falling off linearly to

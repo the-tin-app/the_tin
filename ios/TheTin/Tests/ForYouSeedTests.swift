@@ -57,7 +57,7 @@ final class ForYouSeedTests: XCTestCase {
         XCTAssertLessThan(PriceTiers.default.routineCeiling, PriceTiers.default.occasionalCeiling)
     }
 
-    // MARK: precedence — purchases → targets → stated tiers → nil
+    // MARK: precedence — purchases → stated tiers → targets → nil
 
     func testTheStatedTiersCarryTheBandWhenThereIsNoHistory() throws {
         let band = try XCTUnwrap(PriceBand.make(entries: [], wants: [:], seed: tiers, now: now))
@@ -82,12 +82,32 @@ final class ForYouSeedTests: XCTestCase {
         XCTAssertEqual(band.p75, 60)
     }
 
-    func testTargetsBeatTheStatedTiers() throws {
+
+
+    /// ⚠️ **The bug that broke six of nine rows on a real device.** That iPad had ONE priced
+    /// purchase — below the 3 needed — so the band fell through to two aspirational wishlist targets
+    /// ($90, $200) and produced a band of $90–$200, while the collector had explicitly stated a $60
+    /// buying ceiling. Every candidate the band selected was then discarded by that cap.
+    ///
+    /// A `targetUsd` is the ceiling set for ONE specific expensive card and says nothing about
+    /// typical spend. It must never outrank a direct statement of what someone spends.
+    func testStatedTiersOutrankAspirationalTargets() throws {
+        let aspirational = ["a": WantEntry(targetUsd: 90, addedAt: now),
+                            "b": WantEntry(targetUsd: 200, addedAt: now)]
+        let band = try XCTUnwrap(PriceBand.make(entries: [entry("x", paid: 5)],
+                                                wants: aspirational, seed: tiers, now: now))
+        XCTAssertEqual(band.p75, 60, "the stated $60 ceiling wins, not the $200 target")
+        XCTAssertLessThanOrEqual(band.p75, tiers.buyingCeiling,
+                                 "a band above the buying cap selects candidates the cap then discards")
+    }
+
+    /// Targets remain the last resort for someone with no purchases who has somehow never been
+    /// asked — a backup restored from before the picker existed.
+    func testTargetsStillCarryTheBandWithNoPurchasesAndNoStatedTiers() throws {
         let wants = ["a": WantEntry(targetUsd: 90, addedAt: now),
-                     "b": WantEntry(targetUsd: 200, addedAt: now),
-                     "c": WantEntry(targetUsd: 250, addedAt: now)]
-        let band = try XCTUnwrap(PriceBand.make(entries: [], wants: wants, seed: tiers, now: now))
-        XCTAssertGreaterThan(band.p75, 60, "a number the user typed outranks a range they tapped")
+                     "b": WantEntry(targetUsd: 200, addedAt: now)]
+        let band = try XCTUnwrap(PriceBand.make(entries: [], wants: wants, seed: nil, now: now))
+        XCTAssertGreaterThan(band.p75, 60)
     }
 
     func testNoHistoryAndNoStatedTiersIsStillNil() {

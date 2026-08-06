@@ -149,6 +149,16 @@ struct SettingsView: View {
                 await runImport(.success(url))
             }
             .sheet(item: $importSummary) { ImportResultSheet(summary: $0) }
+            // ⚠️ Attached HERE, on the List, not on the Section that owns the row. A `Section` is
+            // re-identified whenever its siblings change — and this screen has sections that appear
+            // and disappear (scanner pack, debug) — which detaches an attached sheet and dismisses
+            // it. Observed on device: the editor opened and closed itself after ~2 seconds.
+            .sheet(isPresented: $editingPriceTiers) {
+                ForYouSeedView(initial: priceTiers) {
+                    priceTiers = AppConfig.priceTiers
+                    editingPriceTiers = false
+                }
+            }
             .alert("Import failed", isPresented: Binding(get: { importError != nil },
                                                          set: { if !$0 { importError = nil } })) {
                 Button("OK") { importError = nil }
@@ -191,12 +201,6 @@ struct SettingsView: View {
             Text("Discover")
         } footer: {
             Text("Sorts For You into what you'd grab without thinking, what's worth a think, and what you'd plan for. Once you've recorded a few purchases, what you actually paid takes over.")
-        }
-        .sheet(isPresented: $editingPriceTiers) {
-            ForYouSeedView(initial: priceTiers) {
-                priceTiers = AppConfig.priceTiers
-                editingPriceTiers = false
-            }
         }
     }
 

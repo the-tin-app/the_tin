@@ -155,6 +155,11 @@ struct StreamView: View {
             VStack(spacing: 4) {
                 CardImageView(card: card, quality: "high")
                     .overlay(alignment: .topTrailing) { heart(for: card) }
+                    // ⚠️ The grid needs this too, and forgetting it made the thumbs-down INVISIBLE
+                    // on iPad — `StreamDensity` is `@AppStorage`, so a device left in grid mode
+                    // never renders the 1-up page where the button used to live only.
+                    .overlay(alignment: .topLeading) { thumbsDown(for: card) }
+                    .overlay(alignment: .bottom) { feedbackPanel(for: card) }
                 Text(card.name).font(.caption).lineLimit(1)
                 PriceLabel(value: try? store.price(cardId: card.id)?.rawUsd)
             }
