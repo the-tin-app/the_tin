@@ -417,7 +417,14 @@ async function main() {
   const dbPath = exportDir ? join(outDir, `catalog-v${version}.sqlite`) : join(tmpdir(), `catalog-full-v${version}.sqlite`);
   if (exportDir) mkdirSync(outDir, { recursive: true });
   // ⚠️ `card_twin` was 0 rows in every published catalog for months, and the reason is entirely
-  // here. This used to default to `../fingerprint/.fp-output/twins.json`, which is (a) gitignored
+  // here. It matters because the scanner's twin guard withholds a lock when two identical-art
+  // reprints are both in the candidate pool, and with no rows it never fired.
+  //
+  // ⚠️ It is NOT a general explanation for wrong locks, and saying so was an overreach corrected by
+  // Tomas on 2026-08-07: the single wrong lock in the 415-cell measured fixture set was a twin case
+  // (`base1-2`/`base4-2` answered as `cel25cc-CC001`), but the wrong locks he saw on a real device
+  // were plainly wrong cards, not paired art. Those remain unexplained; this fixes one specific
+  // failure mode and no others. This used to default to `../fingerprint/.fp-output/twins.json`, which is (a) gitignored
   // and (b) OUTSIDE the Docker build context — the image is built from `functions/`, so `../` does
   // not exist in it at all. `existsSync` was therefore false on every nightly, `twins` was `[]`, and
   // the pipeline logged `twins=0` while everything downstream looked correct. The code was written,
@@ -438,7 +445,8 @@ async function main() {
   // which is how this went unnoticed — the number was printed and nobody had a reason to doubt it.
   if (twins.length === 0) {
     console.warn(`[4] ⚠️ NO card_twin pairs (looked at ${twinsPath || "nothing"}). The scanner's `
-      + `twin guard will be inert, which is the entire wrong-lock story. See functions/data/card-twins.json.`);
+      + `twin guard will be inert, so two identical-art reprints in one candidate pool can lock `
+      + `confidently on either. See functions/data/card-twins.json.`);
   }
   console.log(`[4] building SQLite (raw-only; no graded/PPT)… twins=${twins.length} from ${twinsPath}`);
   // buildCatalog does CREATE TABLE (no IF NOT EXISTS) — clear any prior DB at the predictable

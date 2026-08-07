@@ -123,8 +123,9 @@ describe("buildCatalog", () => {
   // ⚠️ The pairs file is the part that was missing, not the code. `card_twin` was 0 rows in every
   // published catalog because the default path pointed at a gitignored directory OUTSIDE the Docker
   // build context, so `existsSync` was false on every nightly and `twins` was silently `[]`. This
-  // asserts the checked-in file exists, parses, and holds the pairs that a real device photograph
-  // actually confused — the guard being inert is the entire wrong-lock story.
+  // asserts the checked-in file exists, parses, and holds the two pairs the measured fixture set
+  // actually confused. ⚠️ Scope: this fixes identical-art confusion only. Wrong locks observed on a
+  // real device were plainly wrong cards, not paired art, and are a separate unexplained problem.
   it("ships a card-twins.json the pipeline can actually read", () => {
     const path = join(__dirname, "..", "data", "card-twins.json");
     expect(existsSync(path)).toBe(true);
