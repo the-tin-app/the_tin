@@ -70,9 +70,10 @@ def build_fingerprints(catalog_path: str, out_path: str, codebook, load_image,
             skipped += 1
             continue
         xy = np.array([[k.x, k.y] for k in kps], dtype=np.float32)
+        global_vec = packing.pack_global_vec(codebook.global_vec(desc))
         fpdb.write_card_fp(
             conn, card_id,
-            b"",
+            global_vec,
             len(kps),
             packing.pack_keypoints(xy),
             packing.pack_descriptors(desc),

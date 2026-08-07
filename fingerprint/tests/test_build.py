@@ -50,7 +50,7 @@ def test_build_writes_rows_and_meta(tmp_path):
     assert row["kp_count"] > 20
     assert len(row["descriptors"]) == row["kp_count"] * 32
     assert len(row["keypoints"]) == row["kp_count"] * 2 * 2      # n*2 float16
-    assert row["global_vec"] == b""                              # global_vec is now empty
+    assert len(row["global_vec"]) == book.K * 2                  # global_vec is populated now (float16 x K)
     meta = conn.execute("SELECT codebook_hash FROM meta").fetchone()
     assert meta[0] == book.sha256_hex()
 
@@ -77,7 +77,7 @@ def test_per_card_size_within_budget(tmp_path):
     conn = fpdb.open_db(out)
     row = fpdb.read_card_fp(conn, "card_a")
     per_card = len(row["global_vec"]) + len(row["keypoints"]) + len(row["descriptors"])
-    assert per_card <= 25_000  # ~24KB budget for keypoints + descriptors (global_vec now empty)
+    assert per_card <= 25_000 + book.K * 2  # ~24KB keypoints+descriptors budget + global_vec (K x float16)
 
 
 def test_stratified_sample_deterministic():
