@@ -22,6 +22,12 @@ struct BinderBrowseView: View {
                     .opacity(showingList ? 1 : 0).allowsHitTesting(showingList)
             }
         }
+        // ⚠️ The capture screen PAUSES the queue in its `onDisappear`, and leaving it for this screen is
+        // exactly that. Without resuming here, every photograph still being read when the user tapped
+        // Done stays paused forever — its pockets frozen on whatever `detect` had put in them, which
+        // reads as a page of unidentifiable cards. Pass B is the slow stage, so the window is the width
+        // of the whole last page.
+        .onAppear { model.resume() }
         .sheet(item: $openSlot) { slot in
             NavigationStack {
                 BinderSlotSheet(model: model, store: store, slot: slot)
@@ -52,7 +58,7 @@ struct BinderBrowseView: View {
     private var pages: some View {
         VStack(spacing: 0) {
             TabView {
-                ForEach(0..<model.pageCount, id: \.self) { page in
+                ForEach(Array(0..<model.pageCount), id: \.self) { page in
                     BinderPageGrid(model: model, page: page) { openSlot = $0 }
                         .padding(.horizontal, 10)
                 }
@@ -67,6 +73,14 @@ struct BinderBrowseView: View {
     private var summary: some View {
         VStack(spacing: 3) {
             HStack(spacing: 10) {
+                // Says so while pass B is still running, rather than presenting a partial binder as a
+                // finished one — the counts below are honest but incomplete until this clears.
+                if model.isWorking {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.mini)
+                        Text("Still reading…")
+                    }
+                }
                 if model.wishlistHitCount > 0 {
                     Label("^[\(model.wishlistHitCount) wishlist hit](inflect: true)",
                           systemImage: "heart.fill")
@@ -75,6 +89,9 @@ struct BinderBrowseView: View {
                 Text("^[\(model.resolvedCount) card](inflect: true) found")
                 if model.unresolvedCount > 0 {
                     Text("· \(model.unresolvedCount) need a choice")
+                }
+                if model.unreadCount > 0 {
+                    Text("· \(model.unreadCount) unread")
                 }
             }
             .font(.caption)
@@ -95,15 +112,16 @@ private struct BinderPageGrid: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ForEach(0..<model.shape.rows, id: \.self) { row in
+            ForEach(Array(0..<model.shape.rows), id: \.self) { row in
                 HStack(spacing: 6) {
-                    ForEach(0..<model.shape.cols, id: \.self) { col in
+                    ForEach(Array(0..<model.shape.cols), id: \.self) { col in
                         let slot = BinderSlot(page: page, row: row, col: col)
                         let entry = model.entry(slot)
                         Button { onTap(slot) } label: {
                             Pocket(entry: entry,
                                    card: entry?.cardId.flatMap { model.cardCache[$0] },
-                                   price: entry?.cardId.flatMap { model.priceCache[$0] })
+                                   price: entry?.cardId.flatMap { model.priceCache[$0] },
+                                   isWorking: model.isWorking)
                         }
                         .buttonStyle(.plain)
                     }
@@ -124,6 +142,16 @@ private struct Pocket: View {
     /// this `body` would run per pocket per render.
     let card: CardRecord?
     let price: Double?
+    /// ⚠️ Pass B is the slow stage, and a pocket gets its entry as soon as DETECT runs — so between the
+    /// two it is unresolved with no options and no reason, which is byte-identical to "couldn't be read".
+    /// Without this the grid tells the user a page of readable cards is unreadable, for several seconds,
+    /// before quietly correcting itself.
+    let isWorking: Bool
+
+    private var isStillReading: Bool {
+        isWorking && entry != nil && !(entry?.isResolved ?? false)
+            && entry?.options.isEmpty == true && entry?.unreadable == nil
+    }
 
     var body: some View {
         VStack(spacing: 2) {
@@ -132,8 +160,13 @@ private struct Pocket: View {
                     .fill(Color(.secondarySystemBackground))
                 if let entry, entry.isResolved {
                     CardImageView(card: card, quality: "low")
-                } else if entry != nil {
-                    Image(systemName: "questionmark").font(.title3).foregroundStyle(.secondary)
+                } else if isStillReading {
+                    ProgressView().controlSize(.small)
+                } else if let entry {
+                    // A pocket the app couldn't read is NOT the same picture as one it can offer a
+                    // choice for, and it must not be the same picture as an empty pocket either.
+                    Image(systemName: entry.unreadable != nil ? "eye.slash" : "questionmark")
+                        .font(.title3).foregroundStyle(.secondary)
                 }
             }
             .aspectRatio(0.72, contentMode: .fit)
@@ -154,8 +187,13 @@ private struct Pocket: View {
                     .font(.system(size: 9)).monospacedDigit().lineLimit(1)
             } else if entry == nil {
                 Text("empty").font(.system(size: 9)).foregroundStyle(.secondary)
+            } else if isStillReading {
+                Text("reading…").font(.system(size: 9)).foregroundStyle(.secondary)
             } else if entry?.options.isEmpty == false {
                 Text("tap to pick").font(.system(size: 9)).foregroundStyle(.secondary)
+            } else if let why = entry?.unreadable {
+                // Verbatim, so "reflection" and "blur" tell the user what to change about the shot.
+                Text(why).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
             } else if !(entry?.isResolved ?? false) {
                 // ⚠️ NOT "tap to pick". A pocket the gate could not read has no candidates to pick
                 // from, and measured over 90 real cells its four best guesses held the true card
@@ -172,7 +210,9 @@ private struct Pocket: View {
 
     private var label: String {
         guard let entry else { return "Empty pocket" }
+        if isStillReading { return "Still reading" }
         guard entry.isResolved else {
+            if let why = entry.unreadable { return "Couldn't be read — \(why)" }
             return entry.options.isEmpty ? "Couldn't be read, tap to search" : "Needs a choice"
         }
         var parts = [card?.name ?? entry.cardId ?? "Card"]
@@ -193,6 +233,11 @@ struct BinderSlotSheet: View {
     let store: CatalogStore
     let slot: BinderSlot
     @State private var searching = false
+    /// Resolved ONCE in `.task`, never in `body`. ⚠️ `store.card(id:)` and `store.set(id:)` are
+    /// synchronous GRDB reads, and `body` re-runs — building four options inline meant eight catalog
+    /// reads per render of this sheet. Same class of mistake as the twelve synchronous reads that used
+    /// to sit in `CardDetailModel.init`, which cost a 10 s main-thread hang on an A10.
+    @State private var chooserOptions: [ChooserOption] = []
     @Environment(\.dismiss) private var dismiss
 
     private var entry: BinderSlotEntry? { model.entry(slot) }
@@ -224,9 +269,9 @@ struct BinderSlotSheet: View {
 
             // The chooser, if the gate withheld a lock. Same 2×2 sheet the live scanner uses, and it
             // held the true card 48 times out of 48 over the measured binder cells.
-            if let options = entry?.options, !options.isEmpty {
+            if !chooserOptions.isEmpty {
                 Section("Which one is it?") {
-                    CardChooser(options: options.map(chooserOption),
+                    CardChooser(options: chooserOptions,
                                 escape: "None of these — search instead",
                                 onPick: { model.pick($0, for: slot); dismiss() },
                                 onEscape: { searching = true })
@@ -240,7 +285,9 @@ struct BinderSlotSheet: View {
             // read it" is the honest description, not "we don't know this card".
             if let entry, !entry.isResolved, entry.options.isEmpty {
                 Section {
-                    Text("The name and number on this card didn't read, so there is nothing to choose between. Search for it, or re-shoot the page a little closer.")
+                    Text(entry.unreadable.map {
+                        "This card couldn't be read — \($0). Re-shoot the page, or search for it."
+                    } ?? "The name and number on this card didn't read, so there is nothing to choose between. Search for it, or re-shoot the page a little closer.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -259,6 +306,14 @@ struct BinderSlotSheet: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
         }
+        .task(id: entry?.options ?? []) {
+            let ids = entry?.options ?? []
+            guard !ids.isEmpty else { chooserOptions = []; return }
+            let store = self.store
+            chooserOptions = await Task.detached(priority: .userInitiated) {
+                ids.map { BinderSlotSheet.option(id: $0, store: store) }
+            }.value
+        }
         .sheet(isPresented: $searching) {
             NavigationStack {
                 // Reused, not rebuilt: a card search that already handles prices, wishlist marks and
@@ -276,7 +331,7 @@ struct BinderSlotSheet: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(spacing: 4) {
                 Text("Your photo").font(.caption2).foregroundStyle(.secondary)
-                TileCrop(url: BinderCache.shared.tileURL(entry?.tile ?? ""),
+                TileCrop(url: model.tileURL(entry?.tile ?? ""),
                          crop: entry?.crop ?? .zero)
                     .frame(maxWidth: .infinity)
                     .aspectRatio(0.72, contentMode: .fit)
@@ -305,7 +360,9 @@ struct BinderSlotSheet: View {
         return entry.options.isEmpty ? "Couldn't read it" : "Which card?"
     }
 
-    private func chooserOption(_ id: String) -> ChooserOption {
+    /// `nonisolated static` so it can run inside `Task.detached` — the same shape as
+    /// `CardDetailModel.load()`'s reader.
+    nonisolated static func option(id: String, store: CatalogStore) -> ChooserOption {
         let card = try? store.card(id: id)
         let set = card.flatMap { try? store.set(id: $0.setId) }
         return ChooserOption(id: id, card: card, setName: set?.name,

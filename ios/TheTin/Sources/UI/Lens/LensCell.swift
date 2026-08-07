@@ -58,6 +58,16 @@ struct LensCell: Identifiable, Equatable {
         return []
     }
 
+    /// Why this cell couldn't be read, verbatim ("reflection", "blur"). A cell in this state has NO
+    /// fingerprint, so any keypoint-count test drops it — see `BinderModel.assignSlots`, where treating
+    /// it as a phantom made a glare-blocked card render as an empty pocket.
+    var unreadableReason: String? {
+        if case .unreadable(let why) = state { return why }
+        return nil
+    }
+
+    var isUnreadable: Bool { unreadableReason != nil }
+
     /// Pass B's answer once it exists, pass A's until then. Pass B wins when both are known: pass A
     /// only ever asked "is this one of my ~120 cards", so pass B searched a strictly larger set and
     /// its answer is the better-evidenced one.

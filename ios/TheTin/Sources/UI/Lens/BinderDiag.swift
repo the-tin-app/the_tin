@@ -34,17 +34,18 @@ enum BinderDiag {
     /// The photograph as captured, at full resolution and untouched — this is the replay fixture. The
     /// tile JPEG the app keeps for the verification crop is downscaled to 1,400 px, which is far too
     /// small to reproduce detection against.
-    static func record(photo: CIImage, tile: BinderTile) {
+    /// ⚠️ Synchronous, and called from the SAME background task that writes the downscaled tile — not
+    /// its own. Two concurrent JPEG encodes of a 48 MP image each materialise a full-size intermediate,
+    /// and jetsam samples the peak.
+    static func write(photo: CIImage, tile: String, context: CIContext) {
         #if DEBUG
+        guard let data = try? context.jpegRepresentation(
+            of: photo, colorSpace: CGColorSpaceCreateDeviceRGB(),
+            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.95])
+        else { return }
         let dir = directory
-        Task.detached(priority: .background) {
-            guard let data = try? CIContext().jpegRepresentation(
-                of: photo, colorSpace: CGColorSpaceCreateDeviceRGB(),
-                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.95])
-            else { return }
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try? data.write(to: dir.appendingPathComponent("\(tile.id).jpg"), options: .atomic)
-        }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? data.write(to: dir.appendingPathComponent("\(tile).jpg"), options: .atomic)
         #endif
     }
 

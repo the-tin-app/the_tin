@@ -117,15 +117,52 @@ final class BinderModelTests: XCTestCase {
         XCTAssertEqual(m.images.count, 1)
     }
 
-    /// ⚠️ Browsing must not hold 24.5 MP source photographs. Each is an order of magnitude bigger than
-    /// anything else on this screen, the tile JPEGs on disk replace them, and jetsam leaves no report.
-    func testFinishingDropsTheSourcePhotographs() throws {
+    /// ⚠️ **Finishing must not throw away work still in flight.** `finish()` used to drop `images` and
+    /// the tile mapping, on the reasoning that browsing has no use for a 48 MP photograph — which is
+    /// true, and which silently destroyed every answer pass B had not delivered yet. Tapping Done
+    /// straight after the last shutter press is the normal thing to do, and it left those pockets
+    /// frozen on whatever `detect` had put there: a page of "couldn't read" over readable cards.
+    ///
+    /// Memory is bounded per photograph instead, the moment pass B finishes with it.
+    func testFinishingKeepsWhatIsStillBeingRead() throws {
         let m = model()
         m.accept(photo(), for: try XCTUnwrap(m.currentTile))
         XCTAssertFalse(m.images.isEmpty)
         m.finish()
-        XCTAssertTrue(m.images.isEmpty)
         XCTAssertEqual(m.phase, .browsing)
+        XCTAssertFalse(m.images.isEmpty, "a photograph still being read must survive Done")
+    }
+
+    /// ⚠️ A card lost to glare or too blurred to fingerprint has NO keypoints, so a keypoint floor drops
+    /// it and its pocket renders as EMPTY. "Nothing in this pocket" and "a card I couldn't read" are
+    /// different answers, and quietly giving the first is the silent miss this feature exists to avoid.
+    func testAnUnreadableCardIsAPocketWithAReasonNotAnEmptyPocket() throws {
+        let m = model()
+        let tile = try XCTUnwrap(m.currentTile)
+        var glared = cell(at: CGPoint(x: 0.25, y: 0.25), fpCount: 0)
+        glared.state = .unreadable("reflection")
+        m.assignSlots(cells: [glared], tile: tile, extent: extent)
+        let entry = try XCTUnwrap(m.entry(BinderSlot(page: 0, row: 0, col: 0)),
+                                  "an unreadable card must not vanish into an empty pocket")
+        XCTAssertEqual(entry.unreadable, "reflection")
+        XCTAssertFalse(entry.isResolved)
+        XCTAssertEqual(m.unreadCount, 1)
+    }
+
+    /// …but a phantom with no fingerprint still must not claim a pocket. With no keypoints to judge by
+    /// the test is size, and capture being always 2×2 is what makes a fraction of the frame principled.
+    func testASmallUnreadableQuadIsStillAPhantom() throws {
+        let m = model()
+        let tile = try XCTUnwrap(m.currentTile)
+        let tiny = CGRect(x: 1000, y: 1000, width: 120, height: 170)   // ~4% of the frame
+        var glare = LensCell(quad: CardQuad(topLeft: CGPoint(x: tiny.minX, y: tiny.maxY),
+                                            topRight: CGPoint(x: tiny.maxX, y: tiny.maxY),
+                                            bottomLeft: CGPoint(x: tiny.minX, y: tiny.minY),
+                                            bottomRight: CGPoint(x: tiny.maxX, y: tiny.minY)),
+                             fpCount: 0, state: .noMatch)
+        glare.state = .unreadable("blur")
+        m.assignSlots(cells: [glare], tile: tile, extent: extent)
+        XCTAssertTrue(m.scan.entries.isEmpty)
     }
 
     // MARK: - Detections → pockets

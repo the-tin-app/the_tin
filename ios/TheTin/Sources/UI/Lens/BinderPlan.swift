@@ -77,6 +77,15 @@ enum BinderPlan {
     /// Belt-and-braces beside the one-card-per-pocket rule, and it costs one comparison (§6.3).
     static let minFpCount = 300
 
+    /// A card's short side, as a fraction of the photograph's short side, below which a quad is a
+    /// phantom. Only needed for cells that have NO fingerprint to judge by — a card lost to glare or
+    /// blur — because a keypoint floor would drop those and turn them into empty pockets.
+    ///
+    /// Principled rather than fitted: capture is always 2×2, so a card occupies about half the frame
+    /// whatever the binder's shape. Measured over 179 real cells at 4032×3024 — every card-sized quad
+    /// was ≥ 0.27 of the short side, every phantom ≤ 0.262, and nothing above 0.20 failed to fingerprint.
+    static let minCardShortSideFraction = 0.20
+
     /// Where each tile's window starts along one axis. `ceil(n / 2)` tiles, with the last shifted
     /// back so it stays inside the page — which is why a 3-wide binder sees its middle column twice
     /// and a 4-wide one sees nothing twice.
@@ -177,20 +186,25 @@ enum BinderPlan {
 
     /// Resolves competing observations down to at most one card per pocket.
     ///
-    /// This is the phantom filter, and it is free: the user told us there are exactly
-    /// `rows × cols` pockets, so a 9-detection photograph of a 4-pocket window has 5 detections
-    /// that cannot all be cards. Ranking by inlier count means a real card beats a glare band even
-    /// when both quantize onto the same pocket — and it is also how the overlap between tiles
-    /// becomes a vote rather than a conflict.
+    /// At most one is free: the user told us there are exactly `rows × cols` pockets, so a
+    /// 9-detection photograph of a 4-pocket window has 5 detections that cannot all be cards. Ranking
+    /// by inlier count means a real card beats a glare band even when both quantize onto the same
+    /// pocket — and it is also how the overlap between tiles becomes a vote rather than a conflict.
     ///
-    /// `score` is the observation's inlier count; `fpCount` is its keypoint count. Ties break on
-    /// `fpCount` so two unmatched observations still resolve deterministically.
+    /// ⚠️ **The phantom filter is deliberately NOT here.** It used to be, as a keypoint floor, and
+    /// that quietly re-dropped every `.unreadable` cell the caller had just gone to the trouble of
+    /// keeping — a card lost to glare has no keypoints at all, so a floor here turned it back into an
+    /// empty pocket two lines after `BinderModel.assignSlots` decided it was a card. Deciding what is
+    /// a card needs to know the cell's STATE, which only the caller has, so it belongs there and
+    /// nowhere else.
+    ///
+    /// `score` is the observation's inlier count; `fpCount` breaks ties, so two unmatched observations
+    /// still resolve deterministically.
     static func assign<T>(_ observations: [(slot: BinderSlot, score: Int, fpCount: Int, value: T)],
                           shape: BinderShape) -> [BinderSlot: T] {
         var best: [BinderSlot: (score: Int, fpCount: Int, value: T)] = [:]
         for o in observations {
-            guard o.fpCount >= minFpCount,
-                  (0..<shape.rows).contains(o.slot.row),
+            guard (0..<shape.rows).contains(o.slot.row),
                   (0..<shape.cols).contains(o.slot.col) else { continue }
             if let held = best[o.slot], (held.score, held.fpCount) >= (o.score, o.fpCount) { continue }
             best[o.slot] = (o.score, o.fpCount, o.value)

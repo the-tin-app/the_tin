@@ -19,6 +19,11 @@ struct BinderSlotEntry: Codable, Equatable, Identifiable {
     var tile: String = ""
     /// Normalized to the tile image, top-left origin.
     var crop: CGRect = .zero
+    /// Why this pocket couldn't be read, when that is the reason it is unresolved. ⚠️ A real `Optional`,
+    /// not a defaulted non-optional: a defaulted property still makes synthesized `Decodable` DEMAND the
+    /// key, so every scan written before this field existed would fail to decode. Same convention as
+    /// `CollectionEntry.forTrade` and `BackupSnapshot.setGoals`.
+    var unreadable: String?
     /// The user picked this, from the chooser or by hand.
     ///
     /// ⚠️ Load-bearing, not bookkeeping: a 3×3 or 5×5 binder photographs one row and one column

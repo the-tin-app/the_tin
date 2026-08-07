@@ -174,14 +174,17 @@ final class BinderPlanTests: XCTestCase {
         XCTAssertEqual(out[a], "better look")
     }
 
-    func testPhantomsAreDroppedOnKeypointCount() {
+    /// ⚠️ `assign` deliberately does NOT filter phantoms — see its doc comment. Deciding what is a card
+    /// needs the cell's state (an `.unreadable` card has no keypoints at all), which only
+    /// `BinderModel.assignSlots` has. `BinderModelTests` covers that; this covers only the ranking.
+    func testKeypointCountBreaksTiesButDoesNotExclude() {
         let shape = BinderShape(rows: 3, cols: 3)
         let slot = BinderSlot(page: 0, row: 0, col: 0)
-        // A phantom sits at a median fpCount of 15 against a real card's 650. Even with a higher
-        // inlier count it must never take a pocket.
-        let out = BinderPlan.assign([(slot, 99, 15, "phantom"), (slot, 21, 650, "card")], shape: shape)
-        XCTAssertEqual(out[slot], "card")
-        XCTAssertTrue(BinderPlan.assign([(slot, 99, 15, "phantom")], shape: shape).isEmpty)
+        let tied = BinderPlan.assign([(slot, 30, 15, "fewer keypoints"),
+                                      (slot, 30, 650, "more keypoints")], shape: shape)
+        XCTAssertEqual(tied[slot], "more keypoints")
+        XCTAssertEqual(BinderPlan.assign([(slot, 0, 0, "kept")], shape: shape)[slot], "kept",
+                       "excluding on keypoints here re-dropped every unreadable card")
     }
 
     /// A wider-than-2×2 frame quantizes margin junk onto a pocket, but a shifted-back tile can also

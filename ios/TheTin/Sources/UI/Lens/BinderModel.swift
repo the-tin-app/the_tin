@@ -38,11 +38,15 @@ final class BinderModel {
     private(set) var setNameCache: [String: String] = [:]
     var ownedIds: Set<String> = []
 
-    /// Source photographs, held for the life of the session so pass B can rebuild plates and the
-    /// verification crop can be cut. Dropped by `finish()` — the tile JPEGs on disk take over.
+    /// Source photographs, held only until pass B has finished with each one — see `apply`. A 48 MP
+    /// CIImage is an order of magnitude bigger than anything else on this screen, and holding a whole
+    /// session's worth at once is the jetsam class this app has already been killed by.
     private(set) var images: [UUID: CIImage] = [:]
     private var tileByPhoto: [UUID: BinderTile] = [:]
-    private var cellsByPhoto: [UUID: [LensCell]] = [:]
+    /// The photograph's extent, kept SEPARATELY from the photograph. `apply` needs it to normalize quad
+    /// centres, and it must survive the image being evicted — reading `images[id]?.extent` made the
+    /// eviction and the assignment fight over the same dictionary.
+    private var extentByPhoto: [UUID: CGRect] = [:]
 
     private let source: LensPhotoSource?
     private let catalog: CatalogStore?
@@ -148,9 +152,8 @@ final class BinderModel {
         scan.pagesCaptured = max(scan.pagesCaptured, tile.page + 1)
         images[photoId] = image
         tileByPhoto[photoId] = tile
-        cellsByPhoto[photoId] = []
-        writeTileImage(image, tile: tile)
-        BinderDiag.record(photo: image, tile: tile)
+        extentByPhoto[photoId] = image.extent
+        persistImages(image, tile: tile)
         if tile == currentTile { tileIndex += 1 }
         shotsTaken += 1
         persist()
@@ -176,15 +179,20 @@ final class BinderModel {
         persist()
     }
 
+    /// Stop shooting and go and look at the binder.
+    ///
+    /// ⚠️ Deliberately clears NOTHING. It used to drop `images` and `tileByPhoto` on the reasoning that
+    /// browsing has no use for a 48 MP photograph — which is true, and which silently destroyed every
+    /// answer still in flight. Pass B is the slow stage; tapping Done straight after the last shutter
+    /// press is the normal thing to do, and it left `apply` unable to find the tile for the photographs
+    /// still being read, so their pockets kept whatever `detect` had put there: a page of unreadable
+    /// pockets on a page of perfectly readable cards.
+    ///
+    /// Memory is handled where it belongs instead — per photograph, in `apply`, the moment pass B has
+    /// finished with it.
     func finish() {
         page = 0
         phase = .browsing
-        // The source photographs are the biggest thing in memory by an order of magnitude — a 24.5 MP
-        // CIImage each. Browsing needs the tile JPEGs on disk, not these, and jetsam is uncatchable
-        // by Crashlytics.
-        images.removeAll()
-        tileByPhoto.removeAll()
-        cellsByPhoto.removeAll()
         persist()
     }
 
@@ -194,7 +202,7 @@ final class BinderModel {
         queue = nil
         images.removeAll()
         tileByPhoto.removeAll()
-        cellsByPhoto.removeAll()
+        extentByPhoto.removeAll()
         priceCache.removeAll()
         cardCache.removeAll()
         setNameCache.removeAll()
@@ -266,9 +274,23 @@ final class BinderModel {
 
     func name(_ cardId: String) -> String { cardCache[cardId]?.name ?? cardId }
 
+    /// Where a tile's photograph lives. Routed through the model so the view reads the cache the model
+    /// was BUILT with — `BinderCache.shared` hardcoded in a view is right today and silently wrong the
+    /// first time anything injects a different one.
+    func tileURL(_ tileId: String) -> URL { cache.tileURL(tileId) }
+
     var wishlistHitCount: Int { scan.entries.filter(\.onWishlist).count }
     var resolvedCount: Int { scan.entries.filter(\.isResolved).count }
-    var unresolvedCount: Int { scan.entries.filter { !$0.isResolved }.count }
+    /// Pockets holding a card the app couldn't name but CAN offer a choice for.
+    var unresolvedCount: Int {
+        scan.entries.filter { !$0.isResolved && !$0.options.isEmpty }.count
+    }
+    /// Pockets holding a card that couldn't be read at all — stated separately, because "pick one of
+    /// these four" and "we couldn't see it" are different answers and lumping them promises a chooser
+    /// that measurably isn't worth offering (the four best guesses held the truth 1 time in 12).
+    var unreadCount: Int {
+        scan.entries.filter { !$0.isResolved && $0.options.isEmpty }.count
+    }
 
     /// The user's answer, from the chooser or from manual search. Wins over anything the matcher
     /// says, now or later.
@@ -308,9 +330,23 @@ final class BinderModel {
 
     private func apply(_ photoId: UUID, cells: [LensCell], session: UUID) async {
         guard session == self.session, let tile = tileByPhoto[photoId],
-              let extent = images[photoId]?.extent else { return }
-        cellsByPhoto[photoId] = cells
+              let extent = extentByPhoto[photoId] else { return }
         assignSlots(cells: cells, tile: tile, extent: extent)
+
+        // ⚠️ Drop the photograph the moment nothing needs it again. `finish()` used to be the only thing
+        // that cleared `images`, so a four-page 3×3 scan held SIXTEEN full-resolution photographs at
+        // once — and at 48 MP that is exactly the jetsam class this app has already been killed by, with
+        // SIGKILL guaranteeing Crashlytics never sees it. Nothing after pass B reads the source: the
+        // verification crop comes off the downscaled tile JPEG on disk.
+        //
+        // `.pending` is the test because it is precisely "pass B has not run for this cell yet" — pass A
+        // leaves it pending, and `.unreadable` cells never enter it. A photograph with no cells at all
+        // is trivially done and there is nothing to process.
+        if cells.allSatisfy({ $0.state != .pending }) {
+            images[photoId] = nil
+            tileByPhoto[photoId] = nil
+            extentByPhoto[photoId] = nil
+        }
         await resolveMetadata(for: cells.compactMap(\.cardId))
     }
 
@@ -324,18 +360,36 @@ final class BinderModel {
         // ⚠️ Phantoms are excluded BEFORE the sub-grid is worked out, not after. `BinderPlan.slots`
         // decides where the dividing line falls from the spread of what it is given, so one glare band
         // at the edge of the frame would drag that line and mis-row every real card with it.
-        let real = cells.filter { $0.fpCount >= BinderPlan.minFpCount }
-        let rects = real.map { $0.quad.normalizedRect(in: extent) }
-        let slots = BinderPlan.slots(rects: rects, in: tile)
-        let observations = zip(zip(real, rects), slots).map { pair, slot in
+        //
+        // ⚠️ And `.unreadable` cells are KEPT, which `fpCount` alone cannot express — a card lost to
+        // glare or too blurred to fingerprint has no keypoints at all, so a keypoint floor drops it and
+        // the pocket renders as EMPTY. "There is nothing in this pocket" and "there is a card here I
+        // could not read" are different answers, and quietly giving the first one is the silent miss this
+        // whole feature exists to avoid.
+        let rects = cells.map { $0.quad.normalizedRect(in: extent) }
+        let short = min(extent.width, extent.height)
+        let keep = zip(cells, rects).filter { cell, rect in
+            if cell.fpCount >= BinderPlan.minFpCount { return true }
+            guard cell.isUnreadable else { return false }
+            // No fingerprint to judge by, so judge by size — and because capture is ALWAYS 2×2, a card
+            // occupies about half the frame whatever the binder's shape, which makes a fraction of the
+            // frame a principled test rather than a fitted one. Measured over 179 real cells: every
+            // card-sized quad was ≥ 0.27 of the frame's short side and every phantom ≤ 0.262, and
+            // nothing above 0.20 failed to fingerprint at all.
+            return min(rect.width * extent.width, rect.height * extent.height)
+                >= short * BinderPlan.minCardShortSideFraction
+        }
+        let real = keep.map(\.0), keptRects = keep.map(\.1)
+        let slots = BinderPlan.slots(rects: keptRects, in: tile)
+        let observations = zip(zip(real, keptRects), slots).map { pair, slot in
             (slot: slot, score: pair.0.inliers, fpCount: pair.0.fpCount, value: (pair.0, pair.1))
         }
-        BinderDiag.record(cells: real, rects: rects, slots: slots, tile: tile)
+        BinderDiag.record(cells: real, rects: keptRects, slots: slots, tile: tile)
         for (slot, found) in BinderPlan.assign(observations, shape: shape) {
             let (cell, rect) = found
             scan.put(BinderSlotEntry(slot: slot, cardId: cell.cardId, options: cell.chooserOptions,
                                      inliers: cell.inliers, onWishlist: cell.onWishlist,
-                                     tile: tile.id, crop: rect))
+                                     tile: tile.id, crop: rect, unreadable: cell.unreadableReason))
         }
         persist()
     }
@@ -378,19 +432,25 @@ final class BinderModel {
     /// catalog art makes a wrong identification **invisible** — nothing on screen disagrees with a
     /// confident wrong answer. A few hundred KB on a cache that expires in a day buys the user a
     /// reason to believe the grid, and gives a correction an evidence base instead of a guess.
-    private func writeTileImage(_ image: CIImage, tile: BinderTile) {
+    private func persistImages(_ image: CIImage, tile: BinderTile) {
         let cache = self.cache
         let id = tile.id
+        // ⚠️ ONE task doing both writes, sequentially. Two concurrent JPEG encodes of a 48 MP image
+        // each materialise their own full-size intermediate, and the DEBUG build — the one being
+        // tested on a device — does exactly two per shutter press. Sequential halves the peak, and
+        // jetsam samples the peak.
         Task.detached(priority: .utility) {
+            let context = CIContext()
             let ext = image.extent
             guard ext.width > 0, ext.height > 0 else { return }
             let s = min(1, 1_400 / max(ext.width, ext.height))
             let scaled = image.transformed(by: CGAffineTransform(scaleX: s, y: s))
-            guard let data = try? CIContext().jpegRepresentation(
+            if let data = try? context.jpegRepresentation(
                 of: scaled, colorSpace: CGColorSpaceCreateDeviceRGB(),
-                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.8])
-            else { return }
-            cache.writeTile(id, jpeg: data)
+                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.8]) {
+                cache.writeTile(id, jpeg: data)
+            }
+            BinderDiag.write(photo: image, tile: id, context: context)
         }
     }
 }

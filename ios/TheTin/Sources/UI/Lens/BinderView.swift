@@ -82,9 +82,9 @@ struct BinderSetupView: View {
     /// is slower than looking at a picture of it.
     private var pocketPreview: some View {
         VStack(spacing: 4) {
-            ForEach(0..<rows, id: \.self) { _ in
+            ForEach(Array(0..<rows), id: \.self) { _ in
                 HStack(spacing: 4) {
-                    ForEach(0..<cols, id: \.self) { _ in
+                    ForEach(Array(0..<cols), id: \.self) { _ in
                         RoundedRectangle(cornerRadius: 2)
                             .fill(Color.accentColor.opacity(0.18))
                             .overlay(RoundedRectangle(cornerRadius: 2)
@@ -143,13 +143,18 @@ struct BinderCaptureView: View {
             withAnimation(.easeOut(duration: 0.06)) { flashing = true }
             withAnimation(.easeIn(duration: 0.22).delay(0.06)) { flashing = false }
         }
-        // ⚠️ `start()` is async and MUST be awaited before the first `capture()` — `capturePhoto`
-        // against a session that has not started throws inside AVFoundation.
-        .task { await source.start() }
-        // ⚠️ Paired on appear/disappear, NOT on `.task`. Leaving via the tab bar doesn't necessarily
-        // destroy this view, so `.task` may not re-fire — and a pause with no resume leaves every
-        // unread pocket unresolved forever, which shows as nothing at all.
-        .onAppear { model.resume() }
+        // ⚠️ `.onAppear`, NOT `.task`. `onDisappear` STOPS the capture session, so it has to be started
+        // again on every appearance — and this project has already recorded that a `.task` with no `id:`
+        // cannot be relied on to re-fire when a view reappears without being rebuilt. Getting that wrong
+        // gives a black preview and a shutter that silently does nothing after one tab switch.
+        //
+        // `start()` is idempotent, and `capture()` refuses to fire against a session that isn't running,
+        // so an early shutter tap is a no-op rather than the AVFoundation crash it would otherwise be.
+        .onAppear {
+            Task { await source.start() }
+            // ⚠️ A pause with no resume leaves every pocket unread forever, showing as nothing at all.
+            model.resume()
+        }
         .onDisappear { source.stop(); model.cancel() }
     }
 
