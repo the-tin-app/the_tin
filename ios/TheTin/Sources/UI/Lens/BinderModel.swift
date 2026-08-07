@@ -221,6 +221,16 @@ final class BinderModel {
 
     func entry(_ slot: BinderSlot) -> BinderSlotEntry? { scan.entry(slot) }
 
+    /// Fills art, names, set names and prices for whatever the scan already holds.
+    ///
+    /// ⚠️ Not belt-and-braces. Metadata is otherwise resolved only as pass B finds cards, so a scan
+    /// that came **off disk** has entries and nothing else — and the grid renders as a page of grey
+    /// rectangles with no names and no prices. The feature looks broken at exactly the moment the
+    /// cache did its job. Cheap and idempotent: `resolveMetadata` skips anything already cached.
+    func hydrate() async {
+        await resolveMetadata(for: scan.entries.compactMap(\.cardId))
+    }
+
     func slots(onPage page: Int) -> [BinderSlot] {
         (0..<shape.rows).flatMap { r in
             (0..<shape.cols).map { BinderSlot(page: page, row: r, col: $0) }

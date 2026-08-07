@@ -14,6 +14,13 @@ struct BinderView: View {
     let store: CatalogStore
 
     var body: some View {
+        phaseContent
+            // ⚠️ Here, not inside `.browsing`. A scan restored from the cache arrives with entries and
+            // no metadata, and the grid is grey rectangles until this runs.
+            .task(id: model.scan.entries.count) { await model.hydrate() }
+    }
+
+    @ViewBuilder private var phaseContent: some View {
         switch model.phase {
         case .setup:
             BinderSetupView(shape: model.shape) { model.begin(shape: $0) }
@@ -101,15 +108,26 @@ struct BinderCaptureView: View {
     let source: LensPhotoSource
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
+        ZStack {
+            // ⚠️ The fill and the explicit frame are load-bearing. `CameraPreview` has no intrinsic
+            // size, so without them the whole screen collapses to the height of the header overlay and
+            // the shutter is nowhere on screen — which is what a simulator shows, and what a user who
+            // declined the camera permission would get: a caption and no way to do anything.
+            Color.black
+            if source.isAvailable {
                 CameraPreview(session: source.session)
                 TwoByTwoGuide()
+            } else {
+                ContentUnavailableView("The camera isn't available",
+                                       systemImage: "camera.metering.unknown",
+                                       description: Text("The Tin needs camera access to photograph a binder. You can grant it in Settings."))
+                    .foregroundStyle(.white)
             }
-            .overlay(alignment: .top) { header }
-            .overlay(alignment: .bottom) { controls }
-            .clipped()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .top) { header }
+        .overlay(alignment: .bottom) { controls }
+        .clipped()
         // ⚠️ `start()` is async and MUST be awaited before the first `capture()` — `capturePhoto`
         // against a session that has not started throws inside AVFoundation.
         .task { await source.start() }
@@ -157,15 +175,21 @@ struct BinderCaptureView: View {
                 }
                 .tint(.white)
             } else {
-                HStack(spacing: 26) {
+                // Equal-width side slots, so the shutter sits on the centre line whatever the labels
+                // say. "Retake last" keeps its space when hidden — a control that appears after the
+                // first shot must not shove the shutter sideways mid-page.
+                HStack(spacing: 12) {
                     Button("Retake last") { model.retakePrevious() }
-                        .font(.footnote).foregroundStyle(.white)
                         .opacity(model.tileIndex > 0 ? 1 : 0)
                         .disabled(model.tileIndex == 0)
+                        .frame(maxWidth: .infinity)
                     shutter
                     Button("Finish") { model.finish() }
-                        .font(.footnote).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
                 }
+                .font(.footnote)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
             }
         }
         .padding(.bottom, 16)
