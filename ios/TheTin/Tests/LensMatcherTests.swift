@@ -127,9 +127,14 @@ final class LensMatcherTests: XCTestCase {
                        .ambiguous(["card_0", "card_1", "card_2", "card_3"]))
     }
 
-    /// Each consistency leg alone is enough to withhold a lock. `hasTwinInPool` is inert against the
-    /// served catalog today (`card_twin` is 0 rows) and is the entire wrong-lock story — so it is
-    /// pinned here rather than trusted, and it must keep working the day the table is populated.
+    /// Each consistency leg alone is enough to withhold a lock.
+    ///
+    /// `hasTwinInPool` was inert in production until 2026-08-07 — `card_twin` was 0 rows in every
+    /// published catalog because the pairs file sat in a gitignored directory outside the pipeline's
+    /// Docker build context — so it is pinned here rather than trusted. ⚠️ It fixes identical-art
+    /// confusion and nothing else: the one wrong lock in the 415-cell measured fixture set was a twin
+    /// case, but wrong locks seen on a real device were plainly wrong cards, not paired art, and are
+    /// a separate unexplained problem (Tomas, 2026-08-07).
     func testEachOcrDisagreementWithholdsTheLock() {
         for cons in [CandidateConsistency(nameAgrees: false, denomOk: true, hasTwinInPool: false),
                      CandidateConsistency(nameAgrees: true, denomOk: false, hasTwinInPool: false),

@@ -3,10 +3,11 @@
   (number, lower(name))  — the original pool, ORB-or-dHash as validated 2026-07-08.
   (lower(name), artist)  — WIDER, dHash required (see `twins.is_twin`).
 
-⚠️ The second pool exists because of a specific wrong lock. The only wrong answer in a whole day of
-measured device photography was `base1-2`/`base4-2` Blastoise answered as `cel25cc-CC001` — a third
+⚠️ The second pool exists because of a specific wrong lock. The only wrong answer in the 415-cell
+measured fixture set was `base1-2`/`base4-2` Blastoise answered as `cel25cc-CC001` — a third
 identical-art reprint numbered `CC001`, which a pool keyed on the collector number can never place
-beside the other two. All three share Ken Sugimori's illustration, so the artist is the link.
+beside the other two. (Wrong locks later seen on a real device were plainly wrong cards, not paired
+art, so this pool does not address those.) All three share Ken Sugimori's illustration, so the artist is the link.
 Measured on catalog v35: (number, name) alone is 1,405 candidate pairs, adding (name, artist) makes
 9,727, and pooling by name alone would be 167,433 — the artist is what makes widening affordable.
 

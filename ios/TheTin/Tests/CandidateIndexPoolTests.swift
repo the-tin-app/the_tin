@@ -99,8 +99,11 @@ final class CandidateIndexPoolTests: XCTestCase {
     /// for months (the pairs file was gitignored and outside the pipeline's Docker build context), so
     /// the guard was inert the whole time and the tests were all green.
     ///
-    /// The cost was a confident wrong answer: a Blastoise photographed off a real binder page came back
-    /// as `cel25cc-CC001`, a third identical-art reprint, with nothing to withhold the lock.
+    /// The cost was a confident wrong answer in the measured fixture set: a Blastoise photographed off
+    /// a binder page came back as `cel25cc-CC001`, a third identical-art reprint, with nothing to
+    /// withhold the lock. ⚠️ That is the ONLY failure mode this guard addresses — wrong locks seen on a
+    /// real device were plainly wrong cards rather than paired art (Tomas, 2026-08-07), so do not read
+    /// a populated `card_twin` as a fix for those.
     func testAWinnerWithATwinInThePoolIsReportedAsSuch() throws {
         let index = try makeIndex()
         let fields = OcrFields(rawText: "", numerators: [], denominator: nil, hp: nil)
