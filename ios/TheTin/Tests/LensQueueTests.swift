@@ -283,7 +283,7 @@ final class LensQueueTests: XCTestCase {
         let pending = await queue.hasBacklog
         XCTAssertTrue(pending, "nothing was left to resume — the test proves nothing")
 
-        await queue.drain()          // ← what LensModel.resume() does
+        await queue.drain()          // ← what BinderModel.resume() does
 
         let events = await journal.events
         for (label, id) in [("p1", p1), ("p2", p2)] {

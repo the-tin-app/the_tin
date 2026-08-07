@@ -52,7 +52,7 @@ actor LensQueue {
     ///
     /// ⚠️ A pause, NOT a discard, and the difference is the whole point. The work is not cheap and
     /// the screen it belongs to can go away mid-read (switching to the Scanner segment, leaving the
-    /// Scan tab) — but the photos stay in `LensModel.photos`, and a cell that never gets its pass B
+    /// Scan tab) — but the photos stay in `BinderModel.images`, and a cell that never gets its pass B
     /// stays `.pending` forever: no row, not counted as unidentified, nothing in the footer. With
     /// no wishlist hits the screen goes back to reading "Take a photo of the cards in front of
     /// you", as if the shutter had never been pressed. That is exactly the silent drop this
@@ -69,7 +69,7 @@ actor LensQueue {
         paused = true
     }
 
-    /// Whether anything is waiting. `LensModel.resume()` checks it so re-entering an idle screen
+    /// Whether anything is waiting. `BinderModel.resume()` checks it so re-entering an idle screen
     /// doesn't flash the "Reading…" state.
     var hasBacklog: Bool { !awaitingA.isEmpty || !awaitingB.isEmpty }
 

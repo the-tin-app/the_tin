@@ -51,8 +51,8 @@ extension CardQuad {
     ///
     /// ⚠️ Vision's pixel space is bottom-left origin; SwiftUI's and CoreGraphics' image space are
     /// top-left. Flipping here, once, is why every consumer downstream — slot quantizing, the
-    /// verification crop — can be plain arithmetic. `LensPhotoOverlay` paid for the same flip
-    /// separately and getting it wrong puts every outline in the wrong half of the photo.
+    /// verification crop — can be plain arithmetic. Getting it wrong is not visibly an orientation
+    /// bug: it puts the right cards in transposed pockets, which reads as a matching failure.
     func normalizedRect(in extent: CGRect) -> CGRect {
         guard extent.width > 0, extent.height > 0 else { return .zero }
         let xs = [topLeft.x, topRight.x, bottomLeft.x, bottomRight.x]
