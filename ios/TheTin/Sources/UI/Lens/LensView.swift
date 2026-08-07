@@ -93,9 +93,13 @@ struct LensView: View {
         }
     }
 
-    /// One honest line covering both kinds of miss. Unreadable cards name their reason; cards that
-    /// were read but not recognised are counted separately, because "we couldn't see it" and "we
-    /// saw it and don't know it" are different answers.
+    /// One honest line covering both kinds of miss, and one about what the prices can mean.
+    /// Unreadable cards name their reason; cards that were read but not recognized are counted
+    /// separately, because "we couldn't see it" and "we saw it and don't know it" are different
+    /// answers.
+    ///
+    /// ⚠️ The price caveat is not optional politeness. A photo cannot tell one printing of a card
+    /// from another, so a bare `$12.50` beside it claims a precision the app does not have.
     private var failureNote: String? {
         var parts: [String] = []
         let reasons = model.unreadableReasons
@@ -104,7 +108,10 @@ struct LensView: View {
             parts.append("^[\(reasons.count) card](inflect: true) couldn't be read — \(why).")
         }
         if model.unidentifiedCount > 0 {
-            parts.append("^[\(model.unidentifiedCount) card](inflect: true) wasn't recognised.")
+            parts.append("^[\(model.unidentifiedCount) card](inflect: true) wasn't recognized.")
+        }
+        if !model.rows.isEmpty {
+            parts.append("Prices are a guide — a photo can't tell which printing a card is.")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }

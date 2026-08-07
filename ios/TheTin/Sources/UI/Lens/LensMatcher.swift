@@ -85,15 +85,18 @@ struct LiveLensWork: LensWork {
         let context = CIContext()
         var cells: [LensCell] = []
         var fingerprints: [UUID: CardFingerprint] = [:]
-        for detected in MultiCardDetector.cells(in: ci, context: context) {
+        // ⚠️ `forEachCell`, NOT `cells(in:)`. The array-returning form materialises every plate
+        // for the photo before returning — 2,428,800 B each × up to 48 = ~117 MB resident at
+        // once, which is a jetsam kill on an A10 and leaves no crash report at all. Streaming
+        // keeps exactly one plate alive: each is fingerprinted (~26 KB) and released here.
+        MultiCardDetector.forEachCell(in: ci, context: context) { detected in
             guard detected.plate.glareCoverage <= glareCeiling else {
                 cells.append(LensCell(quad: detected.quad, state: .unreadable("reflection")))
-                continue
+                return
             }
-            // The plate's 2.4 MB dies with this iteration; only the ~26 KB fingerprint is kept.
             guard let fp = LensMatcher.fingerprint(detected.plate) else {
                 cells.append(LensCell(quad: detected.quad, state: .unreadable("blur")))
-                continue
+                return
             }
             let cell = LensCell(quad: detected.quad, state: .pending)
             fingerprints[cell.id] = fp

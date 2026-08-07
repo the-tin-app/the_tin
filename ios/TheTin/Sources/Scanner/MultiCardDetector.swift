@@ -32,8 +32,32 @@ enum MultiCardDetector {
                       orienter: (CIImage, CIContext, Int?) -> (image: CIImage, degrees: Int)? = { corrected, context, preferred in
                           OrientationNormalizer.orientUpright(corrected, context: context, preferred: preferred)
                       }) -> [DetectedCell] {
+        var out: [DetectedCell] = []
+        forEachCell(in: ci, context: context, maxCards: maxCards,
+                    minShortSideFraction: minShortSideFraction, orienter: orienter) { out.append($0) }
+        return out
+    }
+
+    /// Same detection, but each cell is handed to `body` and then **released** — at most ONE plate
+    /// is resident at a time.
+    ///
+    /// ⚠️ This is not a micro-optimisation. A plate is 660×920×4 = 2,428,800 B, and `maxCards` is
+    /// 48, so the array-returning `cells(...)` above peaks at ~117 MB of plates before its caller
+    /// sees a single one — on top of the decoded source photo and the CIContext's caches. Jetsam
+    /// samples the peak, is uncatchable by Crashlytics (SIGKILL leaves no report at all), and has
+    /// already killed this app once. Any caller that only needs a derivative of each plate (the
+    /// lens needs its ~26 KB fingerprint) must use this form. `cells(...)` remains for callers
+    /// that genuinely want them all, and for the tests.
+    static func forEachCell(in ci: CIImage,
+                            context: CIContext,
+                            maxCards: Int = 48,
+                            minShortSideFraction: Double = 0.04,
+                            orienter: (CIImage, CIContext, Int?) -> (image: CIImage, degrees: Int)? = { corrected, context, preferred in
+                                OrientationNormalizer.orientUpright(corrected, context: context, preferred: preferred)
+                            },
+                            _ body: (DetectedCell) -> Void) {
         let ext = ci.extent
-        guard ext.width > 0, ext.height > 0 else { return [] }
+        guard ext.width > 0, ext.height > 0 else { return }
         let handler = VNImageRequestHandler(ciImage: ci, options: [:])
 
         func toPixels(_ o: VNRectangleObservation) -> ScoredQuad {
@@ -64,7 +88,7 @@ enum MultiCardDetector {
         try? handler.perform([rectReq])
         observations += rectReq.results ?? []
 
-        guard !observations.isEmpty else { return [] }
+        guard !observations.isEmpty else { return }
 
         // A quad covering essentially the whole frame is the page/case itself, not a card.
         let frameArea = ext.width * ext.height
@@ -72,23 +96,23 @@ enum MultiCardDetector {
             q.size.width * q.size.height < frameArea * 0.6
         }
         let selected = QuadFilter.select(scored, maxCards: maxCards)
-        guard !selected.isEmpty else { return [] }
+        guard !selected.isEmpty else { return }
 
         // Orientation is resolved ONCE for the photo and reused. `orientUpright` costs two
         // full-resolution renders plus two Vision text passes per call — the bulk of the
         // ~1,150 ms `detect` measured on an A10. Every card in one binder page or one case is
         // the same way up; a sideways one comes back unmatched, not wrong.
         var sharedRotation: Int?
-        var out: [DetectedCell] = []
         for q in selected {
             guard let corrected = perspectiveCorrect(q.quad, in: ci) else { continue }
             guard let oriented = orienter(corrected, context, sharedRotation) else { continue }
             sharedRotation = oriented.degrees
             guard let plate = render(oriented.image, context: context,
                                      quadConfidence: q.confidence) else { continue }
-            out.append(DetectedCell(quad: q.quad, plate: plate))
+            // Handed over and released: the caller's `body` returns before the next plate is
+            // rendered, so only one 2.4 MB plate is ever resident.
+            body(DetectedCell(quad: q.quad, plate: plate))
         }
-        return out
     }
 
     /// Perspective-corrects `quad` out of `ci` to a natural-aspect image (orientation not yet

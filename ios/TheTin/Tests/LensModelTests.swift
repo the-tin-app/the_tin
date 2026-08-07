@@ -1,3 +1,4 @@
+import CoreImage
 import XCTest
 @testable import TheTin
 
@@ -37,10 +38,28 @@ final class LensModelTests: XCTestCase {
         let model = LensModel.forTesting()
         model.photos[UUID()] = [cell("a")]
         model.priceCache = ["a": 1]
+        model.nameCache = ["a": "Some Card"]
+        model.images[UUID()] = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 4, height: 4))
         model.reset()
         XCTAssertTrue(model.photos.isEmpty)
         XCTAssertTrue(model.rows.isEmpty)
         XCTAssertEqual(model.unreadableCount, 0)
+        // Pinned individually: dropping any one of these `removeAll()`s left the assertions above
+        // green, and a stale image or name would resurface under the next session's photos.
+        XCTAssertTrue(model.images.isEmpty)
+        XCTAssertTrue(model.nameCache.isEmpty)
+        XCTAssertTrue(model.priceCache.isEmpty)
+    }
+
+    /// A cell the lens read but could not name is a visible failure — an outline on the photo with
+    /// no row — so it is counted and stated, separately from the cards it could not read at all.
+    func testUnrecognizedCellsAreCountedSeparately() {
+        let model = LensModel.forTesting()
+        model.photos[UUID()] = [cell("a"), cell(nil), cell(nil),
+                                cell(nil, unreadable: "reflection")]
+        XCTAssertEqual(model.unidentifiedCount, 2)
+        XCTAssertEqual(model.unreadableCount, 1)
+        XCTAssertEqual(model.rows.count, 1)
     }
 
     func testWishlistCountIsTheHeadlineNumber() {

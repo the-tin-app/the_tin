@@ -26,6 +26,16 @@ actor LensQueue {
     private var awaitingA: [UUID] = []
     /// Photos through pass A, waiting on pass B.
     private var awaitingB: [(id: UUID, cells: [LensCell])] = []
+    /// Whether a `drain()` is already looping.
+    ///
+    /// ⚠️ This flag lives HERE, not on the caller, because `enqueue` and the loop condition below
+    /// are the two things it has to be consistent with and both are actor state. A caller-side
+    /// "am I already draining" flag on the MainActor interleaves: drain #1 finds both lists empty
+    /// and returns, shoot #2 enqueues, shoot #2's continuation sees the flag still set and skips
+    /// its drain, and only then does shoot #1 clear it — leaving a photo in `awaitingA` with no
+    /// drainer, no spinner, and nothing on screen. It self-heals on the next shutter press, which
+    /// is exactly the kind of silent miss this feature's copy rules forbid.
+    private var draining = false
 
     init(work: LensWork, onUpdate: @Sendable @escaping (UUID, [LensCell]) async -> Void) {
         self.work = work
@@ -36,9 +46,20 @@ actor LensQueue {
         awaitingA.append(photoId)
     }
 
+    /// Whether work is still in flight. The caller's spinner reads this after `drain()` returns,
+    /// so a call that short-circuited on the guard above doesn't switch the spinner off under the
+    /// drain that is still running.
+    var isDraining: Bool { draining }
+
     /// Runs until both stages are empty. Re-checks `awaitingA` on every iteration, so a photo
     /// captured mid-drain preempts the pass-B backlog rather than queueing behind it.
+    ///
+    /// Idempotent: a second concurrent call returns immediately, because the loop already running
+    /// will pick up anything enqueued since. Callers may therefore always `enqueue` then `drain`.
     func drain() async {
+        guard !draining else { return }
+        draining = true
+        defer { draining = false }
         while !awaitingA.isEmpty || !awaitingB.isEmpty {
             if !awaitingA.isEmpty {
                 let id = awaitingA.removeFirst()

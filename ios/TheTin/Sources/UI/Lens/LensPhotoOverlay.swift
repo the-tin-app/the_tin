@@ -24,7 +24,7 @@ struct LensPhotoOverlay: View {
                     ProgressView()
                 }
                 ForEach(cells) { cell in
-                    let r = rect(for: cell, in: geo.size)
+                    let r = Self.rect(quad: cell.quad, extent: image.extent, in: geo.size)
                     Rectangle()
                         .stroke(cell.onWishlist ? Color.accentColor : .white.opacity(0.55),
                                 lineWidth: cell.id == highlighted ? 4 : 2)
@@ -54,15 +54,15 @@ struct LensPhotoOverlay: View {
     /// quad by `geo.size / extent` would put every outline in the wrong place on any container
     /// whose aspect ratio isn't the photo's. Vision's pixel space is also bottom-left origin
     /// against SwiftUI's top-left, so y is flipped.
-    private func rect(for cell: LensCell, in size: CGSize) -> CGRect {
-        let ext = image.extent
+    /// `static` and internal purely so it can be unit-tested — it is pure arithmetic and needs no
+    /// camera, and a wrong box here would otherwise only be findable on a device.
+    static func rect(quad q: CardQuad, extent ext: CGRect, in size: CGSize) -> CGRect {
         guard ext.width > 0, ext.height > 0 else { return .zero }
         let scale = min(size.width / ext.width, size.height / ext.height)
         let drawn = CGSize(width: ext.width * scale, height: ext.height * scale)
         let originX = (size.width - drawn.width) / 2
         let originY = (size.height - drawn.height) / 2
 
-        let q = cell.quad
         let xs = [q.topLeft.x, q.topRight.x, q.bottomLeft.x, q.bottomRight.x]
         let ys = [q.topLeft.y, q.topRight.y, q.bottomLeft.y, q.bottomRight.y]
         let minX = ((xs.min() ?? 0) - ext.minX) * scale

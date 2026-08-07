@@ -26,6 +26,9 @@ final class LensModel {
     /// Built on the first shutter press, not in `init`: `LiveLensWork` has to capture a closure
     /// that reads `images` off this very model, which does not exist yet at init time.
     private var queue: LensQueue?
+    /// Bumped by `reset()`. Every queue's update closure captures the token it was built under,
+    /// so work still in flight from a cleared session lands nowhere.
+    private var session = UUID()
 
     init(source: LensPhotoSource? = nil, catalog: CatalogStore? = nil, matcher: Matcher? = nil,
          wanted: Set<String> = [], owned: Set<String> = []) {
@@ -75,17 +78,26 @@ final class LensModel {
         guard let shot = await source.capture() else { return }
         images[shot.id] = shot.image
         photos[shot.id] = []
-        await queue.enqueue(photoId: shot.id)
-        // A drain already running will pick this photo up on its next iteration, and the queue's
-        // whole priority rule is that it re-checks pass A first — so a second shutter press must
-        // NOT start a second drain racing the first over the same two lists.
-        guard !isWorking else { return }
         isWorking = true
+        await queue.enqueue(photoId: shot.id)
+        // Always safe to call: `drain()` is idempotent on the actor, so a second shutter press
+        // returns straight away and lets the running loop pick the new photo up (its priority
+        // rule re-checks pass A every iteration). The guard is deliberately NOT here — a
+        // MainActor flag cannot be consistent with `awaitingA`, and getting it wrong strands the
+        // photo with no drainer and no spinner.
         await queue.drain()
-        isWorking = false
+        isWorking = await queue.isDraining
     }
 
+    /// Clears the session. Any drain still running belongs to the OLD session: the queue is
+    /// dropped so the next shutter press builds a fresh one, and the stale drain's updates are
+    /// discarded by the session check in `apply`. Without that, a Clear tapped during "Reading…"
+    /// lets a late `onUpdate` put a photo back into `photos` — which then looks like a live
+    /// session to `ScanTabContainer` and stops it refreshing the wishlist snapshot on re-entry.
     func reset() {
+        session = UUID()
+        queue = nil
+        isWorking = false
         photos.removeAll()
         images.removeAll()
         priceCache.removeAll()
@@ -99,14 +111,16 @@ final class LensModel {
         let work = LiveLensWork(matcher: matcher,
                                 imageForPhoto: { [weak self] id in await self?.images[id] },
                                 wanted: wanted)
+        let token = session
         let q = LensQueue(work: work) { [weak self] id, cells in
-            await self?.apply(id, cells: cells)
+            await self?.apply(id, cells: cells, session: token)
         }
         queue = q
         return q
     }
 
-    private func apply(_ photoId: UUID, cells: [LensCell]) async {
+    private func apply(_ photoId: UUID, cells: [LensCell], session: UUID) async {
+        guard session == self.session else { return }   // a cleared session's late update
         photos[photoId] = cells
         // Detect and pass A produce no card ids at all, so this is a no-op until pass B lands.
         await resolveMetadata(for: cells.compactMap(\.cardId))

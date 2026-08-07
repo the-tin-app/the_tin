@@ -134,6 +134,68 @@ final class LensQueueTests: XCTestCase {
                        "expected detect → passA → passB in that order, once each: \(seen)")
     }
 
+    /// `drain()` is idempotent, and that is what lets a caller always `enqueue` then `drain`
+    /// without tracking whether one is already running.
+    ///
+    /// ⚠️ The guard has to live on the actor. It was first written as an `isWorking` flag on the
+    /// MainActor caller, which cannot be consistent with `awaitingA`: drain #1's loop finds both
+    /// lists empty and returns, shoot #2 enqueues, shoot #2's continuation sees the flag still set
+    /// and skips its own drain, and only then does shoot #1 clear it — a photo left in `awaitingA`
+    /// with no drainer, no spinner, and nothing shown for it.
+    ///
+    /// Asserted by measuring how much work the nested call does: with the guard it returns without
+    /// running a single stage (delta 0); without it, it would drive p3 and p2's pass B to
+    /// completion before returning. A "nothing got processed twice" assertion alone would NOT
+    /// catch that — two concurrent loops each `removeFirst` under the actor, so they cannot
+    /// duplicate an item.
+    func testASecondDrainReturnsWithoutRunningAnything() async throws {
+        let journal = Journal()
+        let p1 = UUID(), p2 = UUID(), p3 = UUID()
+
+        actor DrainBox {
+            private var queue: LensQueue?
+            private var journal: Journal?
+            private var fired = false
+            private(set) var stagesRunByNestedDrain = -1
+            func set(_ q: LensQueue, _ j: Journal) { queue = q; journal = j }
+            /// One-shot, for the same reason `enqueueOnce` above is: the fake's hook fires on
+            /// every passB.
+            func nestedDrainOnce(_ id: UUID) async {
+                guard !fired else { return }
+                fired = true
+                await queue?.enqueue(photoId: id)
+                let before = await journal?.events.count ?? 0
+                await queue?.drain()
+                let after = await journal?.events.count ?? 0
+                stagesRunByNestedDrain = after - before
+            }
+        }
+        let box = DrainBox()
+
+        var work = FakeWork(journal: journal)
+        work.onPassBStart = { await box.nestedDrainOnce(p3) }
+        let queue = LensQueue(work: work, onUpdate: { _, _ in })
+        await box.set(queue, journal)
+
+        await queue.enqueue(photoId: p1)
+        await queue.enqueue(photoId: p2)
+        await queue.drain()
+
+        let ran = await box.stagesRunByNestedDrain
+        XCTAssertEqual(ran, 0, "the second drain ran \(ran) stages instead of returning")
+
+        // …and the outer drain still finished everything, including the photo the nested call
+        // enqueued. This is the stranding half: nothing may be left unprocessed.
+        let events = await journal.events
+        for (label, id) in [("p1", p1), ("p2", p2), ("p3", p3)] {
+            let tag = id.uuidString.prefix(4)
+            for stage in ["detect:\(tag)", "A:\(tag)", "B:\(tag)"] {
+                XCTAssertEqual(events.filter { $0 == stage }.count, 1,
+                               "\(label) expected exactly one \(stage): \(events)")
+            }
+        }
+    }
+
     func testDrainingAnEmptyQueueIsANoOp() async {
         let journal = Journal()
         let queue = LensQueue(work: FakeWork(journal: journal), onUpdate: { _, _ in })
