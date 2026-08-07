@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import Database from "better-sqlite3";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCatalog, pickRepresentative } from "../src/pipeline/catalog";
@@ -118,6 +118,29 @@ describe("buildCatalog", () => {
     const ph = db.prepare("SELECT COUNT(*) n FROM price_history").get() as any;
     expect(ph.n).toBe(0);
     db.close();
+  });
+
+  // ⚠️ The pairs file is the part that was missing, not the code. `card_twin` was 0 rows in every
+  // published catalog because the default path pointed at a gitignored directory OUTSIDE the Docker
+  // build context, so `existsSync` was false on every nightly and `twins` was silently `[]`. This
+  // asserts the checked-in file exists, parses, and holds the pairs that a real device photograph
+  // actually confused — the guard being inert is the entire wrong-lock story.
+  it("ships a card-twins.json the pipeline can actually read", () => {
+    const path = join(__dirname, "..", "data", "card-twins.json");
+    expect(existsSync(path)).toBe(true);
+    const pairs = JSON.parse(readFileSync(path, "utf8")) as [string, string][];
+    expect(pairs.length).toBeGreaterThan(300);
+    for (const p of pairs) expect(p).toHaveLength(2);
+    // Sorted within each pair and overall, so a regeneration produces a reviewable diff rather than
+    // a reshuffle of 369 lines.
+    const ordered = [...pairs].sort((x, y) => (x[0] === y[0] ? (x[1] < y[1] ? -1 : 1) : (x[0] < y[0] ? -1 : 1)));
+    expect(ordered).toEqual(pairs);
+    for (const [a, b] of pairs) expect(a < b).toBe(true);
+    // Two identical-art reprints that a real photograph of a binder confused, 2026-08-07.
+    const has = (a: string, b: string) =>
+      pairs.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+    expect(has("base1-2", "base4-2")).toBe(true);
+    expect(has("sv08-057", "me02.5-057")).toBe(true);
   });
 
   it("writes card_twin rows in both directions", () => {
