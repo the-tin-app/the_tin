@@ -90,6 +90,46 @@ final class CandidateIndexPoolTests: XCTestCase {
         }
     }
 
+    // MARK: - consistency(): the twin guard, read from `card_twin`
+
+    /// ⚠️ **The one link in the chain that was dead in production, and the only one nothing tested.**
+    /// Every consumer of `hasTwinInPool` — `ScanSession`'s F1 gate, `LensMatcher.verdict` — is tested
+    /// with a stub that simply asserts the flag. Nothing asserted that `CandidateIndex.consistency`
+    /// actually reads `card_twin` and sets it, and `card_twin` was 0 rows in every published catalog
+    /// for months (the pairs file was gitignored and outside the pipeline's Docker build context), so
+    /// the guard was inert the whole time and the tests were all green.
+    ///
+    /// The cost was a confident wrong answer: a Blastoise photographed off a real binder page came back
+    /// as `cel25cc-CC001`, a third identical-art reprint, with nothing to withhold the lock.
+    func testAWinnerWithATwinInThePoolIsReportedAsSuch() throws {
+        let index = try makeIndex()
+        let fields = OcrFields(rawText: "", numerators: [], denominator: nil, hp: nil)
+        let both = index.consistency(cardId: FixtureCatalog.twinA, fields: fields,
+                                     pool: [FixtureCatalog.twinA, FixtureCatalog.twinB])
+        XCTAssertTrue(both.hasTwinInPool, "card_twin is not being read")
+
+        // Symmetric: the table holds both directions, so it does not matter which one the matcher won.
+        XCTAssertTrue(index.consistency(cardId: FixtureCatalog.twinB, fields: fields,
+                                        pool: [FixtureCatalog.twinA, FixtureCatalog.twinB])
+                        .hasTwinInPool)
+    }
+
+    /// The guard is about the POOL, not about existing. A card with a twin the matcher never had to
+    /// choose between is not ambiguous, and flagging it would withhold locks for no reason.
+    func testATwinOutsideThePoolDoesNotWithholdAnything() throws {
+        let index = try makeIndex()
+        let fields = OcrFields(rawText: "", numerators: [], denominator: nil, hp: nil)
+        XCTAssertFalse(index.consistency(cardId: FixtureCatalog.twinA, fields: fields,
+                                          pool: [FixtureCatalog.twinA]).hasTwinInPool)
+    }
+
+    func testACardWithNoTwinsIsNeverFlagged() throws {
+        let index = try makeIndex()
+        let fields = OcrFields(rawText: "", numerators: [], denominator: nil, hp: nil)
+        XCTAssertFalse(index.consistency(cardId: "swsh7-215", fields: fields,
+                                          pool: ["swsh7-215", FixtureCatalog.twinA]).hasTwinInPool)
+    }
+
     // Cap: the pool never exceeds 160 ids (fixture is far smaller, so this just checks the
     // contract shape rather than exercising the cap directly).
     func testPoolNeverExceeds160() throws {
