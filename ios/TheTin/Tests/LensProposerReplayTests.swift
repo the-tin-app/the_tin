@@ -305,19 +305,29 @@ final class LensProposerReplayTests: XCTestCase {
         for name in images {
             try autoreleasepool {
                 let truth = truthByImage[name] ?? []
-                let ci = try XCTUnwrap(CIImage(contentsOf: dir.appendingPathComponent("\(name).png")))
+                // The 3×3 whole-page fixtures are PNG; the 2×2 quadrant ladder is straight
+                // off the phone as HEIC. Read either rather than transcode ~840 MB.
+                let ci = try XCTUnwrap(["png", "HEIC", "heic"].lazy
+                    .map { dir.appendingPathComponent("\(name).\($0)") }
+                    .compactMap { CIImage(contentsOf: $0,
+                                          options: [.applyOrientationProperty: true]) }
+                    .first, "no image for \(name)")
                 let context = CIContext()
                 var i = 0
                 MultiCardDetector.forEachCell(in: ci, context: context) { detected in
                     defer { i += 1 }
                     let plate = detected.plate
+                    let q = detected.quad
+                    let w = hypot(q.topRight.x - q.topLeft.x, q.topRight.y - q.topLeft.y)
+                    let h = hypot(q.bottomLeft.x - q.topLeft.x, q.bottomLeft.y - q.topLeft.y)
+                    let sp = Int(min(w, h))
                     let fields = TextGate.extract(plate: plate)
                     let pool = index.pool(fields: fields)
 
                     guard plate.glareCoverage <= 0.5, let fp = LensMatcher.fingerprint(plate),
                           fp.count > 0 else {
                         rows.append(LockRow(image: name, cell: i, verdict: "unreadable",
-                                            poolSize: pool.count, fpCount: 0, truthInPool: false,
+                                            shortSidePx: sp, poolSize: pool.count, fpCount: 0, truthInPool: false,
                                             top1: nil, top1Inliers: 0, top2Inliers: 0, ratio: 0,
                                             nameAgrees: false, denomOk: false, twinInPool: false,
                                             top1Correct: false, chooserHasTruth: false,
@@ -331,7 +341,7 @@ final class LensProposerReplayTests: XCTestCase {
                           let results = try? matcher.match(query: fp, candidateIds: pool),
                           let top = results.first else {
                         rows.append(LockRow(image: name, cell: i, verdict: "noMatch",
-                                            poolSize: pool.count, fpCount: fp.count,
+                                            shortSidePx: sp, poolSize: pool.count, fpCount: fp.count,
                                             truthInPool: truthInPool,
                                             top1: nil, top1Inliers: 0, top2Inliers: 0, ratio: 0,
                                             nameAgrees: false, denomOk: false, twinInPool: false,
@@ -356,7 +366,7 @@ final class LensProposerReplayTests: XCTestCase {
                     // The chooser shows four tiles — same 2×2 grid the live scanner uses.
                     let chooserIds = Set(results.prefix(4).map(\.cardId))
                     rows.append(LockRow(
-                        image: name, cell: i, verdict: verdict, poolSize: pool.count,
+                        image: name, cell: i, verdict: verdict, shortSidePx: sp, poolSize: pool.count,
                         fpCount: fp.count, truthInPool: truthInPool, top1: top.cardId,
                         top1Inliers: top.inliers, top2Inliers: second, ratio: ratio,
                         nameAgrees: cons.nameAgrees, denomOk: cons.denomOk,
@@ -388,6 +398,8 @@ final class LensProposerReplayTests: XCTestCase {
 
     private struct LockRow: Encodable {
         let image: String, cell: Int, verdict: String
+        /// The detected card's short side in SOURCE pixels — the size/accuracy predictor.
+        var shortSidePx: Int = 0
         let poolSize: Int, fpCount: Int, truthInPool: Bool
         let top1: String?, top1Inliers: Int, top2Inliers: Int, ratio: Double
         let nameAgrees: Bool, denomOk: Bool, twinInPool: Bool
