@@ -134,7 +134,10 @@ final class LensPhotoSource: NSObject {
     /// One shutter press. A nil return means "not ready" — the lens is unavailable, the session
     /// hasn't finished starting (see `start()`), or a capture is already in flight — NOT
     /// "failed"; callers should not surface it as an error.
-    func capture() async -> (id: UUID, image: CIImage)? {
+    /// ⚠️ Returns the image ONLY. It used to hand back an `(id:, image:)` pair, and that id was a trap:
+    /// the caller stores the image under an id of its own, so a second id from here is one more thing
+    /// that has to agree with the first. It didn't, and the whole feature silently found zero cards.
+    func capture() async -> CIImage? {
         guard isAvailable, session.isRunning, pending == nil else { return nil }
         let settings = AVCapturePhotoSettings()
         // Ask for the full sensor per shot. `maxPhotoDimensions` on the OUTPUT sets the ceiling;
@@ -147,7 +150,7 @@ final class LensPhotoSource: NSObject {
         }
         guard let image else { return nil }
         megapixels = Double(image.extent.width * image.extent.height) / 1_000_000
-        return (UUID(), image)
+        return image
     }
 
     /// Megapixels the last capture actually delivered.

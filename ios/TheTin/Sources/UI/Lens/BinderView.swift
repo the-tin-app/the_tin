@@ -106,6 +106,11 @@ struct BinderSetupView: View {
 struct BinderCaptureView: View {
     let model: BinderModel
     let source: LensPhotoSource
+    /// Drives the shutter flash. Reported from the device: "there is no UI indication that a photo was
+    /// taken — the prompt just changes, which feels weird." A capture is the one moment in this flow
+    /// where the user needs to know something happened, and a changed caption is not that.
+    @State private var flashing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -125,9 +130,19 @@ struct BinderCaptureView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay { Color.white.opacity(flashing ? 0.85 : 0).allowsHitTesting(false) }
         .overlay(alignment: .top) { header }
         .overlay(alignment: .bottom) { controls }
         .clipped()
+        // Flash and haptic, both keyed on the shot count rather than on the button action: the shutter
+        // press and the photograph arriving are not the same instant, and the feedback belongs to the
+        // photograph. `.success` rather than a light tick — a captured page is worth something.
+        .sensoryFeedback(.success, trigger: model.shotsTaken)
+        .onChange(of: model.shotsTaken) {
+            guard !reduceMotion else { return }
+            withAnimation(.easeOut(duration: 0.06)) { flashing = true }
+            withAnimation(.easeIn(duration: 0.22).delay(0.06)) { flashing = false }
+        }
         // ⚠️ `start()` is async and MUST be awaited before the first `capture()` — `capturePhoto`
         // against a session that has not started throws inside AVFoundation.
         .task { await source.start() }
@@ -167,13 +182,17 @@ struct BinderCaptureView: View {
                 Text("Reading…").font(.caption).foregroundStyle(.white.opacity(0.85))
             }
             if model.isPageComplete {
+                // ⚠️ NOT `.tint(.white)` on the group. That painted a `.borderedProminent` button white
+                // AND left its label white — an invisible "Next page", reported from the device. The
+                // prominent button keeps the accent fill; only the bordered one is tinted white, where
+                // the tint is the outline and the label.
                 HStack(spacing: 12) {
                     Button("Next page") { model.nextPage() }
                         .buttonStyle(.borderedProminent)
                     Button("Done") { model.finish() }
                         .buttonStyle(.bordered)
+                        .tint(.white)
                 }
-                .tint(.white)
             } else {
                 // Equal-width side slots, so the shutter sits on the centre line whatever the labels
                 // say. "Retake last" keeps its space when hidden — a control that appears after the

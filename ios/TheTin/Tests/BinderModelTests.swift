@@ -102,6 +102,21 @@ final class BinderModelTests: XCTestCase {
         XCTAssertEqual(m.entry(BinderSlot(page: 1, row: 0, col: 0))?.cardId, "on page two")
     }
 
+    /// ⚠️ **The one that shipped to a device and found nothing.** `shoot()` used to store the photograph
+    /// under `accept`'s defaulted UUID while enqueueing the capture's own, separate id — so `detect`
+    /// looked the image up under an id nothing had stored it against, got nil, and returned zero cells.
+    /// Four pages photographed, every pocket empty, no error anywhere.
+    ///
+    /// Every earlier test in this file called `accept` and `assignSlots` directly, so the plumbing
+    /// BETWEEN them was the one thing never exercised. This pins the invariant: the id `accept` returns
+    /// — the id the queue is given — is the id the image is stored under.
+    func testTheIdHandedToTheQueueIsTheIdThePhotographIsStoredUnder() throws {
+        let m = model()
+        let id = m.accept(photo(), for: try XCTUnwrap(m.currentTile))
+        XCTAssertNotNil(m.images[id], "the queue would look up this id and find nothing")
+        XCTAssertEqual(m.images.count, 1)
+    }
+
     /// ⚠️ Browsing must not hold 24.5 MP source photographs. Each is an order of magnitude bigger than
     /// anything else on this screen, the tile JPEGs on disk replace them, and jetsam leaves no report.
     func testFinishingDropsTheSourcePhotographs() throws {

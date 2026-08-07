@@ -118,19 +118,27 @@ final class BinderModel {
         guard let source, let tile = currentTile, let queue = ensureQueue() else { return }
         // nil means "not ready" (session still starting, or a capture already in flight), NOT
         // "failed" — see `LensPhotoSource.capture`. Nothing is shown to the user for it.
-        guard let shot = await source.capture() else { return }
-        accept(shot.image, for: tile)
+        guard let image = await source.capture() else { return }
+        // ⚠️ The queue is handed the id `accept` MINTED, and that is the whole point of it returning
+        // one. This used to be two independent ids — `accept` defaulted `photoId` to a fresh UUID
+        // while the queue was enqueued with the capture's own id — so `detect` looked up the image
+        // under an id nothing had stored it against, got nil, and returned zero cells. Four pages
+        // photographed, every pocket empty, no error anywhere. There is now one id and one source
+        // for it, because two that merely agree is a bug waiting for a refactor.
         isWorking = true
-        await queue.enqueue(photoId: shot.id)
+        await queue.enqueue(photoId: accept(image, for: tile))
         // Always safe to call: `drain()` is idempotent on the actor, so a second shutter press
         // returns straight away and lets the running loop pick the new photo up.
         await queue.drain()
         isWorking = await queue.isDraining
     }
 
-    /// Records a photograph against a tile and advances. Split out from `shoot()` so the whole
-    /// capture-to-slot path is testable without a camera.
-    func accept(_ image: CIImage, for tile: BinderTile, photoId: UUID = UUID()) {
+    /// Records a photograph against a tile, advances, and returns the id the photograph is stored
+    /// under — which is what the queue must be given. Split out from `shoot()` so the whole
+    /// capture-to-pocket path is testable without a camera.
+    @discardableResult
+    func accept(_ image: CIImage, for tile: BinderTile) -> UUID {
+        let photoId = UUID()
         // A re-shot tile's previous machine answers go, so a card that has since been pulled from a
         // pocket doesn't linger. Hand-picked answers stay: the user's correction outlives a re-shoot.
         scan.entries.removeAll { $0.tile == tile.id && !$0.byHand }
@@ -143,8 +151,14 @@ final class BinderModel {
         cellsByPhoto[photoId] = []
         writeTileImage(image, tile: tile)
         if tile == currentTile { tileIndex += 1 }
+        shotsTaken += 1
         persist()
+        return photoId
     }
+
+    /// How many photographs this session has taken. Drives the shutter flash and the haptic — a
+    /// capture where only a caption changes doesn't read as a capture at all.
+    private(set) var shotsTaken = 0
 
     /// Back one photograph, to re-frame a shot the user didn't like. Only ever within the page being
     /// captured — a finished page is re-entered through the grid, not by walking backwards.
