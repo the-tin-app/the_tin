@@ -1,4 +1,5 @@
 import XCTest
+import GRDB
 @testable import TheTin
 
 /// Uses the same bundled fixtures as `LabeledPhotoAccuracyTests`: `labeled-pack.sqlite`
@@ -136,5 +137,111 @@ final class LensMatcherTests: XCTestCase {
 
         let hit = LensMatcher.wishlistHit(fingerprint: fp, wanted: [sibling], matcher: matcher, floor: 20)
         XCTAssertNil(hit, "twin sibling should not be found — cross-print ORB score stayed below floor")
+    }
+
+    // MARK: - Matcher.narrow (Task 9b)
+
+    /// Narrowing must keep the true card for every single-truth plate in the fixture, and its rank
+    /// within the FULL cosine ranking (not just membership inside some topK) must be genuinely
+    /// high — proving the order is meaningful rather than "topK happens to be bigger than the
+    /// fixture". 88 cards total; a full ranking (topK == allCardIds.count) still exercises real
+    /// cosine scoring and sorting, it just can't demonstrate SIZE-narrowing on its own — that is
+    /// `testNarrowReturnsExactlyTopKNotEverything`'s job.
+    /// Narrowing must produce a MEANINGFUL cosine ranking, not merely include every id somewhere
+    /// in a topK big enough to be trivial (topK == 88 on an 88-card pack proves nothing about
+    /// ordering — see this file's header note on that trap). Proven two ways against the
+    /// fixture's 62 single-truth plates:
+    ///
+    /// 1. With topK == the whole pack, `narrow` must return every id (a correctness check on the
+    ///    sort/prefix, not on ranking quality), and the true card's rank in that full ranking must
+    ///    sit, on average, well above chance (chance ≈ full/2) — asserted against `full` itself so
+    ///    the bound stays honest if the fixture's card count ever changes. A broken or randomized
+    ///    ranking could not clear this; the measured median/mean are far inside it.
+    /// 2. Recall at topK values genuinely smaller than the fixture is PRINTED, not asserted to
+    ///    100% — that number is a calibration input for `LensMatcher.identify`'s `topK` default,
+    ///    not a bar to clear by inflating `topK` until green (explicit task instruction).
+    ///    ⚠️ Measured: it is NOT 100% at small topK on this fixture. One plate (`IMG_1540` /
+    ///    `pl4-34`) ranks 80th of 88 by cosine — worse than most distractors for its OWN true
+    ///    card. Left in, not excluded: it is the fixture doing its job.
+    func testNarrowingRanksTheTrueCardWellAboveChance() throws {
+        let full = matcher.allCardIds.count
+        var ranks: [(plate: String, cardId: String, rank: Int)] = []
+        for t in truth {
+            let fp = try fingerprint(plate: t.plate)
+            let ranked = try matcher.narrow(query: fp, topK: full)
+            XCTAssertEqual(ranked.count, full, "topK == pack size must return the whole pack")
+            let idx = try XCTUnwrap(ranked.firstIndex(of: t.cardId),
+                                    "narrow (topK == full pack) must return every id, incl. the true card, for \(t.plate)")
+            ranks.append((t.plate, t.cardId, idx))
+        }
+        let sortedRanks = ranks.map(\.rank).sorted()
+        let avgRank = Double(sortedRanks.reduce(0, +)) / Double(sortedRanks.count)
+        let median = sortedRanks[sortedRanks.count / 2]
+        let chance = Double(full) / 2
+        print("NARROW full-ranking true-card rank of \(full): avg=\(avgRank) median=\(median) "
+            + "max=\(sortedRanks.last ?? -1) min=\(sortedRanks.first ?? -1) n=\(sortedRanks.count) (chance≈\(chance))")
+        for r in ranks.sorted(by: { $0.rank > $1.rank }).prefix(5) {
+            print("NARROW worst rank: \(r.plate) (\(r.cardId)) rank=\(r.rank) of \(full)")
+        }
+        for k in [10, 20, 30, 50] {
+            let hit = ranks.filter { $0.rank < k }.count
+            print("NARROW recall @topK=\(k): \(hit)/\(ranks.count) = \(Double(hit) / Double(ranks.count))")
+        }
+
+        XCTAssertLessThan(Double(median), chance / 2,
+            "median true-card rank \(median) is not meaningfully better than chance (\(chance)) — narrow's ordering looks arbitrary")
+        XCTAssertLessThan(avgRank, chance / 2,
+            "mean true-card rank \(avgRank) is not meaningfully better than chance (\(chance)) — narrow's ordering looks arbitrary")
+    }
+
+    /// Narrowing actually narrows: for a topK well below the fixture's 88 cards, the result is
+    /// exactly `topK` ids, not the whole pack.
+    func testNarrowReturnsExactlyTopKNotEverything() throws {
+        let sample = truth[0]
+        let fp = try fingerprint(plate: sample.plate)
+        let narrowed = try matcher.narrow(query: fp, topK: 10)
+        XCTAssertEqual(narrowed.count, 10)
+        XCTAssertLessThan(Set(narrowed).count, matcher.allCardIds.count,
+                          "narrow returned the whole pack, not a subset")
+    }
+
+    /// `identify` still resolves through the new two-stage (narrow → match) path with no
+    /// `candidateIds` override — the production call shape.
+    func testIdentifyResolvesThroughNarrowThenMatch() throws {
+        let sample = truth[0]
+        // No topK override — the exact production call shape (default topK, narrow → match).
+        let state = LensMatcher.identify(fingerprint: try fingerprint(plate: sample.plate),
+                                         matcher: matcher, floor: 20)
+        guard case .identified(let cardId, _) = state else {
+            return XCTFail("expected .identified, got \(state)")
+        }
+        XCTAssertEqual(cardId, sample.cardId)
+    }
+
+    /// An absent/unusable similarity index must fail LOUDLY through `identify`, not silently as
+    /// `.noMatch` — `.noMatch` already means "genuine miss" and is indistinguishable from a broken
+    /// pack if narrow's failure is swallowed into it.
+    func testIdentifyReportsUnreadableWhenNarrowHasNoUsableVectors() throws {
+        let broken = try Self.storeWithZeroFingerprintRows()
+        defer { try? broken.close() }
+        let brokenMatcher = try Matcher(store: broken, codebook: try Codebook.bundled(in: Bundle(for: Self.self)))
+        let state = LensMatcher.identify(fingerprint: try fingerprint(plate: truth[0].plate),
+                                         matcher: brokenMatcher, floor: 20)
+        guard case .unreadable = state else {
+            return XCTFail("expected .unreadable (loud failure), got \(state) — a broken pack must never read as a plain miss")
+        }
+    }
+
+    private static func storeWithZeroFingerprintRows() throws -> FingerprintStore {
+        let path = NSTemporaryDirectory() + "fp-empty-\(UUID().uuidString).sqlite"
+        let q = try DatabaseQueue(path: path)
+        try q.write { db in
+            try db.execute(sql: """
+            CREATE TABLE card_fp(card_id TEXT PRIMARY KEY, fp_version INTEGER, global_vec BLOB,
+                                  kp_count INTEGER, keypoints BLOB, descriptors BLOB);
+            """)
+        }
+        try q.close()
+        return try FingerprintStore(path: path)
     }
 }

@@ -31,23 +31,44 @@ enum LensMatcher {
 
     /// Pass B. Open-set identification against the whole pack.
     ///
-    /// Exhaustive `Matcher.match`, deliberately NOT the early-exit `matchRanked`. `matchRanked`'s
-    /// own doc comment says `rankedIds` MUST arrive in narrowing-agreement order — its early exit
-    /// is only sound because the true card sits in the top tier once the name OCRs. This feature
-    /// has no OCR gate, and `FingerprintStore.allCardIds` is documented "in no particular order",
-    /// so an early exit here has nothing to make it safe: any candidate that clears `floor` and
+    /// Two stages: `Matcher.narrow` (cheap cosine over global vectors) cuts ~23,140 candidates
+    /// down to `topK`, then exhaustive `Matcher.match` (geometric RANSAC) ranks only those.
+    /// Deliberately NOT the early-exit `matchRanked` for that second stage. `matchRanked`'s own
+    /// doc comment says `rankedIds` MUST arrive in narrowing-agreement order — its early exit is
+    /// only sound because the true card sits in the top tier once the name OCRs. This feature has
+    /// no OCR gate, and `narrow`'s output, while topK-limited, is not "the true card is near the
+    /// front" reliable enough to bound a search by early-exit rather than by set membership — so
+    /// an early exit here has nothing to make it safe: any candidate that clears `floor` and
     /// dominates its batch ends the search, whether or not a much better match sits later in the
     /// list. `Matcher.match` has no early exit and so nothing for candidate order to break — don't
     /// swap this back to `matchRanked` without an ordering source as strong as OCR narrowing.
     ///
-    /// `candidateIds` defaults to the whole pack; it exists purely as a test seam (same pattern as
-    /// `MultiCardDetector.forEachCell`'s `orienter` parameter) so a test can pin that the result does not
-    /// depend on candidate order. No production caller passes it.
+    /// `topK` default is 300 — a ~77x reduction against the ~23,140-card pack, chosen as a
+    /// starting point ahead of calibration against real photographs (the fixture-measured recall
+    /// and typical true-card rank are far inside this, see `LensMatcherTests`); it is a threshold,
+    /// not a constant, and is expected to move.
+    ///
+    /// `candidateIds` bypasses `narrow` entirely when given — it exists purely as a test seam
+    /// (same pattern as `MultiCardDetector.forEachCell`'s `orienter` parameter) so a test can pin
+    /// that `match`'s ranking does not depend on candidate order. No production caller passes it.
     static func identify(fingerprint: CardFingerprint, matcher: Matcher, floor: Int,
-                         candidateIds: [String]? = nil) -> LensCellState {
+                         candidateIds: [String]? = nil, topK: Int = 300) -> LensCellState {
         guard fingerprint.count > 0 else { return .noMatch }
-        guard let best = (try? matcher.match(query: fingerprint,
-                                             candidateIds: candidateIds ?? matcher.allCardIds))?.first,
+        let pool: [String]
+        if let candidateIds {
+            pool = candidateIds
+        } else {
+            do {
+                pool = try matcher.narrow(query: fingerprint, topK: topK)
+            } catch {
+                // Loud, not `.noMatch`: a broken/absent similarity index must never read as "we
+                // looked and found nothing" — that's indistinguishable from a genuine miss and
+                // would hide a pack-integrity defect behind an answer that looks ordinary. Reuses
+                // `.unreadable`, which `LensCell.swift` already documents as "never a silent drop".
+                return .unreadable("no similarity index")
+            }
+        }
+        guard let best = (try? matcher.match(query: fingerprint, candidateIds: pool))?.first,
               best.inliers >= floor else { return .noMatch }
         return .identified(cardId: best.cardId, inliers: best.inliers)
     }
