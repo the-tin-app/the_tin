@@ -40,7 +40,7 @@ struct ScanTabContainer: View {
     /// must not pay for. Held across mode switches so flipping back and forth doesn't rebuild it.
     @State private var lensSource: LensPhotoSource?
     /// Same rule as `model` — never constructed in `body`, and dropped when the pack changes.
-    @State private var lensModel: LensModel?
+    @State private var binder: BinderModel?
 
     var body: some View {
         content
@@ -53,13 +53,13 @@ struct ScanTabContainer: View {
             // and outlives the swap — so ScanView carried on driving a ScanModel wired to the
             // replaced pack and the camera never came back (black screen, fixed only by leaving
             // and re-entering the tab). Dropping it here forces a rebuild against the new pack.
-            .onChange(of: pack.installedVersion) { model = nil; lensModel = nil }
-            // The lens takes a snapshot of the wishlist and the collection when it is built, and
-            // that model can outlive a lot of hearting elsewhere in the app. Refreshing it on
-            // entry is free while there is nothing on screen to lose; a session with photos in it
-            // is left alone rather than silently emptied.
+            .onChange(of: pack.installedVersion) { model = nil; binder = nil }
+            // The binder takes a snapshot of the wishlist and the collection when it is built, and
+            // that model can outlive a lot of hearting elsewhere in the app. Refreshing it on entry
+            // is free while there is nothing on screen to lose; a scan in progress is left alone
+            // rather than silently emptied.
             .onChange(of: lensMode) {
-                if lensMode, lensModel?.photos.isEmpty == true { lensModel = nil }
+                if lensMode, binder?.phase == .setup { binder = nil }
             }
             .sheet(isPresented: $reviewingStaged) {
                 NavigationStack {
@@ -182,12 +182,12 @@ struct ScanTabContainer: View {
         VStack(spacing: 0) {
             Picker("Camera mode", selection: $lensMode) {
                 Text("Scanner").tag(false)
-                Text("Photo lens").tag(true)
+                Text("Binder").tag(true)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal).padding(.vertical, 6)
             .accessibilityHint(lensMode
-                               ? "Photograph a case or a page and see what's on your wishlist"
+                               ? "Photograph a binder page by page and get prices and wishlist hits"
                                : "Identify one card at a time")
 
             if lensMode { lens } else { liveScanner }
@@ -195,8 +195,8 @@ struct ScanTabContainer: View {
     }
 
     @ViewBuilder private var lens: some View {
-        if let lensModel, let lensSource {
-            LensView(model: lensModel, source: lensSource)
+        if let binder, let lensSource {
+            BinderView(model: binder, source: lensSource, store: store)
         } else if let matcher = pack.matcher, let index = pack.index {
             // Assigned from a task, never built in the branch: `body` must not construct either
             // of these (see `model`).
@@ -214,9 +214,9 @@ struct ScanTabContainer: View {
                 }.value
                 let source = lensSource ?? LensPhotoSource(built.camera)
                 lensSource = source
-                lensModel = LensModel(source: source, catalog: store, matcher: matcher,
-                                      index: index, wanted: wants?.wanted ?? [],
-                                      owned: built.owned)
+                binder = BinderModel(source: source, catalog: store, matcher: matcher,
+                                     index: index, wanted: wants?.wanted ?? [],
+                                     owned: built.owned)
             }
         } else {
             TinLoadingView()

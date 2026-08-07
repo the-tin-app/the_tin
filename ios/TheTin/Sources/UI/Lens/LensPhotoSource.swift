@@ -59,6 +59,13 @@ final class LensPhotoSource: NSObject {
     nonisolated static func configured() -> Configured? {
         let session = AVCaptureSession()
         let output = AVCapturePhotoOutput()
+        // ⚠️ `.builtInWideAngleCamera`, NOT a virtual multi-camera device, and that choice is worth
+        // 17 measured points of auto-lock. Framing two cards fills the frame from close enough that
+        // iOS silently hands a virtual device's capture to the ULTRA-WIDE in macro mode; macro crops
+        // that sensor and the crop is 12 MP whatever Photo Mode says. The first quadrant ladder was
+        // shot that way by accident and EXIF gave it away — ƒ/2.2 at 25 mm where this camera is
+        // ƒ/1.78 at 24 mm. At 12 MP quadrant framing only MATCHED a whole-page shot; at 24 MP it
+        // gained 17 points. Neither the framing nor the sensor shows this on its own.
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input), session.canAddOutput(output) else { return nil }
@@ -70,6 +77,14 @@ final class LensPhotoSource: NSObject {
         if #available(iOS 16.0, *) {
             output.maxPhotoDimensions = device.activeFormat.supportedMaxPhotoDimensions.last
                 ?? output.maxPhotoDimensions
+        }
+        // Belt and braces for the same trap: a physical wide-angle device has no constituents, so
+        // this is a no-op today — but it is what keeps a future switch to a virtual device from
+        // quietly reintroducing macro handoff, which is invisible in every way except the accuracy.
+        if #available(iOS 16.0, *), !device.constituentDevices.isEmpty,
+           (try? device.lockForConfiguration()) != nil {
+            device.setPrimaryConstituentDeviceSwitchingBehavior(.locked, restrictedSwitchingBehaviorConditions: [])
+            device.unlockForConfiguration()
         }
         // Deliver the still UPRIGHT, the same fix that made the scanner match at all: the back
         // sensor is natively landscape, and a sideways image warps every rectified plate.
@@ -122,14 +137,32 @@ final class LensPhotoSource: NSObject {
     func capture() async -> (id: UUID, image: CIImage)? {
         guard isAvailable, session.isRunning, pending == nil else { return nil }
         let settings = AVCapturePhotoSettings()
+        // Ask for the full sensor per shot. `maxPhotoDimensions` on the OUTPUT sets the ceiling;
+        // without asking here too, a capture comes back at the preset's default instead.
+        if #available(iOS 16.0, *) { settings.maxPhotoDimensions = output.maxPhotoDimensions }
         let image = await withCheckedContinuation { (c: CheckedContinuation<CIImage?, Never>) in
             pendingID = settings.uniqueID
             pending = c
             output.capturePhoto(with: settings, delegate: self)
         }
         guard let image else { return nil }
+        megapixels = Double(image.extent.width * image.extent.height) / 1_000_000
         return (UUID(), image)
     }
+
+    /// Megapixels the last capture actually delivered.
+    ///
+    /// ⚠️ Surfaced to the user when it comes back small, because a silent 12 MP shot costs about a
+    /// third of the auto-locks and is otherwise **completely invisible** — the photograph looks fine,
+    /// the framing looks fine, and only the accuracy is wrong. This is the one symptom of the macro
+    /// handoff a person can actually see.
+    private(set) var megapixels: Double?
+
+    /// ~20 MP: comfortably under the 24.5 MP a 4:3 main-camera still delivers on a 17 Pro Max, and
+    /// comfortably over the 12.2 MP an ultra-wide macro crop delivers. Older phones with a genuine
+    /// 12 MP main camera will trip it — which is honest, because they really do have less to work
+    /// with, and the line says what to do about it rather than blaming the phone.
+    var deliveredSmallPhoto: Bool { (megapixels ?? .infinity) < 20 }
 }
 
 extension LensPhotoSource: AVCapturePhotoCaptureDelegate {

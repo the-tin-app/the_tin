@@ -23,10 +23,12 @@ struct BinderShape: Equatable, Codable {
 }
 
 /// One pocket, 0-indexed from the top-left of its page.
-struct BinderSlot: Hashable, Codable, Comparable {
+struct BinderSlot: Hashable, Codable, Comparable, Identifiable {
     let page: Int
     let row: Int
     let col: Int
+
+    var id: String { "\(page).\(row).\(col)" }
 
     /// Page order, then reading order within the page — the order a human flips and scans in.
     static func < (a: BinderSlot, b: BinderSlot) -> Bool {
@@ -42,6 +44,25 @@ struct BinderTile: Identifiable, Equatable, Codable {
     let colOffset: Int
 
     var id: String { "\(page).\(rowOffset).\(colOffset)" }
+}
+
+extension CardQuad {
+    /// Bounding box in coordinates normalized to `extent`, **top-left origin**.
+    ///
+    /// ⚠️ Vision's pixel space is bottom-left origin; SwiftUI's and CoreGraphics' image space are
+    /// top-left. Flipping here, once, is why every consumer downstream — slot quantizing, the
+    /// verification crop — can be plain arithmetic. `LensPhotoOverlay` paid for the same flip
+    /// separately and getting it wrong puts every outline in the wrong half of the photo.
+    func normalizedRect(in extent: CGRect) -> CGRect {
+        guard extent.width > 0, extent.height > 0 else { return .zero }
+        let xs = [topLeft.x, topRight.x, bottomLeft.x, bottomRight.x]
+        let ys = [topLeft.y, topRight.y, bottomLeft.y, bottomRight.y]
+        let minX = ((xs.min() ?? 0) - extent.minX) / extent.width
+        let maxX = ((xs.max() ?? 0) - extent.minX) / extent.width
+        let minY = ((ys.min() ?? 0) - extent.minY) / extent.height
+        let maxY = ((ys.max() ?? 0) - extent.minY) / extent.height
+        return CGRect(x: minX, y: 1 - maxY, width: maxX - minX, height: maxY - minY)
+    }
 }
 
 /// Capture is always 2 pockets across by 2 down, whatever the binder — that is the geometry that

@@ -181,6 +181,24 @@ enum AppConfig {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "scanCondition") }
     }
 
+    /// The binder shape the virtual binder opens on. Sticky because which binder you own is a
+    /// property of you, not of one scan — and the setup screen is the only thing standing between
+    /// the user and the camera, so it should already have the right answer in it.
+    static var binderShape: BinderShape {
+        get {
+            let d = UserDefaults.standard
+            guard d.object(forKey: binderRowsKey) != nil else { return .default }
+            return BinderShape(rows: d.integer(forKey: binderRowsKey),
+                               cols: d.integer(forKey: binderColsKey))
+        }
+        set {
+            UserDefaults.standard.set(newValue.rows, forKey: binderRowsKey)
+            UserDefaults.standard.set(newValue.cols, forKey: binderColsKey)
+        }
+    }
+    private static let binderRowsKey = "binderRows"
+    private static let binderColsKey = "binderCols"
+
     #if DEBUG
     /// DEBUG-only: force every request to the PRIMARY origin to fail, so the R2 backup path can be
     /// exercised without taking the real server down. Checked per REQUEST rather than at

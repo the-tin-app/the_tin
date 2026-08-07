@@ -1,0 +1,208 @@
+import SwiftUI
+
+/// The virtual binder: one question, a handful of guided photographs, then a binder you flip through.
+///
+/// ⚠️ This IS a `switch`, and it is the one place in this feature where that is correct. A `switch`
+/// in a `@ViewBuilder` compiles to `_ConditionalContent` per case, so moving between cases destroys
+/// and recreates the subtree — which is a bug when an *incidental* state change does it (that shipped
+/// once in `ScanTabContainer` and cost a 3–5 s white screen at each end of a pack download). Here the
+/// three cases genuinely differ in whether a camera session should exist at all, and the user asked
+/// for every transition. Setup has no camera; browsing must NOT hold one open in a shop.
+struct BinderView: View {
+    @Bindable var model: BinderModel
+    let source: LensPhotoSource
+    let store: CatalogStore
+
+    var body: some View {
+        switch model.phase {
+        case .setup:
+            BinderSetupView(shape: model.shape) { model.begin(shape: $0) }
+        case .capturing:
+            BinderCaptureView(model: model, source: source)
+        case .browsing:
+            BinderBrowseView(model: model, store: store)
+        }
+    }
+}
+
+/// The only thing between the user and the camera: how many pockets across, and down. No naming, no
+/// vendor, no session metadata — every one of those is a tap paid before the first photograph, and
+/// the thing being described is a shop's binder that will be different tomorrow.
+struct BinderSetupView: View {
+    @State private var rows: Int
+    @State private var cols: Int
+    let onStart: (BinderShape) -> Void
+
+    init(shape: BinderShape, onStart: @escaping (BinderShape) -> Void) {
+        _rows = State(initialValue: shape.rows)
+        _cols = State(initialValue: shape.cols)
+        self.onStart = onStart
+    }
+
+    private var shape: BinderShape { BinderShape(rows: rows, cols: cols) }
+    private var shots: Int { BinderPlan.tiles(shape: shape, page: 0).count }
+
+    var body: some View {
+        VStack(spacing: 22) {
+            VStack(spacing: 6) {
+                Text("What shape is the binder?").font(.headline)
+                Text("Count the pockets on one page.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+
+            pocketPreview
+
+            HStack(spacing: 18) {
+                Stepper("\(cols) across", value: $cols, in: BinderShape.range)
+                Stepper("\(rows) down", value: $rows, in: BinderShape.range)
+            }
+            .font(.subheadline)
+            .frame(maxWidth: 360)
+
+            // Says the cost before it is paid. Nine shots for a 5×5 page is the risk in this whole
+            // feature, and finding it out one shutter press at a time is the bad way to learn it.
+            Text("^[\(shots) photo](inflect: true) per page — you'll be guided through them.")
+                .font(.footnote).foregroundStyle(.secondary)
+
+            Button("Start") { onStart(shape) }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The shape, drawn. Reading "3 across, 3 down" and checking it against the object in your hands
+    /// is slower than looking at a picture of it.
+    private var pocketPreview: some View {
+        VStack(spacing: 4) {
+            ForEach(0..<rows, id: \.self) { _ in
+                HStack(spacing: 4) {
+                    ForEach(0..<cols, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.accentColor.opacity(0.18))
+                            .overlay(RoundedRectangle(cornerRadius: 2)
+                                .stroke(Color.accentColor.opacity(0.5), lineWidth: 1))
+                            .aspectRatio(0.72, contentMode: .fit)
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: 190)
+        .accessibilityLabel("\(cols) pockets across, \(rows) down")
+    }
+}
+
+/// Guided capture: a 2×2 outline on the live preview, the tile named, and a counter.
+///
+/// **Manual shutter — no auto-trigger.** Deciding when the shot is good is the user's job and they
+/// are better at it than a focus score is.
+struct BinderCaptureView: View {
+    let model: BinderModel
+    let source: LensPhotoSource
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                CameraPreview(session: source.session)
+                TwoByTwoGuide()
+            }
+            .overlay(alignment: .top) { header }
+            .overlay(alignment: .bottom) { controls }
+            .clipped()
+        }
+        // ⚠️ `start()` is async and MUST be awaited before the first `capture()` — `capturePhoto`
+        // against a session that has not started throws inside AVFoundation.
+        .task { await source.start() }
+        // ⚠️ Paired on appear/disappear, NOT on `.task`. Leaving via the tab bar doesn't necessarily
+        // destroy this view, so `.task` may not re-fire — and a pause with no resume leaves every
+        // unread pocket unresolved forever, which shows as nothing at all.
+        .onAppear { model.resume() }
+        .onDisappear { source.stop(); model.cancel() }
+    }
+
+    private var header: some View {
+        VStack(spacing: 4) {
+            if model.isPageComplete {
+                Text("Page \(model.page + 1) done").font(.headline)
+            } else {
+                Text("Frame the \(model.currentTileName) four pockets")
+                    .font(.headline).multilineTextAlignment(.center)
+                Text(model.progressText).font(.caption).monospacedDigit()
+            }
+            // Fires only when a capture really came back small. See `deliveredSmallPhoto` — this is
+            // the sole visible symptom of a silent macro handoff, which costs a third of the locks.
+            if source.deliveredSmallPhoto {
+                Text("Low-resolution photo — move back a little and don't let the lens get too close.")
+                    .font(.caption2).multilineTextAlignment(.center)
+                    .foregroundStyle(.yellow)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(12)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal).padding(.top, 10)
+    }
+
+    @ViewBuilder private var controls: some View {
+        VStack(spacing: 12) {
+            if model.isWorking {
+                Text("Reading…").font(.caption).foregroundStyle(.white.opacity(0.85))
+            }
+            if model.isPageComplete {
+                HStack(spacing: 12) {
+                    Button("Next page") { model.nextPage() }
+                        .buttonStyle(.borderedProminent)
+                    Button("Done") { model.finish() }
+                        .buttonStyle(.bordered)
+                }
+                .tint(.white)
+            } else {
+                HStack(spacing: 26) {
+                    Button("Retake last") { model.retakePrevious() }
+                        .font(.footnote).foregroundStyle(.white)
+                        .opacity(model.tileIndex > 0 ? 1 : 0)
+                        .disabled(model.tileIndex == 0)
+                    shutter
+                    Button("Finish") { model.finish() }
+                        .font(.footnote).foregroundStyle(.white)
+                }
+            }
+        }
+        .padding(.bottom, 16)
+    }
+
+    private var shutter: some View {
+        Button {
+            Task { await model.shoot() }
+        } label: {
+            Circle().strokeBorder(.white, lineWidth: 4).frame(width: 66, height: 66)
+                .background(Circle().fill(.white.opacity(0.25)))
+        }
+        .disabled(!source.isAvailable)
+        .accessibilityLabel("Take the \(model.currentTileName) photo")
+    }
+}
+
+/// The 2×2 frame guide. Deliberately inset from the edges: extra margin costs nothing — slot
+/// snapping discards whatever doesn't land on a pocket — and the main lens cannot focus close enough
+/// for a tight 2×2 anyway, which is exactly how the macro handoff happened.
+private struct TwoByTwoGuide: View {
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width * 0.86, h = geo.size.height * 0.78
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(.white.opacity(0.85), lineWidth: 2)
+                Path { p in
+                    p.move(to: CGPoint(x: w / 2, y: 0)); p.addLine(to: CGPoint(x: w / 2, y: h))
+                    p.move(to: CGPoint(x: 0, y: h / 2)); p.addLine(to: CGPoint(x: w, y: h / 2))
+                }
+                .stroke(.white.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
+            }
+            .frame(width: w, height: h)
+            .position(x: geo.size.width / 2, y: geo.size.height / 2)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
