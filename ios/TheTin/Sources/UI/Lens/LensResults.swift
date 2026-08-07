@@ -5,6 +5,11 @@ struct LensRow: Identifiable, Equatable {
     let id: UUID              // the cell's id — tapping a row jumps to it on its photo
     let photoId: UUID
     let cardId: String
+    /// Resolved ONCE by the model from a batched `CatalogStore.cards(ids:)` and carried here, so
+    /// the row view does no catalog I/O. A synchronous GRDB read inside a `List` row's `body` is
+    /// re-run on every render of every visible row — the same mistake as the twelve synchronous
+    /// reads that used to sit in `CardDetailModel.init`. nil only until pass B's names land.
+    var name: String?
     let onWishlist: Bool
     let priceUsd: Double?
     let owned: Bool
@@ -25,7 +30,8 @@ enum LensResults {
     /// the whole feature.
     static func rows(photos: [UUID: [LensCell]],
                      prices: [String: Double],
-                     owned: Set<String>) -> [LensRow] {
+                     owned: Set<String>,
+                     names: [String: String] = [:]) -> [LensRow] {
         var out: [LensRow] = []
         // Photo order is not meaningful for the list (the photo overlay is where position matters),
         // but a stable order keeps the UI from reshuffling as later photos resolve.
@@ -33,8 +39,8 @@ enum LensResults {
             for cell in cells {
                 guard let cardId = cell.cardId else { continue }
                 out.append(LensRow(id: cell.id, photoId: photoId, cardId: cardId,
-                                   onWishlist: cell.onWishlist, priceUsd: prices[cardId],
-                                   owned: owned.contains(cardId)))
+                                   name: names[cardId], onWishlist: cell.onWishlist,
+                                   priceUsd: prices[cardId], owned: owned.contains(cardId)))
             }
         }
         return out.sorted { a, b in

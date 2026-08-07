@@ -33,6 +33,14 @@ struct ScanTabContainer: View {
     @State private var model: ScanModel?
     @State private var reviewingStaged = false
     @State private var confirmingUpdateOverCellular = false
+    /// Which of the two camera modes the ready slot is showing.
+    @State private var lensMode = false
+    /// Built on first use, never at container init: constructing it acquires the capture device
+    /// and configures a whole second `AVCaptureSession`, which a user who never opens the lens
+    /// must not pay for. Held across mode switches so flipping back and forth doesn't rebuild it.
+    @State private var lensSource: LensPhotoSource?
+    /// Same rule as `model` — never constructed in `body`, and dropped when the pack changes.
+    @State private var lensModel: LensModel?
 
     var body: some View {
         content
@@ -45,7 +53,14 @@ struct ScanTabContainer: View {
             // and outlives the swap — so ScanView carried on driving a ScanModel wired to the
             // replaced pack and the camera never came back (black screen, fixed only by leaving
             // and re-entering the tab). Dropping it here forces a rebuild against the new pack.
-            .onChange(of: pack.installedVersion) { model = nil }
+            .onChange(of: pack.installedVersion) { model = nil; lensModel = nil }
+            // The lens takes a snapshot of the wishlist and the collection when it is built, and
+            // that model can outlive a lot of hearting elsewhere in the app. Refreshing it on
+            // entry is free while there is nothing on screen to lose; a session with photos in it
+            // is left alone rather than silently emptied.
+            .onChange(of: lensMode) {
+                if lensMode, lensModel?.photos.isEmpty == true { lensModel = nil }
+            }
             .sheet(isPresented: $reviewingStaged) {
                 NavigationStack {
                     StagingReviewView(staging: staging, collection: collection, store: store, wants: wants)
@@ -152,7 +167,48 @@ struct ScanTabContainer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
-            liveScanner
+            readySlot
+        }
+    }
+
+    /// The two camera modes. ⚠️ This IS a conditional, and it is the one place in this file where
+    /// that is correct: the scanner and the lens each own a full `AVCaptureSession`, and Apple's
+    /// hardware will not run both at once (see `LensPhotoSource`'s header — the lens needs
+    /// `.photo`/full sensor, the scanner is pinned to `.hd1920x1080`). So exactly one session must
+    /// be live, and the swap has to tear the other down. What made the old `.ready`/`.downloading`
+    /// switch a bug was that an INCIDENTAL state change restarted the session; here the user asked
+    /// for it, and the picker itself never leaves the hierarchy.
+    private var readySlot: some View {
+        VStack(spacing: 0) {
+            Picker("Camera mode", selection: $lensMode) {
+                Text("Scanner").tag(false)
+                Text("Photo lens").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal).padding(.vertical, 6)
+            .accessibilityHint(lensMode
+                               ? "Photograph a case or a page and see what's on your wishlist"
+                               : "Identify one card at a time")
+
+            if lensMode { lens } else { liveScanner }
+        }
+    }
+
+    @ViewBuilder private var lens: some View {
+        if let lensModel, let lensSource {
+            LensView(model: lensModel, source: lensSource)
+        } else if let matcher = pack.matcher {
+            // Assigned from a task, never built in the branch: `body` must not construct either
+            // of these (see `model`), and the snapshot below walks the whole collection.
+            TinLoadingView().task {
+                let source = lensSource ?? LensPhotoSource()
+                lensSource = source
+                lensModel = LensModel(source: source, catalog: store, matcher: matcher,
+                                      wanted: wants?.wanted ?? [],
+                                      owned: Set(collection.entries.map(\.cardId)))
+            }
+        } else {
+            TinLoadingView()
         }
     }
 

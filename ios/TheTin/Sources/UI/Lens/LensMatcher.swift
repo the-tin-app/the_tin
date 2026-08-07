@@ -1,3 +1,4 @@
+import CoreImage
 import Foundation
 
 /// Pass A and pass B. Free functions, `nonisolated` by construction — every call runs off the
@@ -50,4 +51,89 @@ enum LensMatcher {
               best.inliers >= floor else { return .noMatch }
         return .identified(cardId: best.cardId, inliers: best.inliers)
     }
+}
+
+/// The production `LensWork`. Every method runs off the MainActor — `LensQueue` is an actor and
+/// these are called from it — and **no plate outlives the function that made it**.
+///
+/// ⚠️ Detection runs exactly ONCE per photo, in `detect`, and the fingerprints it produces are
+/// cached for the rest of that photo's life. The obvious alternative — re-detect at the start of
+/// each pass and re-fingerprint — is wrong twice over. `VNDetectDocumentSegmentationRequest` is
+/// documented **in this codebase** as non-deterministic on repeated calls over the same input
+/// (`CardRectifier` records five identical calls returning 0.000/0.965/0.828/0.990/0.955), so the
+/// cell counts genuinely differ between passes; any "counts must agree" guard therefore makes
+/// BOTH passes silently no-op and hands the user a photo where nothing was found and no reason
+/// given. It also pays for full Vision detection three times per photo.
+///
+/// Caching fingerprints rather than plates is what makes that affordable: ~26 KB per card against
+/// a plate's 2.4 MB, so a 40-card photo holds ~1 MB instead of ~97 MB. The
+/// plates-must-not-accumulate constraint was always about the plates. Jetsam is uncatchable by
+/// Crashlytics and has killed this app once.
+struct LiveLensWork: LensWork {
+    let matcher: Matcher
+    let imageForPhoto: @Sendable (UUID) async -> CIImage?
+    let wanted: Set<String>
+    var floor: Int = 20                 // == the live scanner's LockConfig.tLock
+    /// Above this glare fraction a cell is reported unreadable rather than matched badly.
+    /// ponytail: 0.5 is a starting point, calibrated against real fixtures in Task 8.
+    var glareCeiling: Double = 0.5
+    /// Per-photo cell.id → fingerprint. Dropped when pass B, the terminal stage, finishes.
+    private let cache = FingerprintCache()
+
+    func detect(photoId: UUID) async -> [LensCell] {
+        guard let ci = await imageForPhoto(photoId) else { return [] }
+        let context = CIContext()
+        var cells: [LensCell] = []
+        var fingerprints: [UUID: CardFingerprint] = [:]
+        for detected in MultiCardDetector.cells(in: ci, context: context) {
+            guard detected.plate.glareCoverage <= glareCeiling else {
+                cells.append(LensCell(quad: detected.quad, state: .unreadable("reflection")))
+                continue
+            }
+            // The plate's 2.4 MB dies with this iteration; only the ~26 KB fingerprint is kept.
+            guard let fp = LensMatcher.fingerprint(detected.plate) else {
+                cells.append(LensCell(quad: detected.quad, state: .unreadable("blur")))
+                continue
+            }
+            let cell = LensCell(quad: detected.quad, state: .pending)
+            fingerprints[cell.id] = fp
+            cells.append(cell)
+        }
+        await cache.store(photoId, fingerprints)
+        return cells
+    }
+
+    func passA(photoId: UUID, cells: [LensCell]) async -> [LensCell] {
+        let fps = await cache.fingerprints(photoId)
+        return cells.map { cell in
+            guard let fp = fps[cell.id] else { return cell }
+            var c = cell
+            c.onWishlist = LensMatcher.wishlistHit(fingerprint: fp, wanted: wanted,
+                                                   matcher: matcher, floor: floor) != nil
+            return c
+        }
+    }
+
+    func passB(photoId: UUID, cells: [LensCell]) async -> [LensCell] {
+        let fps = await cache.fingerprints(photoId)
+        let out = cells.map { cell -> LensCell in
+            guard let fp = fps[cell.id] else { return cell }
+            var c = cell
+            c.state = LensMatcher.identify(fingerprint: fp, matcher: matcher, floor: floor)
+            return c
+        }
+        // Terminal stage: nothing reads this photo's fingerprints again.
+        await cache.drop(photoId)
+        return out
+    }
+}
+
+/// Holds one photo's fingerprints between the three stages. An actor because `LensWork` is
+/// `Sendable` and its methods are called from `LensQueue`'s actor context — a stored dictionary
+/// on the struct could not be mutated across them.
+private actor FingerprintCache {
+    private var byPhoto: [UUID: [UUID: CardFingerprint]] = [:]
+    func store(_ photoId: UUID, _ fps: [UUID: CardFingerprint]) { byPhoto[photoId] = fps }
+    func fingerprints(_ photoId: UUID) -> [UUID: CardFingerprint] { byPhoto[photoId] ?? [:] }
+    func drop(_ photoId: UUID) { byPhoto[photoId] = nil }
 }
