@@ -103,7 +103,11 @@ struct ScanView: View {
                         }
                     } else {
                         // Variant A (approved 2026-07-15): bottom sheet, 2×2 card-image grid.
-                        AmbiguousChooser(model: model, options: model.ambiguous)
+                        // Shared with the virtual binder — see `CardChooser`.
+                        CardChooser(options: model.ambiguous,
+                                    escape: "None of these — keep scanning",
+                                    onPick: { id in Task { await model.chooseAmbiguous(cardId: id) } },
+                                    onEscape: { Task { await model.dismissChooser() } })
                     }
                 }
                 // Anchored on the controls stack, NOT the root: the root already carries the
@@ -277,53 +281,6 @@ private struct ConfidenceRing: View {
         .frame(width: 44, height: 44)
         .accessibilityLabel("Match confidence")
         .accessibilityValue("\(Int(value * 100)) percent")
-    }
-}
-
-/// Variant A chooser (approved 2026-07-15): a dark bottom sheet with a 2×2 grid of card
-/// images + name + "Set · Year · #num/total", and a "None of these" escape that resumes
-/// scanning. Options are frozen by ScanSession while this is visible.
-private struct AmbiguousChooser: View {
-    let model: ScanModel
-    let options: [ChooserOption]
-
-    var body: some View {
-        VStack(spacing: 10) {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                ForEach(options) { option in
-                    Button { Task { await model.chooseAmbiguous(cardId: option.id) } } label: {
-                        VStack(spacing: 6) {
-                            CardImageView(card: option.card, quality: "low")
-                                .frame(maxWidth: 96)
-                            VStack(spacing: 1) {
-                                Text(option.card?.name ?? option.id)
-                                    .font(.caption.bold()).foregroundStyle(.white)
-                                    .lineLimit(1).minimumScaleFactor(0.8)
-                                Text(option.caption)
-                                    .font(.caption2).foregroundStyle(.white.opacity(0.65))
-                                    .lineLimit(1).minimumScaleFactor(0.7)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(8)
-                        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.12)))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            Button {
-                Task { await model.dismissChooser() }
-            } label: {
-                Text("None of these — keep scanning")
-                    .font(.footnote.weight(.medium)).foregroundStyle(.white)
-                    .frame(maxWidth: .infinity).padding(.vertical, 9)
-                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.28)))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(12)
-        .background(.black.opacity(0.88), in: RoundedRectangle(cornerRadius: 20))
     }
 }
 

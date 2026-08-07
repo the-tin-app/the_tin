@@ -33,6 +33,14 @@ struct ScanTabContainer: View {
     @State private var model: ScanModel?
     @State private var reviewingStaged = false
     @State private var confirmingUpdateOverCellular = false
+    /// Which of the two camera modes the ready slot is showing.
+    @State private var lensMode = false
+    /// Built on first use, never at container init: constructing it acquires the capture device
+    /// and configures a whole second `AVCaptureSession`, which a user who never opens the lens
+    /// must not pay for. Held across mode switches so flipping back and forth doesn't rebuild it.
+    @State private var lensSource: LensPhotoSource?
+    /// Same rule as `model` — never constructed in `body`, and dropped when the pack changes.
+    @State private var binder: BinderModel?
 
     var body: some View {
         content
@@ -45,7 +53,14 @@ struct ScanTabContainer: View {
             // and outlives the swap — so ScanView carried on driving a ScanModel wired to the
             // replaced pack and the camera never came back (black screen, fixed only by leaving
             // and re-entering the tab). Dropping it here forces a rebuild against the new pack.
-            .onChange(of: pack.installedVersion) { model = nil }
+            .onChange(of: pack.installedVersion) { model = nil; binder = nil }
+            // The binder takes a snapshot of the wishlist and the collection when it is built, and
+            // that model can outlive a lot of hearting elsewhere in the app. Refreshing it on entry
+            // is free while there is nothing on screen to lose; a scan in progress is left alone
+            // rather than silently emptied.
+            .onChange(of: lensMode) {
+                if lensMode, binder?.phase == .setup { binder = nil }
+            }
             .sheet(isPresented: $reviewingStaged) {
                 NavigationStack {
                     StagingReviewView(staging: staging, collection: collection, store: store, wants: wants)
@@ -152,7 +167,59 @@ struct ScanTabContainer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
-            liveScanner
+            readySlot
+        }
+    }
+
+    /// The two camera modes. ⚠️ This IS a conditional, and it is the one place in this file where
+    /// that is correct: the scanner and the lens each own a full `AVCaptureSession`, and Apple's
+    /// hardware will not run both at once (see `LensPhotoSource`'s header — the lens needs
+    /// `.photo`/full sensor, the scanner is pinned to `.hd1920x1080`). So exactly one session must
+    /// be live, and the swap has to tear the other down. What made the old `.ready`/`.downloading`
+    /// switch a bug was that an INCIDENTAL state change restarted the session; here the user asked
+    /// for it, and the picker itself never leaves the hierarchy.
+    private var readySlot: some View {
+        VStack(spacing: 0) {
+            Picker("Camera mode", selection: $lensMode) {
+                Text("Scanner").tag(false)
+                Text("Binder").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal).padding(.vertical, 6)
+            .accessibilityHint(lensMode
+                               ? "Photograph a binder page by page and get prices and wishlist hits"
+                               : "Identify one card at a time")
+
+            if lensMode { lens } else { liveScanner }
+        }
+    }
+
+    @ViewBuilder private var lens: some View {
+        if let binder, let lensSource {
+            BinderView(model: binder, source: lensSource, store: store)
+        } else if let matcher = pack.matcher, let index = pack.index {
+            // Assigned from a task, never built in the branch: `body` must not construct either
+            // of these (see `model`).
+            //
+            // ⚠️ The expensive half runs OFF the MainActor. `.task` inherits this view's
+            // isolation, and configuring an AVCaptureSession is documented as blocking — doing it
+            // inline is `ScannerPackModel.buildScanDependencies()` all over again, which cost a
+            // 5–10 s frozen tab switch on the A10. (Only the `Set` construction rides along —
+            // reading `collection.entries` is MainActor state, so the `map` cannot leave.)
+            TinLoadingView().task {
+                let ids = collection.entries.map(\.cardId)
+                let needsCamera = lensSource == nil
+                let built = await Task.detached(priority: .userInitiated) {
+                    (camera: needsCamera ? LensPhotoSource.configured() : nil, owned: Set(ids))
+                }.value
+                let source = lensSource ?? LensPhotoSource(built.camera)
+                lensSource = source
+                binder = BinderModel(source: source, catalog: store, matcher: matcher,
+                                     index: index, wanted: wants?.wanted ?? [],
+                                     owned: built.owned)
+            }
+        } else {
+            TinLoadingView()
         }
     }
 

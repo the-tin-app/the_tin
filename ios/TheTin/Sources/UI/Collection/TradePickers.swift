@@ -65,6 +65,9 @@ struct TradeOwnedPicker: View {
 struct TradeCatalogPicker: View {
     let store: CatalogStore
     var wants: WantsModel? = nil
+    /// Defaults to the trade wording it was written for. The virtual binder reuses this picker for
+    /// "none of these — search instead", where "Their side" would be nonsense.
+    var title: String = "Their side"
     let add: (CardRecord) -> Void
 
     @State private var model: SearchModel?
@@ -78,7 +81,7 @@ struct TradeCatalogPicker: View {
                 TinLoadingView(label: "Preparing search…")
             }
         }
-        .navigationTitle("Their side")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
