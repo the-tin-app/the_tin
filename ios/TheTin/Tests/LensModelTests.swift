@@ -62,6 +62,18 @@ final class LensModelTests: XCTestCase {
         XCTAssertEqual(model.rows.count, 1)
     }
 
+    /// A wishlist hit pass B could not place in the open set still has a row, a name and a price
+    /// off pass A — so it must not ALSO be counted as unrecognized, which would print "1 card
+    /// wasn't recognized" directly above the card the list just named.
+    func testAWishlistHitPassBCouldNotPlaceIsNotCalledUnrecognized() {
+        let model = LensModel.forTesting()
+        let q = CardQuad(topLeft: .zero, topRight: .zero, bottomLeft: .zero, bottomRight: .zero)
+        model.photos[UUID()] = [LensCell(quad: q, onWishlist: true, wishlistCardId: "a",
+                                         state: .noMatch)]
+        XCTAssertEqual(model.rows.map(\.cardId), ["a"])
+        XCTAssertEqual(model.unidentifiedCount, 0)
+    }
+
     func testWishlistCountIsTheHeadlineNumber() {
         let model = LensModel.forTesting()
         model.photos[UUID()] = [cell("a", wishlist: true), cell("b", wishlist: true), cell("c")]

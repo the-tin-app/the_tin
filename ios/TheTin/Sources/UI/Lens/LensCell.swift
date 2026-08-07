@@ -19,15 +19,23 @@ struct LensCell: Identifiable, Equatable {
     /// Set by pass A, independently of `state` — a card can be a known wishlist hit while pass B
     /// has not run yet.
     var onWishlist: Bool
+    /// The wanted card pass A matched, kept rather than discarded. ⚠️ Without this the whole
+    /// pass-A phase is unrenderable: `state` stays `.pending` until pass B lands, so a cell that
+    /// is a known wishlist hit had no card id, produced no row, and the user saw "3 cards from
+    /// your wishlist" over an empty list with no way to find out which.
+    var wishlistCardId: String?
     var state: LensCellState
 
     init(id: UUID = UUID(), quad: CardQuad, onWishlist: Bool = false,
-         state: LensCellState = .pending) {
-        self.id = id; self.quad = quad; self.onWishlist = onWishlist; self.state = state
+         wishlistCardId: String? = nil, state: LensCellState = .pending) {
+        self.id = id; self.quad = quad; self.onWishlist = onWishlist
+        self.wishlistCardId = wishlistCardId; self.state = state
     }
 
+    /// Pass B's answer once it exists, pass A's until then. The open set wins when both are known:
+    /// pass A only ever asked "is this one of ~120 cards", so its answer is the narrower claim.
     var cardId: String? {
         if case .identified(let id, _) = state { return id }
-        return nil
+        return wishlistCardId
     }
 }

@@ -199,13 +199,22 @@ struct ScanTabContainer: View {
             LensView(model: lensModel, source: lensSource)
         } else if let matcher = pack.matcher {
             // Assigned from a task, never built in the branch: `body` must not construct either
-            // of these (see `model`), and the snapshot below walks the whole collection.
+            // of these (see `model`).
+            //
+            // ⚠️ The expensive half runs OFF the MainActor. `.task` inherits this view's
+            // isolation, and configuring an AVCaptureSession is documented as blocking — doing it
+            // inline is `ScannerPackModel.buildScanDependencies()` all over again, which cost a
+            // 5–10 s frozen tab switch on the A10. The owned-card walk rides along.
             TinLoadingView().task {
-                let source = lensSource ?? LensPhotoSource()
+                let ids = collection.entries.map(\.cardId)
+                let needsCamera = lensSource == nil
+                let built = await Task.detached(priority: .userInitiated) {
+                    (camera: needsCamera ? LensPhotoSource.configured() : nil, owned: Set(ids))
+                }.value
+                let source = lensSource ?? LensPhotoSource(built.camera)
                 lensSource = source
                 lensModel = LensModel(source: source, catalog: store, matcher: matcher,
-                                      wanted: wants?.wanted ?? [],
-                                      owned: Set(collection.entries.map(\.cardId)))
+                                      wanted: wants?.wanted ?? [], owned: built.owned)
             }
         } else {
             TinLoadingView()

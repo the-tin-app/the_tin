@@ -41,7 +41,7 @@ enum LensMatcher {
     /// swap this back to `matchRanked` without an ordering source as strong as OCR narrowing.
     ///
     /// `candidateIds` defaults to the whole pack; it exists purely as a test seam (same pattern as
-    /// `MultiCardDetector.cells`'s `orienter` parameter) so a test can pin that the result does not
+    /// `MultiCardDetector.forEachCell`'s `orienter` parameter) so a test can pin that the result does not
     /// depend on candidate order. No production caller passes it.
     static func identify(fingerprint: CardFingerprint, matcher: Matcher, floor: Int,
                          candidateIds: [String]? = nil) -> LensCellState {
@@ -85,10 +85,10 @@ struct LiveLensWork: LensWork {
         let context = CIContext()
         var cells: [LensCell] = []
         var fingerprints: [UUID: CardFingerprint] = [:]
-        // ⚠️ `forEachCell`, NOT `cells(in:)`. The array-returning form materialises every plate
-        // for the photo before returning — 2,428,800 B each × up to 48 = ~117 MB resident at
-        // once, which is a jetsam kill on an A10 and leaves no crash report at all. Streaming
-        // keeps exactly one plate alive: each is fingerprinted (~26 KB) and released here.
+        // ⚠️ Nothing here may hold onto a plate. Streaming keeps exactly one alive: each is
+        // fingerprinted (~26 KB) and released here. Collecting them first would be 2,428,800 B
+        // each × up to 48 = ~117 MB resident at once — a jetsam kill on an A10, and jetsam
+        // leaves no crash report at all.
         MultiCardDetector.forEachCell(in: ci, context: context) { detected in
             guard detected.plate.glareCoverage <= glareCeiling else {
                 cells.append(LensCell(quad: detected.quad, state: .unreadable("reflection")))
@@ -111,8 +111,11 @@ struct LiveLensWork: LensWork {
         return cells.map { cell in
             guard let fp = fps[cell.id] else { return cell }
             var c = cell
-            c.onWishlist = LensMatcher.wishlistHit(fingerprint: fp, wanted: wanted,
-                                                   matcher: matcher, floor: floor) != nil
+            // The id is KEPT, not just tested for nil: it is what gives a pass-A hit a row, a
+            // name and a price before pass B has run on any photo. See `LensCell.cardId`.
+            c.wishlistCardId = LensMatcher.wishlistHit(fingerprint: fp, wanted: wanted,
+                                                       matcher: matcher, floor: floor)
+            c.onWishlist = c.wishlistCardId != nil
             return c
         }
     }

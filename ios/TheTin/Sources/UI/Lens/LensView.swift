@@ -42,6 +42,15 @@ struct LensView: View {
                 Menu {
                     Toggle("Only my wishlist", isOn: $model.filter.wishlistOnly)
                     Toggle("Hide what I own", isOn: $model.filter.hideOwned)
+                    // Fixed steps, not a number field: a decimal-pad TextField in a List has no
+                    // return key and no way to dismiss the keyboard, and "roughly how cheap" is
+                    // the only question anyone asks standing at a case.
+                    Picker("Price", selection: $model.filter.maxPriceUsd) {
+                        Text("Any price").tag(Double?.none)
+                        Text("$5 and under").tag(Double?.some(5))
+                        Text("$10 and under").tag(Double?.some(10))
+                        Text("$25 and under").tag(Double?.some(25))
+                    }
                     Button("Clear", role: .destructive) { model.reset() }
                 } label: {
                     // ⚠️ .labelStyle(.titleAndIcon) is silently IGNORED in the toolbar — it would
@@ -54,7 +63,10 @@ struct LensView: View {
         // ⚠️ `start()` is async and MUST be awaited before the first `capture()` —
         // `capturePhoto` against a session that has not started throws inside AVFoundation.
         .task { await source.start() }
-        .onDisappear { source.stop() }
+        // Both halves matter: `stop()` releases the camera, `cancel()` drops the backlog. Leaving
+        // the screen with photos still queued otherwise leaves detection and matching running
+        // flat out for a view that no longer exists.
+        .onDisappear { source.stop(); model.cancel() }
         .sheet(item: $showing) { row in
             NavigationStack {
                 photoSheet(row)
@@ -105,10 +117,12 @@ struct LensView: View {
         let reasons = model.unreadableReasons
         if !reasons.isEmpty {
             let why = Set(reasons).sorted().joined(separator: ", ")
-            parts.append("^[\(reasons.count) card](inflect: true) couldn't be read — \(why).")
+            // ⚠️ The VERB is inside the brackets. Automatic agreement inflects only what the
+            // markup encloses, so `^[N card](inflect: true) wasn't` renders "2 cards wasn't".
+            parts.append("^[\(reasons.count) card couldn't](inflect: true) be read — \(why).")
         }
         if model.unidentifiedCount > 0 {
-            parts.append("^[\(model.unidentifiedCount) card](inflect: true) wasn't recognized.")
+            parts.append("^[\(model.unidentifiedCount) card wasn't](inflect: true) recognized.")
         }
         if !model.rows.isEmpty {
             parts.append("Prices are a guide — a photo can't tell which printing a card is.")

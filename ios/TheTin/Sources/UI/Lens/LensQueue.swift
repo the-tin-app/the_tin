@@ -46,6 +46,18 @@ actor LensQueue {
         awaitingA.append(photoId)
     }
 
+    /// Drops the backlog. A running `drain()` finishes the stage it is in and then exits, because
+    /// its loop condition is these two lists.
+    ///
+    /// Needed because the work is not cheap and the screen it belongs to can go away: Clear, or
+    /// switching to the Scanner segment, or leaving the Scan tab. Without it the old queue keeps
+    /// both cores busy behind a screen that no longer exists, and the next shutter press builds a
+    /// second queue that runs concurrently with the zombie.
+    func cancel() {
+        awaitingA.removeAll()
+        awaitingB.removeAll()
+    }
+
     /// Whether work is still in flight. The caller's spinner reads this after `drain()` returns,
     /// so a call that short-circuited on the guard above doesn't switch the spinner off under the
     /// drain that is still running.

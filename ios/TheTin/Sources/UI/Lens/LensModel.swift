@@ -67,8 +67,11 @@ final class LensModel {
     /// Cards the lens saw and read but could not name. Also stated: an outline on the photo with
     /// no row is a failure the user can see, and silence about it is what makes the hits look
     /// untrustworthy.
+    /// ⚠️ `cardId == nil` too, not just `.noMatch`: a wishlist hit that pass B then failed to
+    /// place in the open set still has a row, a name and a price from pass A. Counting it here as
+    /// well would print "1 card wasn't recognized" directly above the card it named.
     var unidentifiedCount: Int {
-        photos.values.flatMap { $0 }.filter { $0.state == .noMatch }.count
+        photos.values.flatMap { $0 }.filter { $0.state == .noMatch && $0.cardId == nil }.count
     }
 
     func shoot() async {
@@ -89,15 +92,25 @@ final class LensModel {
         isWorking = await queue.isDraining
     }
 
-    /// Clears the session. Any drain still running belongs to the OLD session: the queue is
-    /// dropped so the next shutter press builds a fresh one, and the stale drain's updates are
-    /// discarded by the session check in `apply`. Without that, a Clear tapped during "Reading…"
-    /// lets a late `onUpdate` put a photo back into `photos` — which then looks like a live
-    /// session to `ScanTabContainer` and stops it refreshing the wishlist snapshot on re-entry.
+    /// Stops the work without touching what is on screen — for leaving the screen, where the
+    /// results should still be there on the way back but nothing should be burning both cores
+    /// behind a view that no longer exists.
+    func cancel() {
+        isWorking = false
+        guard let queue else { return }
+        Task { await queue.cancel() }
+    }
+
+    /// Clears the session. Any drain still running belongs to the OLD session: its backlog is
+    /// cancelled, the queue is dropped so the next shutter press builds a fresh one, and the
+    /// stale drain's updates are discarded by the session check in `apply`. Without that, a Clear
+    /// tapped during "Reading…" lets a late `onUpdate` put a photo back into `photos` — which then
+    /// looks like a live session to `ScanTabContainer` and stops it refreshing the wishlist
+    /// snapshot on re-entry.
     func reset() {
         session = UUID()
+        cancel()
         queue = nil
-        isWorking = false
         photos.removeAll()
         images.removeAll()
         priceCache.removeAll()
@@ -122,7 +135,8 @@ final class LensModel {
     private func apply(_ photoId: UUID, cells: [LensCell], session: UUID) async {
         guard session == self.session else { return }   // a cleared session's late update
         photos[photoId] = cells
-        // Detect and pass A produce no card ids at all, so this is a no-op until pass B lands.
+        // Pass A's hits carry a card id too, so their names and prices are resolved here — the
+        // whole pass-A phase would otherwise show rows with no name and no price.
         await resolveMetadata(for: cells.compactMap(\.cardId))
     }
 

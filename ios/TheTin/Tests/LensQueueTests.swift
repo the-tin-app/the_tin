@@ -196,6 +196,50 @@ final class LensQueueTests: XCTestCase {
         }
     }
 
+    /// Clear, or leaving the screen, has to actually stop the work. Without `cancel()` the old
+    /// queue keeps both cores busy behind a UI that is gone, and the next shutter press builds a
+    /// second queue that runs concurrently with the zombie.
+    ///
+    /// Cancelled from inside p1's pass B — a known point in the schedule where p2 has cleared pass
+    /// A and its pass B is still pending — so the assertion is about a stage that was definitely
+    /// queued and definitely did not run, not about wall-clock timing.
+    func testCancelStopsTheDrainAndLeavesNothingPending() async throws {
+        let journal = Journal()
+        let p1 = UUID(), p2 = UUID()
+
+        actor CancelBox {
+            private var queue: LensQueue?
+            private var fired = false
+            func set(_ q: LensQueue) { queue = q }
+            /// One-shot, for the same reason the boxes above are: the fake's hook fires on every
+            /// passB.
+            func cancelOnce() async {
+                guard !fired else { return }
+                fired = true
+                await queue?.cancel()
+            }
+        }
+        let box = CancelBox()
+
+        var work = FakeWork(journal: journal)
+        work.onPassBStart = { await box.cancelOnce() }
+        let queue = LensQueue(work: work, onUpdate: { _, _ in })
+        await box.set(queue)
+
+        await queue.enqueue(photoId: p1)
+        await queue.enqueue(photoId: p2)
+        await queue.drain()
+
+        let events = await journal.events
+        XCTAssertFalse(events.contains("B:\(p2.uuidString.prefix(4))"),
+                       "the drain carried on through the backlog after cancel: \(events)")
+
+        // …and nothing was merely deferred: a fresh drain finds no backlog at all.
+        await queue.drain()
+        let after = await journal.events
+        XCTAssertEqual(after, events, "cancelled work was still queued and ran later: \(after)")
+    }
+
     func testDrainingAnEmptyQueueIsANoOp() async {
         let journal = Journal()
         let queue = LensQueue(work: FakeWork(journal: journal), onUpdate: { _, _ in })

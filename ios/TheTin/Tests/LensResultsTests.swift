@@ -11,6 +11,30 @@ final class LensResultsTests: XCTestCase {
                         state: cardId.map { .identified(cardId: $0, inliers: 40) } ?? .noMatch)
     }
 
+    /// Pass A has hit; pass B has not run yet, so `state` is still `.pending`.
+    private func passAHit(_ cardId: String) -> LensCell {
+        let q = CardQuad(topLeft: .zero, topRight: .zero, bottomLeft: .zero, bottomRight: .zero)
+        return LensCell(quad: q, onWishlist: true, wishlistCardId: cardId, state: .pending)
+    }
+
+    /// The feature's headline. All of pass A runs before any pass B, so for the whole of that
+    /// phase a wishlist hit's ONLY card id is the one pass A found — and without it the user gets
+    /// "3 cards from your wishlist" over an empty list, with no way to see which cards.
+    func testAPassAHitProducesARowBeforePassBHasRun() {
+        let rows = LensResults.rows(photos: [photoId: [passAHit("wanted"), cell(nil)]],
+                                    prices: [:], owned: [])
+        XCTAssertEqual(rows.map(\.cardId), ["wanted"])
+    }
+
+    /// During the pass-A phase every row is a wishlist hit, so how hits order against EACH OTHER
+    /// is the primary ordering the user sees. Price descending, same as everything else — pinned
+    /// because a mutant that sorted the wishlist bucket by card id passed every other test here.
+    func testTwoWishlistHitsOrderByPriceDescending() {
+        let rows = LensResults.rows(photos: [photoId: [passAHit("cheap"), passAHit("dear")]],
+                                    prices: ["cheap": 4, "dear": 60], owned: [])
+        XCTAssertEqual(rows.map(\.cardId), ["dear", "cheap"])
+    }
+
     func testOnlyIdentifiedCellsBecomeRows() {
         let rows = LensResults.rows(photos: [photoId: [cell("a"), cell(nil)]],
                                     prices: [:], owned: [])

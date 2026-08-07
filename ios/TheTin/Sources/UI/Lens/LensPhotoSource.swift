@@ -15,9 +15,15 @@ import Observation
 /// The still-photo choice is load-bearing for whether this feature can work, not a UX preference.
 @MainActor @Observable
 final class LensPhotoSource: NSObject {
-    let session = AVCaptureSession()
-    private let output = AVCapturePhotoOutput()
-    private(set) var isAvailable = false
+    /// The camera, already configured. Built by `configured()`, which must run OFF the MainActor.
+    struct Configured {
+        let session: AVCaptureSession
+        let output: AVCapturePhotoOutput
+    }
+
+    let session: AVCaptureSession
+    private let output: AVCapturePhotoOutput
+    private(set) var isAvailable: Bool
     // Serial, off-main queue for start/stop — same pattern as AVCaptureFrameSource. Apple
     // documents startRunning()/stopRunning() as blocking; a shared serial queue is what makes
     // "start, then immediately stop" (a fast tab switch) resolve in call order instead of
@@ -33,11 +39,29 @@ final class LensPhotoSource: NSObject {
     // methods below ignore any callback whose uniqueID doesn't match this.
     private var pendingID: Int64?
 
-    override init() {
+    /// Cheap: everything expensive already happened in `configured()`. `nil` means no usable
+    /// camera, and `isAvailable` stays false.
+    init(_ built: Configured?) {
+        session = built?.session ?? AVCaptureSession()
+        output = built?.output ?? AVCapturePhotoOutput()
+        isAvailable = built != nil
         super.init()
+    }
+
+    /// Acquires the camera and configures the session.
+    ///
+    /// ⚠️ `nonisolated`, and it MUST be called off the MainActor — that is the only reason this is
+    /// split out of `init`. `AVCaptureDeviceInput(device:)` and the whole
+    /// `beginConfiguration`/`commitConfiguration` sequence are documented as blocking, and doing
+    /// them on the MainActor is exactly the shape of `ScannerPackModel.buildScanDependencies()`,
+    /// which froze the tab switch for 5–10 s on an A10 (2026-08-03). Same fix as
+    /// `CardDetailModel.load()`: build off-main, assign back on the MainActor.
+    nonisolated static func configured() -> Configured? {
+        let session = AVCaptureSession()
+        let output = AVCapturePhotoOutput()
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let input = try? AVCaptureDeviceInput(device: device),
-              session.canAddInput(input), session.canAddOutput(output) else { return }
+              session.canAddInput(input), session.canAddOutput(output) else { return nil }
 
         session.beginConfiguration()
         session.sessionPreset = .photo
@@ -57,7 +81,7 @@ final class LensPhotoSource: NSObject {
             }
         }
         session.commitConfiguration()
-        isAvailable = true
+        return Configured(session: session, output: output)
     }
 
     /// Starts the session and suspends until `startRunning()` has actually returned. Callers
