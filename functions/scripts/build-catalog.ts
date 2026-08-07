@@ -416,11 +416,39 @@ async function main() {
   // enrichment (fill-overnight.ts) can run on it next: `fill-overnight.ts <dbPath> <version> <outDir>`.
   const dbPath = exportDir ? join(outDir, `catalog-v${version}.sqlite`) : join(tmpdir(), `catalog-full-v${version}.sqlite`);
   if (exportDir) mkdirSync(outDir, { recursive: true });
-  const twinsPath = process.env.TWINS_JSON ?? "../fingerprint/.fp-output/twins.json";
-  const twins: [string, string][] = existsSync(twinsPath)
+  // ⚠️ `card_twin` was 0 rows in every published catalog for months, and the reason is entirely
+  // here. It matters because the scanner's twin guard withholds a lock when two identical-art
+  // reprints are both in the candidate pool, and with no rows it never fired.
+  //
+  // ⚠️ It is NOT a general explanation for wrong locks, and saying so was an overreach corrected by
+  // Tomas on 2026-08-07: the single wrong lock in the 415-cell measured fixture set was a twin case
+  // (`base1-2`/`base4-2` answered as `cel25cc-CC001`), but the wrong locks he saw on a real device
+  // were plainly wrong cards, not paired art. Those remain unexplained; this fixes one specific
+  // failure mode and no others. This used to default to `../fingerprint/.fp-output/twins.json`, which is (a) gitignored
+  // and (b) OUTSIDE the Docker build context — the image is built from `functions/`, so `../` does
+  // not exist in it at all. `existsSync` was therefore false on every nightly, `twins` was `[]`, and
+  // the pipeline logged `twins=0` while everything downstream looked correct. The code was written,
+  // the pairs were computed, and the two never met.
+  //
+  // So the pairs are checked in beside the pipeline that consumes them. They are derived data, but
+  // they change only when the catalog gains a new identical-art reprint, and regenerating them needs
+  // the ~23k-image cache — which is exactly the kind of artifact that belongs in the repo rather than
+  // on one laptop. Regenerate with `fingerprint/scripts/build_twins.py`.
+  const twinsPath = process.env.TWINS_JSON
+    ?? [join(__dirname, "..", "data", "card-twins.json"),
+        "../fingerprint/.fp-output/twins.json"].find(existsSync)
+    ?? "";
+  const twins: [string, string][] = twinsPath && existsSync(twinsPath)
     ? JSON.parse(readFileSync(twinsPath, "utf8"))
     : [];
-  console.log(`[4] building SQLite (raw-only; no graded/PPT)… twins=${twins.length}`);
+  // ⚠️ Loud, not silent. A twins=0 line is indistinguishable from "this catalog has no reprints",
+  // which is how this went unnoticed — the number was printed and nobody had a reason to doubt it.
+  if (twins.length === 0) {
+    console.warn(`[4] ⚠️ NO card_twin pairs (looked at ${twinsPath || "nothing"}). The scanner's `
+      + `twin guard will be inert, so two identical-art reprints in one candidate pool can lock `
+      + `confidently on either. See functions/data/card-twins.json.`);
+  }
+  console.log(`[4] building SQLite (raw-only; no graded/PPT)… twins=${twins.length} from ${twinsPath}`);
   // buildCatalog does CREATE TABLE (no IF NOT EXISTS) — clear any prior DB at the predictable
   // export path so a re-run (or the nightly container) starts fresh instead of colliding.
   for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${dbPath}${suffix}`, { force: true });
