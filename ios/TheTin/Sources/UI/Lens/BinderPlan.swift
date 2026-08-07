@@ -123,6 +123,58 @@ enum BinderPlan {
                    col: tile.colOffset + (centre.x < 0.5 ? 0 : 1))
     }
 
+    /// Which pocket each detected card sits in, decided from **the cards' own geometry** rather than
+    /// from the middle of the frame.
+    ///
+    /// ⚠️ Splitting the frame at 0.5 is what shipped, and it is wrong in the one way that matters: it
+    /// assumes the four pockets are centred and fill the photograph. The guide deliberately tells the
+    /// user to frame *wider* than the four pockets (§5.3), and a real shot is off-centre — so on a
+    /// device, a whole page's bottom row landed in the top row's pockets and the real bottom row read
+    /// as three empty pockets. The cards were identified correctly the whole time.
+    ///
+    /// Two cards in adjacent pockets are about one card apart centre-to-centre; two observations of the
+    /// same pocket are near zero apart. So the cards themselves say where the dividing line is, and the
+    /// frame's midpoint is only needed when there is nothing to compare against — a tile holding a
+    /// single row, or a single column.
+    ///
+    /// `rects` are normalized to the photograph, top-left origin. The result is parallel to the input.
+    ///
+    /// ponytail: a midpoint split on one axis at a time, which cannot express a tile holding two rows
+    /// where one row is shifted (a bowed page). Upgrade path is fitting the pocket pitch from the card
+    /// size, which needs a slot-level measurement this project does not have yet.
+    static func slots(rects: [CGRect], in tile: BinderTile) -> [BinderSlot] {
+        let rows = split(rects.map { Double($0.midY) }, extents: rects.map { Double($0.height) })
+        let cols = split(rects.map { Double($0.midX) }, extents: rects.map { Double($0.width) })
+        return zip(rows, cols).map {
+            BinderSlot(page: tile.page, row: tile.rowOffset + $0, col: tile.colOffset + $1)
+        }
+    }
+
+    /// 0 or 1 per value, along one axis. Two groups when the values are spread further apart than a
+    /// third of a card — anything less is one row (or one column) and falls back to the frame.
+    private static func split(_ values: [Double], extents: [Double]) -> [Int] {
+        guard !values.isEmpty else { return [] }
+        let lo = values.min()!, hi = values.max()!
+        // A third of a card: adjacent pockets sit ~1.0 apart, the same pocket ~0.0. Nothing real lands
+        // between, so the exact fraction is not a tuning knob.
+        let pitch = median(extents) * 0.35
+        guard hi - lo > pitch else {
+            // One row. Which one is genuinely unknowable from inside the tile, so the frame's midpoint
+            // is the only evidence there is — and it is the same rule as before, now used only where
+            // there is no better one.
+            let centre = (lo + hi) / 2
+            return values.map { _ in centre < 0.5 ? 0 : 1 }
+        }
+        let mid = (lo + hi) / 2
+        return values.map { $0 < mid ? 0 : 1 }
+    }
+
+    private static func median(_ xs: [Double]) -> Double {
+        guard !xs.isEmpty else { return 0 }
+        let s = xs.sorted()
+        return s.count % 2 == 1 ? s[s.count / 2] : (s[s.count / 2 - 1] + s[s.count / 2]) / 2
+    }
+
     /// Resolves competing observations down to at most one card per pocket.
     ///
     /// This is the phantom filter, and it is free: the user told us there are exactly

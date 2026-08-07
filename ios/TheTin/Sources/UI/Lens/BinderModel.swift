@@ -150,6 +150,7 @@ final class BinderModel {
         tileByPhoto[photoId] = tile
         cellsByPhoto[photoId] = []
         writeTileImage(image, tile: tile)
+        BinderDiag.record(photo: image, tile: tile)
         if tile == currentTile { tileIndex += 1 }
         shotsTaken += 1
         persist()
@@ -320,12 +321,16 @@ final class BinderModel {
     /// Internal rather than private so a test can drive the whole capture-to-pocket path with hand-made
     /// cells — no camera, no Vision, no fingerprint pack.
     func assignSlots(cells: [LensCell], tile: BinderTile, extent: CGRect) {
-        let observations = cells.map { cell -> (slot: BinderSlot, score: Int, fpCount: Int,
-                                               value: (LensCell, CGRect)) in
-            let rect = cell.quad.normalizedRect(in: extent)
-            return (BinderPlan.slot(centre: CGPoint(x: rect.midX, y: rect.midY), in: tile),
-                    cell.inliers, cell.fpCount, (cell, rect))
+        // ⚠️ Phantoms are excluded BEFORE the sub-grid is worked out, not after. `BinderPlan.slots`
+        // decides where the dividing line falls from the spread of what it is given, so one glare band
+        // at the edge of the frame would drag that line and mis-row every real card with it.
+        let real = cells.filter { $0.fpCount >= BinderPlan.minFpCount }
+        let rects = real.map { $0.quad.normalizedRect(in: extent) }
+        let slots = BinderPlan.slots(rects: rects, in: tile)
+        let observations = zip(zip(real, rects), slots).map { pair, slot in
+            (slot: slot, score: pair.0.inliers, fpCount: pair.0.fpCount, value: (pair.0, pair.1))
         }
+        BinderDiag.record(cells: real, rects: rects, slots: slots, tile: tile)
         for (slot, found) in BinderPlan.assign(observations, shape: shape) {
             let (cell, rect) = found
             scan.put(BinderSlotEntry(slot: slot, cardId: cell.cardId, options: cell.chooserOptions,

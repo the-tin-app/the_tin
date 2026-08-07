@@ -96,6 +96,62 @@ final class BinderPlanTests: XCTestCase {
         }
     }
 
+    // MARK: - Slot assignment from the cards' own geometry
+
+    /// A card-shaped rect centred at `(x, y)`, normalized, top-left origin. 0.30 × 0.42 is roughly what
+    /// one pocket of a 2×2 shot occupies when the frame is a little wider than the four pockets.
+    private func card(_ x: Double, _ y: Double) -> CGRect {
+        CGRect(x: x - 0.15, y: y - 0.21, width: 0.30, height: 0.42)
+    }
+
+    /// ⚠️ **The failure that reached a device.** Splitting the frame at 0.5 assumes the four pockets are
+    /// centred and fill the photograph — but the guide tells the user to frame WIDER than four pockets,
+    /// so a real shot sits off-centre. Here both rows of a bottom tile land in the upper half of the
+    /// frame: the old rule put all four cards in one row of pockets, and the page's real bottom row
+    /// rendered as three empty pockets while the cards were identified correctly the whole time.
+    func testAnOffCentreFrameStillSeparatesTheTwoRows() {
+        let tile = BinderTile(page: 0, rowOffset: 1, colOffset: 1)
+        // Both rows above the frame's midpoint — every y < 0.5.
+        let rects = [card(0.30, 0.20), card(0.70, 0.20), card(0.30, 0.44), card(0.70, 0.44)]
+        XCTAssertEqual(BinderPlan.slots(rects: rects, in: tile),
+                       [BinderSlot(page: 0, row: 1, col: 1), BinderSlot(page: 0, row: 1, col: 2),
+                        BinderSlot(page: 0, row: 2, col: 1), BinderSlot(page: 0, row: 2, col: 2)])
+    }
+
+    func testACentredFrameIsUnchanged() {
+        let tile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+        let rects = [card(0.28, 0.27), card(0.72, 0.27), card(0.28, 0.73), card(0.72, 0.73)]
+        XCTAssertEqual(BinderPlan.slots(rects: rects, in: tile),
+                       [BinderSlot(page: 0, row: 0, col: 0), BinderSlot(page: 0, row: 0, col: 1),
+                        BinderSlot(page: 0, row: 1, col: 0), BinderSlot(page: 0, row: 1, col: 1)])
+    }
+
+    /// One row in the tile — the cards cannot say which row they are, so the frame's midpoint is the only
+    /// evidence there is. It must NOT be split into two rows: that is the failure mode of a bare
+    /// "midpoint of the spread" rule, and it would put one card of a pair in the pocket below it.
+    func testASingleRowIsNotSplitIntoTwo() {
+        let tile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+        // Two cards side by side near the top of the frame, with the jitter of a real detection.
+        let top = [card(0.30, 0.26), card(0.70, 0.29)]
+        XCTAssertEqual(BinderPlan.slots(rects: top, in: tile),
+                       [BinderSlot(page: 0, row: 0, col: 0), BinderSlot(page: 0, row: 0, col: 1)])
+
+        let bottom = [card(0.30, 0.74), card(0.70, 0.71)]
+        XCTAssertEqual(BinderPlan.slots(rects: bottom, in: tile),
+                       [BinderSlot(page: 0, row: 1, col: 0), BinderSlot(page: 0, row: 1, col: 1)])
+    }
+
+    func testASingleCardTakesOnePocket() {
+        let tile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+        XCTAssertEqual(BinderPlan.slots(rects: [card(0.72, 0.75)], in: tile),
+                       [BinderSlot(page: 0, row: 1, col: 1)])
+    }
+
+    func testNoCardsIsNoSlots() {
+        XCTAssertTrue(BinderPlan.slots(rects: [], in: BinderTile(page: 0, rowOffset: 0, colOffset: 0))
+                        .isEmpty)
+    }
+
     func testBestObservationWinsAPocket() {
         let shape = BinderShape(rows: 3, cols: 3)
         let slot = BinderSlot(page: 0, row: 0, col: 0)

@@ -154,8 +154,14 @@ private struct Pocket: View {
                     .font(.system(size: 9)).monospacedDigit().lineLimit(1)
             } else if entry == nil {
                 Text("empty").font(.system(size: 9)).foregroundStyle(.secondary)
-            } else if !(entry?.isResolved ?? false) {
+            } else if entry?.options.isEmpty == false {
                 Text("tap to pick").font(.system(size: 9)).foregroundStyle(.secondary)
+            } else if !(entry?.isResolved ?? false) {
+                // ⚠️ NOT "tap to pick". A pocket the gate could not read has no candidates to pick
+                // from, and measured over 90 real cells its four best guesses held the true card
+                // **1 time in 12** — so offering them would be wrong eleven times out of twelve.
+                // The old label promised a list and opened a sheet with nothing in it.
+                Text("not read").font(.system(size: 9)).foregroundStyle(.secondary)
             } else {
                 Text(" ").font(.system(size: 9))     // keeps rows the same height
             }
@@ -166,7 +172,9 @@ private struct Pocket: View {
 
     private var label: String {
         guard let entry else { return "Empty pocket" }
-        guard entry.isResolved else { return "Needs a choice" }
+        guard entry.isResolved else {
+            return entry.options.isEmpty ? "Couldn't be read, tap to search" : "Needs a choice"
+        }
         var parts = [card?.name ?? entry.cardId ?? "Card"]
         if entry.onWishlist { parts.append("on your wishlist") }
         if let price { parts.append(price.formatted(.currency(code: "USD"))) }
@@ -227,6 +235,16 @@ struct BinderSlotSheet: View {
                 }
             }
 
+            // Says why, rather than leaving a blank sheet. 5 of the 12 unread cells in the measured
+            // set had an EMPTY OCR pool — the card's name and number didn't read — so "we couldn't
+            // read it" is the honest description, not "we don't know this card".
+            if let entry, !entry.isResolved, entry.options.isEmpty {
+                Section {
+                    Text("The name and number on this card didn't read, so there is nothing to choose between. Search for it, or re-shoot the page a little closer.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+
             Section {
                 Button("Pick a different card", systemImage: "magnifyingglass") { searching = true }
                 if entry != nil {
@@ -236,7 +254,7 @@ struct BinderSlotSheet: View {
                 }
             }
         }
-        .navigationTitle(entry?.isResolved == true ? "Check it" : "Which card?")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
@@ -278,6 +296,13 @@ struct BinderSlotSheet: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Three states, three different questions — and the third one must not pretend to be the second.
+    private var title: String {
+        guard let entry else { return "Empty pocket" }
+        if entry.isResolved { return "Check it" }
+        return entry.options.isEmpty ? "Couldn't read it" : "Which card?"
     }
 
     private func chooserOption(_ id: String) -> ChooserOption {
