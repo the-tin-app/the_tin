@@ -146,6 +146,36 @@ final class BinderModelTests: XCTestCase {
         XCTAssertEqual(m.entry(BinderSlot(page: 0, row: 1, col: 1))?.cardId, "br")
     }
 
+    /// ⚠️ Slot assignment is only as right as the photograph's orientation, and the whole binder comes
+    /// out scrambled if that is wrong — correct cards, wrong pockets, which reads as a matching failure
+    /// rather than a geometry one. That is what shipped to a device: the JPEG's EXIF orientation was
+    /// being dropped, so every quad centre was in a 90°-rotated space.
+    ///
+    /// This can't reach AVFoundation, so it pins the half that is testable: a **portrait** photograph,
+    /// the shape a phone actually delivers, quantizes top-left to (0,0) and not to a transposed pocket.
+    /// If `CardQuad.normalizedRect`'s y-flip or the x/y order in `BinderPlan.slot` ever swaps, this
+    /// fails instead of a binder quietly coming out sideways.
+    func testAPortraitPhotographMapsTopLeftToTopLeft() throws {
+        let m = model()
+        let portrait = CGRect(x: 0, y: 0, width: 3024, height: 4032)
+        let tile = try XCTUnwrap(m.currentTile)
+        let w = 0.30 * portrait.width, h = 0.42 * portrait.height
+        func quad(_ nx: Double, _ ny: Double) -> CardQuad {
+            let cx = nx * portrait.width, cy = (1 - ny) * portrait.height
+            return CardQuad(topLeft: CGPoint(x: cx - w / 2, y: cy + h / 2),
+                            topRight: CGPoint(x: cx + w / 2, y: cy + h / 2),
+                            bottomLeft: CGPoint(x: cx - w / 2, y: cy - h / 2),
+                            bottomRight: CGPoint(x: cx + w / 2, y: cy - h / 2))
+        }
+        m.assignSlots(cells: [LensCell(quad: quad(0.25, 0.25), fpCount: 650,
+                                       state: .identified(cardId: "upper-left", inliers: 40)),
+                              LensCell(quad: quad(0.75, 0.25), fpCount: 650,
+                                       state: .identified(cardId: "upper-right", inliers: 40))],
+                      tile: tile, extent: portrait)
+        XCTAssertEqual(m.entry(BinderSlot(page: 0, row: 0, col: 0))?.cardId, "upper-left")
+        XCTAssertEqual(m.entry(BinderSlot(page: 0, row: 0, col: 1))?.cardId, "upper-right")
+    }
+
     /// The bottom-right tile of a 3×3 page frames pockets (1,1)…(2,2), so its top-left card is the
     /// page's CENTRE pocket — the one photographed twice. Getting this offset wrong would put a whole
     /// page's cards one row and one column out, which the grid would render without complaint.

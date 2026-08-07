@@ -165,9 +165,16 @@ struct BinderCaptureView: View {
             // Fires only when a capture really came back small. See `deliveredSmallPhoto` — this is
             // the sole visible symptom of a silent macro handoff, which costs a third of the locks.
             if source.deliveredSmallPhoto {
-                Text("Low-resolution photo — move back a little and don't let the lens get too close.")
+                Text("Low-resolution photo (\(source.megapixelsText)) — move back a little and don't let the lens get too close.")
                     .font(.caption2).multilineTextAlignment(.center)
                     .foregroundStyle(.yellow)
+            }
+            // DEBUG-only, and it earns its place: "the photo came back small" has several possible
+            // causes and one device session was already spent telling them apart by inference.
+            if let diagnostic = source.diagnostic {
+                Text(diagnostic)
+                    .font(.system(size: 9).monospaced())
+                    .foregroundStyle(.white.opacity(0.6))
             }
         }
         .foregroundStyle(.white)

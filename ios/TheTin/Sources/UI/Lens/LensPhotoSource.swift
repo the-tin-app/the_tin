@@ -19,11 +19,15 @@ final class LensPhotoSource: NSObject {
     struct Configured {
         let session: AVCaptureSession
         let output: AVCapturePhotoOutput
+        /// What the camera said it could deliver. Carried purely so a device test can report the
+        /// reason a photograph came back small instead of guessing at it — see `diagnostic`.
+        var offeredDimensions: [String] = []
     }
 
     let session: AVCaptureSession
     private let output: AVCapturePhotoOutput
     private(set) var isAvailable: Bool
+    private let offeredDimensions: [String]
     // Serial, off-main queue for start/stop — same pattern as AVCaptureFrameSource. Apple
     // documents startRunning()/stopRunning() as blocking; a shared serial queue is what makes
     // "start, then immediately stop" (a fast tab switch) resolve in call order instead of
@@ -45,7 +49,22 @@ final class LensPhotoSource: NSObject {
         session = built?.session ?? AVCaptureSession()
         output = built?.output ?? AVCapturePhotoOutput()
         isAvailable = built != nil
+        offeredDimensions = built?.offeredDimensions ?? []
         super.init()
+    }
+
+    /// What we asked for and what arrived, for a device runsheet to quote verbatim.
+    ///
+    /// ⚠️ DEBUG only. It exists because "the photo came back small" has several possible causes — the
+    /// wrong format queried, an unsorted dimensions list, a macro handoff — and one device session was
+    /// already spent narrowing them by inference. A line on screen answers it in one look.
+    var diagnostic: String? {
+        #if DEBUG
+        let got = megapixels.map { String(format: "%.1f MP", $0) } ?? "—"
+        return "got \(got) · offers \(offeredDimensions.joined(separator: ", "))"
+        #else
+        return nil
+        #endif
     }
 
     /// Acquires the camera and configures the session.
@@ -74,10 +93,6 @@ final class LensPhotoSource: NSObject {
         session.sessionPreset = .photo
         session.addInput(input)
         session.addOutput(output)
-        if #available(iOS 16.0, *) {
-            output.maxPhotoDimensions = device.activeFormat.supportedMaxPhotoDimensions.last
-                ?? output.maxPhotoDimensions
-        }
         // Belt and braces for the same trap: a physical wide-angle device has no constituents, so
         // this is a no-op today — but it is what keeps a future switch to a virtual device from
         // quietly reintroducing macro handoff, which is invisible in every way except the accuracy.
@@ -96,7 +111,30 @@ final class LensPhotoSource: NSObject {
             }
         }
         session.commitConfiguration()
-        return Configured(session: session, output: output)
+
+        // ⚠️ AFTER `commitConfiguration`, and by AREA — both halves were wrong and cost a device run
+        // that came back 12.2 MP on every shot.
+        //
+        // Read before the commit, `device.activeFormat` is still whatever the device booted with, not
+        // the format the `.photo` preset selects — so we asked the wrong format what it supported. And
+        // `supportedMaxPhotoDimensions` is not documented as sorted, so `.last` is not "the biggest";
+        // it just happened to be the 12 MP entry.
+        //
+        // ⚠️ 24 MP is Apple's own computational fusion and is NOT offered to third-party apps — the
+        // reference photographs that measured 63.3% were taken with the system Camera app. So the goal
+        // here is not "match 24.5 MP", it is "take the largest this camera will give us", which on a
+        // 48 MP sensor is more pixels than the reference, not fewer.
+        var offered: [String] = []
+        if #available(iOS 16.0, *) {
+            let sizes = device.activeFormat.supportedMaxPhotoDimensions
+            offered = sizes.map { "\($0.width)×\($0.height)" }
+            if let best = sizes.max(by: { Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height) }) {
+                session.beginConfiguration()
+                output.maxPhotoDimensions = best
+                session.commitConfiguration()
+            }
+        }
+        return Configured(session: session, output: output, offeredDimensions: offered)
     }
 
     /// Starts the session and suspends until `startRunning()` has actually returned. Callers
@@ -166,6 +204,10 @@ final class LensPhotoSource: NSObject {
     /// 12 MP main camera will trip it — which is honest, because they really do have less to work
     /// with, and the line says what to do about it rather than blaming the phone.
     var deliveredSmallPhoto: Bool { (megapixels ?? .infinity) < 20 }
+
+    var megapixelsText: String {
+        megapixels.map { String(format: "%.1f MP", $0) } ?? "unknown size"
+    }
 }
 
 extension LensPhotoSource: AVCapturePhotoCaptureDelegate {
@@ -173,7 +215,20 @@ extension LensPhotoSource: AVCapturePhotoCaptureDelegate {
                                  didFinishProcessingPhoto photo: AVCapturePhoto,
                                  error: Error?) {
         let uniqueID = photo.resolvedSettings.uniqueID
-        let image = photo.fileDataRepresentation().flatMap { CIImage(data: $0) }
+        // ⚠️ `.applyOrientationProperty` is NOT optional, and omitting it is silent in the worst way.
+        // `AVCapturePhotoOutput` honours the connection's rotation angle as **metadata**: the pixel
+        // buffer stays in the sensor's native landscape and the JPEG carries an EXIF orientation tag
+        // saying which way up it is. `CIImage(data:)` ignores that tag by default — so we handed every
+        // stage a 90°-rotated photograph.
+        //
+        // It did not look like an orientation bug, which is why it cost a device session. Matching
+        // still worked, because `MultiCardDetector` resolves each card's own upright rotation and a
+        // sideways page just means every card lands in the [90, 270] class — so the RIGHT cards came
+        // back. But their quad centres were in rotated space, so `BinderPlan.slot` quantized x against
+        // y and the binder came out scrambled: correct cards, wrong pockets. The tile crop looked
+        // sideways for the same reason.
+        let image = photo.fileDataRepresentation()
+            .flatMap { CIImage(data: $0, options: [.applyOrientationProperty: true]) }
         Task { @MainActor in
             // Drop this callback if it doesn't belong to the capture currently pending — a stop()
             // that already resumed the continuation, followed by a fresh capture(), does not stop
