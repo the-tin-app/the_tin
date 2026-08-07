@@ -11,9 +11,11 @@ private actor Journal {
 private struct FakeWork: LensWork {
     let journal: Journal
     var cellsPerPhoto: Int = 2
-    /// Called at the start of `passB`, before it records itself — lets a test inject an enqueue at
-    /// a known point in the schedule instead of racing wall-clock timing against `drain()`.
+    /// Called at the start of `passB`, before it records itself — lets a test inject an enqueue or
+    /// a pause at a known point in the schedule instead of racing wall-clock timing against
+    /// `drain()`. `onPassAStart` is the same seam one stage earlier.
     var onPassBStart: (@Sendable () async -> Void)?
+    var onPassAStart: (@Sendable () async -> Void)?
 
     func detect(photoId: UUID) async -> [LensCell] {
         await journal.record("detect:\(photoId.uuidString.prefix(4))")
@@ -21,6 +23,7 @@ private struct FakeWork: LensWork {
         return (0..<cellsPerPhoto).map { _ in LensCell(quad: q) }
     }
     func passA(photoId: UUID, cells: [LensCell]) async -> [LensCell] {
+        await onPassAStart?()
         await journal.record("A:\(photoId.uuidString.prefix(4))")
         return cells.map { var c = $0; c.onWishlist = true; return c }
     }
@@ -28,6 +31,19 @@ private struct FakeWork: LensWork {
         await onPassBStart?()
         await journal.record("B:\(photoId.uuidString.prefix(4))")
         return cells.map { var c = $0; c.state = .identified(cardId: "x", inliers: 99); return c }
+    }
+}
+
+/// Pauses the queue from inside a stage, exactly once — the fake's hooks fire on every call, so
+/// without the latch a resumed drain would pause itself again immediately.
+private actor PauseBox {
+    private var queue: LensQueue?
+    private var fired = false
+    func set(_ q: LensQueue) { queue = q }
+    func pauseOnce() async {
+        guard !fired else { return }
+        fired = true
+        await queue?.pause()
     }
 }
 
@@ -196,33 +212,20 @@ final class LensQueueTests: XCTestCase {
         }
     }
 
-    /// Clear, or leaving the screen, has to actually stop the work. Without `cancel()` the old
-    /// queue keeps both cores busy behind a UI that is gone, and the next shutter press builds a
-    /// second queue that runs concurrently with the zombie.
+    /// Leaving the screen has to actually stop the work — otherwise the old queue keeps both cores
+    /// busy behind a UI that is gone, and the next shutter press builds a second queue that runs
+    /// concurrently with the zombie.
     ///
-    /// Cancelled from inside p1's pass B — a known point in the schedule where p2 has cleared pass
-    /// A and its pass B is still pending — so the assertion is about a stage that was definitely
+    /// Paused from inside p1's pass B — a known point in the schedule where p2 has cleared pass A
+    /// and its pass B is still pending — so the assertion is about a stage that was definitely
     /// queued and definitely did not run, not about wall-clock timing.
-    func testCancelStopsTheDrainAndLeavesNothingPending() async throws {
+    func testPauseDuringPassBStopsBeforeTheNextPhotosPassB() async throws {
         let journal = Journal()
         let p1 = UUID(), p2 = UUID()
-
-        actor CancelBox {
-            private var queue: LensQueue?
-            private var fired = false
-            func set(_ q: LensQueue) { queue = q }
-            /// One-shot, for the same reason the boxes above are: the fake's hook fires on every
-            /// passB.
-            func cancelOnce() async {
-                guard !fired else { return }
-                fired = true
-                await queue?.cancel()
-            }
-        }
-        let box = CancelBox()
+        let box = PauseBox()
 
         var work = FakeWork(journal: journal)
-        work.onPassBStart = { await box.cancelOnce() }
+        work.onPassBStart = { await box.pauseOnce() }
         let queue = LensQueue(work: work, onUpdate: { _, _ in })
         await box.set(queue)
 
@@ -232,12 +235,66 @@ final class LensQueueTests: XCTestCase {
 
         let events = await journal.events
         XCTAssertFalse(events.contains("B:\(p2.uuidString.prefix(4))"),
-                       "the drain carried on through the backlog after cancel: \(events)")
+                       "the drain carried on through the backlog after pause: \(events)")
+    }
 
-        // …and nothing was merely deferred: a fresh drain finds no backlog at all.
+    /// The pass-A branch is the one that can run a stage MORE than the one it was in: it has
+    /// already taken the photo off `awaitingA`, so it must finish pass A and record the result or
+    /// the photo is lost outright. What it must NOT do is fall through into pass B — the most
+    /// expensive thing in the feature — for a screen that is gone.
+    func testPauseDuringPassAStopsBeforeThatPhotosPassB() async throws {
+        let journal = Journal()
+        let p = UUID()
+        let box = PauseBox()
+
+        var work = FakeWork(journal: journal)
+        work.onPassAStart = { await box.pauseOnce() }
+        let queue = LensQueue(work: work, onUpdate: { _, _ in })
+        await box.set(queue)
+
+        await queue.enqueue(photoId: p)
         await queue.drain()
-        let after = await journal.events
-        XCTAssertEqual(after, events, "cancelled work was still queued and ran later: \(after)")
+
+        let events = await journal.events
+        let tag = p.uuidString.prefix(4)
+        XCTAssertEqual(events, ["detect:\(tag)", "A:\(tag)"],
+                       "pass A must complete and pass B must not start: \(events)")
+        let held = await queue.hasBacklog
+        XCTAssertTrue(held, "the photo was dropped instead of held for resume")
+    }
+
+    /// ⚠️ A pause is not a discard, and this is the assertion that keeps it one. A cell whose pass
+    /// B never runs stays `.pending` forever: no row, not counted as unidentified, nothing in the
+    /// footer — with no wishlist hits the screen reads "Take a photo of the cards in front of you",
+    /// as if the shutter had never been pressed.
+    func testAPausedQueueResumesAndCompletesItsBacklog() async throws {
+        let journal = Journal()
+        let p1 = UUID(), p2 = UUID()
+        let box = PauseBox()
+
+        var work = FakeWork(journal: journal)
+        work.onPassBStart = { await box.pauseOnce() }
+        let queue = LensQueue(work: work, onUpdate: { _, _ in })
+        await box.set(queue)
+
+        await queue.enqueue(photoId: p1)
+        await queue.enqueue(photoId: p2)
+        await queue.drain()
+        let pending = await queue.hasBacklog
+        XCTAssertTrue(pending, "nothing was left to resume — the test proves nothing")
+
+        await queue.drain()          // ← what LensModel.resume() does
+
+        let events = await journal.events
+        for (label, id) in [("p1", p1), ("p2", p2)] {
+            let tag = id.uuidString.prefix(4)
+            for stage in ["detect:\(tag)", "A:\(tag)", "B:\(tag)"] {
+                XCTAssertEqual(events.filter { $0 == stage }.count, 1,
+                               "\(label) expected exactly one \(stage) after resuming: \(events)")
+            }
+        }
+        let leftover = await queue.hasBacklog
+        XCTAssertFalse(leftover)
     }
 
     func testDrainingAnEmptyQueueIsANoOp() async {

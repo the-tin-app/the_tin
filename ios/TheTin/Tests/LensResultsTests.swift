@@ -35,6 +35,21 @@ final class LensResultsTests: XCTestCase {
         XCTAssertEqual(rows.map(\.cardId), ["dear", "cheap"])
     }
 
+    /// Pass B runs the same matcher at the same floor over a strictly larger candidate set, so it
+    /// can land on a different card than pass A did. The row must not then claim the user wants a
+    /// card they never asked for — and a `.noMatch` must not throw pass A's answer away either.
+    func testPassBDisagreeingWithPassADropsTheWishlistClaim() {
+        var hit = passAHit("wanted")
+        hit.resolve(.identified(cardId: "something-else", inliers: 40), wanted: ["wanted"])
+        XCTAssertEqual(hit.cardId, "something-else")
+        XCTAssertFalse(hit.onWishlist)
+
+        var unplaced = passAHit("wanted")
+        unplaced.resolve(.noMatch, wanted: ["wanted"])
+        XCTAssertEqual(unplaced.cardId, "wanted")
+        XCTAssertTrue(unplaced.onWishlist, "pass B failing to place it does not un-want it")
+    }
+
     func testOnlyIdentifiedCellsBecomeRows() {
         let rows = LensResults.rows(photos: [photoId: [cell("a"), cell(nil)]],
                                     prices: [:], owned: [])

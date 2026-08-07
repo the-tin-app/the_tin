@@ -36,6 +36,8 @@ actor LensQueue {
     /// drainer, no spinner, and nothing on screen. It self-heals on the next shutter press, which
     /// is exactly the kind of silent miss this feature's copy rules forbid.
     private var draining = false
+    /// Set by `pause()`, cleared by `drain()` — so resuming is just draining again.
+    private var paused = false
 
     init(work: LensWork, onUpdate: @Sendable @escaping (UUID, [LensCell]) async -> Void) {
         self.work = work
@@ -46,33 +48,48 @@ actor LensQueue {
         awaitingA.append(photoId)
     }
 
-    /// Drops the backlog. A running `drain()` finishes the stage it is in and then exits, because
-    /// its loop condition is these two lists.
+    /// Stops the drain and **keeps the backlog**, so `drain()` picks it up again later.
     ///
-    /// Needed because the work is not cheap and the screen it belongs to can go away: Clear, or
-    /// switching to the Scanner segment, or leaving the Scan tab. Without it the old queue keeps
-    /// both cores busy behind a screen that no longer exists, and the next shutter press builds a
-    /// second queue that runs concurrently with the zombie.
-    func cancel() {
-        awaitingA.removeAll()
-        awaitingB.removeAll()
+    /// ⚠️ A pause, NOT a discard, and the difference is the whole point. The work is not cheap and
+    /// the screen it belongs to can go away mid-read (switching to the Scanner segment, leaving the
+    /// Scan tab) — but the photos stay in `LensModel.photos`, and a cell that never gets its pass B
+    /// stays `.pending` forever: no row, not counted as unidentified, nothing in the footer. With
+    /// no wishlist hits the screen goes back to reading "Take a photo of the cards in front of
+    /// you", as if the shutter had never been pressed. That is exactly the silent drop this
+    /// feature exists to avoid, and pass B is the slow stage, so the window is wide.
+    ///
+    /// Precisely how far a running drain gets: a pause landing in pass B finishes that photo's
+    /// pass B and stops. A pause landing in detect/pass A finishes pass A for that photo — the
+    /// cheap, high-priority stage, and its result must be recorded or the photo is lost, since it
+    /// has already left `awaitingA` — and stops before any pass B.
+    ///
+    /// `reset()` deliberately does NOT use this: it pauses and then drops the whole queue, which
+    /// takes the backlog and the cached fingerprints with it. A discard is what Clear means.
+    func pause() {
+        paused = true
     }
+
+    /// Whether anything is waiting. `LensModel.resume()` checks it so re-entering an idle screen
+    /// doesn't flash the "Reading…" state.
+    var hasBacklog: Bool { !awaitingA.isEmpty || !awaitingB.isEmpty }
 
     /// Whether work is still in flight. The caller's spinner reads this after `drain()` returns,
     /// so a call that short-circuited on the guard above doesn't switch the spinner off under the
     /// drain that is still running.
     var isDraining: Bool { draining }
 
-    /// Runs until both stages are empty. Re-checks `awaitingA` on every iteration, so a photo
-    /// captured mid-drain preempts the pass-B backlog rather than queueing behind it.
+    /// Runs until both stages are empty, or until `pause()` — which it also clears, so resuming a
+    /// paused queue is just calling this again. Re-checks `awaitingA` on every iteration, so a
+    /// photo captured mid-drain preempts the pass-B backlog rather than queueing behind it.
     ///
     /// Idempotent: a second concurrent call returns immediately, because the loop already running
     /// will pick up anything enqueued since. Callers may therefore always `enqueue` then `drain`.
     func drain() async {
         guard !draining else { return }
+        paused = false
         draining = true
         defer { draining = false }
-        while !awaitingA.isEmpty || !awaitingB.isEmpty {
+        while !paused, !awaitingA.isEmpty || !awaitingB.isEmpty {
             if !awaitingA.isEmpty {
                 let id = awaitingA.removeFirst()
                 let detected = await work.detect(photoId: id)

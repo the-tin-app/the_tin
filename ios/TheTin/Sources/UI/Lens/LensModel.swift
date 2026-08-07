@@ -92,17 +92,32 @@ final class LensModel {
         isWorking = await queue.isDraining
     }
 
-    /// Stops the work without touching what is on screen — for leaving the screen, where the
-    /// results should still be there on the way back but nothing should be burning both cores
-    /// behind a view that no longer exists.
+    /// Pauses the work without losing it — for leaving the screen, where nothing should be burning
+    /// both cores behind a view that is gone, but the reading must carry on where it stopped when
+    /// the user comes back. ⚠️ Every `cancel()` needs a `resume()` on the matching lifecycle event,
+    /// or a photo sits half-read forever and the screen says nothing about it.
     func cancel() {
         isWorking = false
         guard let queue else { return }
-        Task { await queue.cancel() }
+        Task { await queue.pause() }
     }
 
-    /// Clears the session. Any drain still running belongs to the OLD session: its backlog is
-    /// cancelled, the queue is dropped so the next shutter press builds a fresh one, and the
+    /// Restarts a paused drain. No-op when there is nothing waiting, so re-entering a finished
+    /// session doesn't flash "Reading…".
+    func resume() {
+        guard let queue else { return }
+        Task {
+            guard await queue.hasBacklog else { return }
+            isWorking = true
+            await queue.drain()
+            isWorking = await queue.isDraining
+        }
+    }
+
+    /// Clears the session. Any drain still running belongs to the OLD session: it is paused and
+    /// then the queue is DROPPED, which discards the backlog and the cached fingerprints along
+    /// with it — that is what Clear means, and it is the one place a discard is right. The next
+    /// shutter press builds a fresh queue, and the
     /// stale drain's updates are discarded by the session check in `apply`. Without that, a Clear
     /// tapped during "Reading…" lets a late `onUpdate` put a photo back into `photos` — which then
     /// looks like a live session to `ScanTabContainer` and stops it refreshing the wishlist

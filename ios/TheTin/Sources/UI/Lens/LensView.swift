@@ -63,9 +63,10 @@ struct LensView: View {
         // ⚠️ `start()` is async and MUST be awaited before the first `capture()` —
         // `capturePhoto` against a session that has not started throws inside AVFoundation.
         .task { await source.start() }
-        // Both halves matter: `stop()` releases the camera, `cancel()` drops the backlog. Leaving
-        // the screen with photos still queued otherwise leaves detection and matching running
-        // flat out for a view that no longer exists.
+        // ⚠️ Paired on appear/disappear, NOT on `.task`. Leaving via the tab bar doesn't
+        // necessarily destroy this view, so `.task` may not re-fire — and a pause with no resume
+        // leaves every unread cell `.pending` forever, which shows as nothing at all.
+        .onAppear { model.resume() }
         .onDisappear { source.stop(); model.cancel() }
         .sheet(item: $showing) { row in
             NavigationStack {

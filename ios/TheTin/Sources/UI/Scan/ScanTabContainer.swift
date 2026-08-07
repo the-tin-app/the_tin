@@ -204,7 +204,8 @@ struct ScanTabContainer: View {
             // ⚠️ The expensive half runs OFF the MainActor. `.task` inherits this view's
             // isolation, and configuring an AVCaptureSession is documented as blocking — doing it
             // inline is `ScannerPackModel.buildScanDependencies()` all over again, which cost a
-            // 5–10 s frozen tab switch on the A10. The owned-card walk rides along.
+            // 5–10 s frozen tab switch on the A10. (Only the `Set` construction rides along —
+            // reading `collection.entries` is MainActor state, so the `map` cannot leave.)
             TinLoadingView().task {
                 let ids = collection.entries.map(\.cardId)
                 let needsCamera = lensSource == nil

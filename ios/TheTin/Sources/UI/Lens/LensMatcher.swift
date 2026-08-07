@@ -125,7 +125,8 @@ struct LiveLensWork: LensWork {
         let out = cells.map { cell -> LensCell in
             guard let fp = fps[cell.id] else { return cell }
             var c = cell
-            c.state = LensMatcher.identify(fingerprint: fp, matcher: matcher, floor: floor)
+            c.resolve(LensMatcher.identify(fingerprint: fp, matcher: matcher, floor: floor),
+                      wanted: wanted)
             return c
         }
         // Terminal stage: nothing reads this photo's fingerprints again.
