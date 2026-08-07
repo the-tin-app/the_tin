@@ -63,34 +63,21 @@ final class LensMatcherTests: XCTestCase {
         XCTAssertNil(hit)
     }
 
-    /// Pass B, open set: identify against the whole pack.
-    func testIdentifyResolvesAgainstTheWholePack() throws {
-        let sample = truth[0]
-        let state = LensMatcher.identify(fingerprint: try fingerprint(plate: sample.plate),
-                                         matcher: matcher, floor: 20)
-        guard case .identified(let cardId, _) = state else {
-            return XCTFail("expected .identified, got \(state)")
-        }
-        XCTAssertEqual(cardId, sample.cardId)
-    }
-
     func testAFeaturelessPlateIsNoMatchNotAWrongMatch() throws {
         let blank = CardFingerprint(keypoints: [], descriptors: Data())
         XCTAssertNil(LensMatcher.wishlistHit(fingerprint: blank, wanted: Set(matcher.allCardIds),
                                              matcher: matcher, floor: 20))
-        XCTAssertEqual(LensMatcher.identify(fingerprint: blank, matcher: matcher, floor: 20),
-                       .noMatch)
     }
 
-    /// Regression test (review 2026-08-06, Finding 1/2): `identify` used to call the early-exit
-    /// `Matcher.matchRanked` against `matcher.allCardIds`, which is documented "in no particular
-    /// order" — violating `matchRanked`'s own MUST-be-narrowing-order precondition. Prove the fix
-    /// (exhaustive `Matcher.match`) doesn't depend on candidate order, using REAL data: against
-    /// `IMG_1535`, `ex8-63` is a genuine spurious match (clears `floor` but is NOT the true card,
-    /// which scores far higher). Put the weaker match FIRST and the true card LAST — under the old
-    /// `matchRanked` code this would have stopped at the first batch and returned `ex8-63` wrongly;
-    /// exhaustive search must still find the true card regardless of where it sits in the list.
-    func testIdentifyFindsTheTrueCardEvenWhenAWeakerMatchIsOrderedFirst() throws {
+    /// Regression test (review 2026-08-06, Finding 1/2): pass B used to call the early-exit
+    /// `Matcher.matchRanked`, whose documented precondition is a narrowing-agreement-ordered pool.
+    /// The OCR gate now produces exactly such a pool, but pass B still uses exhaustive
+    /// `Matcher.match` — because that is the code the 63.3%/0-wrong measurement was taken through,
+    /// and an early exit would change what was measured. This pins the property that makes it safe:
+    /// against `IMG_1535`, `ex8-63` is a genuine spurious match that clears the floor while the true
+    /// card scores far higher. With the decoy FIRST and the true card LAST — the exact ordering that
+    /// broke the early-exit version — the winner must still be the true card.
+    func testMatchFindsTheTrueCardEvenWhenAWeakerMatchIsOrderedFirst() throws {
         let sample = truth[0]
         let fp = try fingerprint(plate: sample.plate)
         let ranked = try matcher.match(query: fp, candidateIds: matcher.allCardIds)
@@ -100,14 +87,63 @@ final class LensMatcherTests: XCTestCase {
                                   "fixture assumption: a second candidate also clears the floor")
         XCTAssertLessThan(decoy.inliers, winner.inliers)
 
-        // decoy FIRST, true card LAST — the exact ordering that broke the early-exit version.
         let rest = matcher.allCardIds.filter { $0 != decoy.cardId && $0 != winner.cardId }
         let ordered = [decoy.cardId] + rest + [winner.cardId]
-        let state = LensMatcher.identify(fingerprint: fp, matcher: matcher, floor: 20, candidateIds: ordered)
+        let out = try matcher.match(query: fp, candidateIds: ordered)
+        let state = LensMatcher.verdict(results: out, consistency: Self.agrees)
         guard case .identified(let cardId, _) = state else {
             return XCTFail("expected .identified, got \(state)")
         }
         XCTAssertEqual(cardId, winner.cardId)
+    }
+
+    // MARK: - The lock gate (§6.2)
+
+    /// OCR agreement that corroborates whatever the visual matcher picked — the "consistent" leg of
+    /// the gate satisfied, so the other two legs are what these tests vary.
+    private static let agrees = CandidateConsistency(nameAgrees: true, denomOk: true,
+                                                     hasTwinInPool: false)
+
+    private func results(_ inliers: Int...) -> [MatchCandidate] {
+        inliers.enumerated().map { MatchCandidate(cardId: "card_\($0.offset)", cosine: 0,
+                                                  inliers: $0.element) }
+    }
+
+    func testNothingClearingTheInlierFloorIsNoMatch() {
+        XCTAssertEqual(LensMatcher.verdict(results: results(19, 3), consistency: Self.agrees), .noMatch)
+        XCTAssertEqual(LensMatcher.verdict(results: [], consistency: Self.agrees), .noMatch)
+    }
+
+    func testStrongSeparatedAndCorroboratedLocks() {
+        XCTAssertEqual(LensMatcher.verdict(results: results(64, 12), consistency: Self.agrees),
+                       .identified(cardId: "card_0", inliers: 64))
+    }
+
+    /// A strong but UNSEPARATED match is the chooser, never a lock — two cards this close is exactly
+    /// the shape of a wrong answer, and the chooser held the true card 48 times out of 48.
+    func testAStrongButUnseparatedMatchGoesToTheChooser() {
+        XCTAssertEqual(LensMatcher.verdict(results: results(30, 29, 28, 27, 26),
+                                           consistency: Self.agrees),
+                       .ambiguous(["card_0", "card_1", "card_2", "card_3"]))
+    }
+
+    /// Each consistency leg alone is enough to withhold a lock. `hasTwinInPool` is inert against the
+    /// served catalog today (`card_twin` is 0 rows) and is the entire wrong-lock story — so it is
+    /// pinned here rather than trusted, and it must keep working the day the table is populated.
+    func testEachOcrDisagreementWithholdsTheLock() {
+        for cons in [CandidateConsistency(nameAgrees: false, denomOk: true, hasTwinInPool: false),
+                     CandidateConsistency(nameAgrees: true, denomOk: false, hasTwinInPool: false),
+                     CandidateConsistency(nameAgrees: true, denomOk: true, hasTwinInPool: true)] {
+            XCTAssertEqual(LensMatcher.verdict(results: results(64, 12), consistency: cons),
+                           .ambiguous(["card_0", "card_1"]), "\(cons)")
+        }
+    }
+
+    /// A single candidate has nothing to be separated from. `max(second, 1)` makes the ratio the
+    /// inlier count itself, which clears 1.3 — so one strong corroborated match locks.
+    func testASoleStrongCandidateLocks() {
+        XCTAssertEqual(LensMatcher.verdict(results: results(21), consistency: Self.agrees),
+                       .identified(cardId: "card_0", inliers: 21))
     }
 
     /// Finding 3 (review 2026-08-06): the only realistic source of an ORB false positive is
@@ -139,109 +175,4 @@ final class LensMatcherTests: XCTestCase {
         XCTAssertNil(hit, "twin sibling should not be found — cross-print ORB score stayed below floor")
     }
 
-    // MARK: - Matcher.narrow (Task 9b)
-
-    /// Narrowing must keep the true card for every single-truth plate in the fixture, and its rank
-    /// within the FULL cosine ranking (not just membership inside some topK) must be genuinely
-    /// high — proving the order is meaningful rather than "topK happens to be bigger than the
-    /// fixture". 88 cards total; a full ranking (topK == allCardIds.count) still exercises real
-    /// cosine scoring and sorting, it just can't demonstrate SIZE-narrowing on its own — that is
-    /// `testNarrowReturnsExactlyTopKNotEverything`'s job.
-    /// Narrowing must produce a MEANINGFUL cosine ranking, not merely include every id somewhere
-    /// in a topK big enough to be trivial (topK == 88 on an 88-card pack proves nothing about
-    /// ordering — see this file's header note on that trap). Proven two ways against the
-    /// fixture's 62 single-truth plates:
-    ///
-    /// 1. With topK == the whole pack, `narrow` must return every id (a correctness check on the
-    ///    sort/prefix, not on ranking quality), and the true card's rank in that full ranking must
-    ///    sit, on average, well above chance (chance ≈ full/2) — asserted against `full` itself so
-    ///    the bound stays honest if the fixture's card count ever changes. A broken or randomized
-    ///    ranking could not clear this; the measured median/mean are far inside it.
-    /// 2. Recall at topK values genuinely smaller than the fixture is PRINTED, not asserted to
-    ///    100% — that number is a calibration input for `LensMatcher.identify`'s `topK` default,
-    ///    not a bar to clear by inflating `topK` until green (explicit task instruction).
-    ///    ⚠️ Measured: it is NOT 100% at small topK on this fixture. One plate (`IMG_1540` /
-    ///    `pl4-34`) ranks 80th of 88 by cosine — worse than most distractors for its OWN true
-    ///    card. Left in, not excluded: it is the fixture doing its job.
-    func testNarrowingRanksTheTrueCardWellAboveChance() throws {
-        let full = matcher.allCardIds.count
-        var ranks: [(plate: String, cardId: String, rank: Int)] = []
-        for t in truth {
-            let fp = try fingerprint(plate: t.plate)
-            let ranked = try matcher.narrow(query: fp, topK: full)
-            XCTAssertEqual(ranked.count, full, "topK == pack size must return the whole pack")
-            let idx = try XCTUnwrap(ranked.firstIndex(of: t.cardId),
-                                    "narrow (topK == full pack) must return every id, incl. the true card, for \(t.plate)")
-            ranks.append((t.plate, t.cardId, idx))
-        }
-        let sortedRanks = ranks.map(\.rank).sorted()
-        let avgRank = Double(sortedRanks.reduce(0, +)) / Double(sortedRanks.count)
-        let median = sortedRanks[sortedRanks.count / 2]
-        let chance = Double(full) / 2
-        print("NARROW full-ranking true-card rank of \(full): avg=\(avgRank) median=\(median) "
-            + "max=\(sortedRanks.last ?? -1) min=\(sortedRanks.first ?? -1) n=\(sortedRanks.count) (chance≈\(chance))")
-        for r in ranks.sorted(by: { $0.rank > $1.rank }).prefix(5) {
-            print("NARROW worst rank: \(r.plate) (\(r.cardId)) rank=\(r.rank) of \(full)")
-        }
-        for k in [10, 20, 30, 50] {
-            let hit = ranks.filter { $0.rank < k }.count
-            print("NARROW recall @topK=\(k): \(hit)/\(ranks.count) = \(Double(hit) / Double(ranks.count))")
-        }
-
-        XCTAssertLessThan(Double(median), chance / 2,
-            "median true-card rank \(median) is not meaningfully better than chance (\(chance)) — narrow's ordering looks arbitrary")
-        XCTAssertLessThan(avgRank, chance / 2,
-            "mean true-card rank \(avgRank) is not meaningfully better than chance (\(chance)) — narrow's ordering looks arbitrary")
-    }
-
-    /// Narrowing actually narrows: for a topK well below the fixture's 88 cards, the result is
-    /// exactly `topK` ids, not the whole pack.
-    func testNarrowReturnsExactlyTopKNotEverything() throws {
-        let sample = truth[0]
-        let fp = try fingerprint(plate: sample.plate)
-        let narrowed = try matcher.narrow(query: fp, topK: 10)
-        XCTAssertEqual(narrowed.count, 10)
-        XCTAssertLessThan(Set(narrowed).count, matcher.allCardIds.count,
-                          "narrow returned the whole pack, not a subset")
-    }
-
-    /// `identify` still resolves through the new two-stage (narrow → match) path with no
-    /// `candidateIds` override — the production call shape.
-    func testIdentifyResolvesThroughNarrowThenMatch() throws {
-        let sample = truth[0]
-        // No topK override — the exact production call shape (default topK, narrow → match).
-        let state = LensMatcher.identify(fingerprint: try fingerprint(plate: sample.plate),
-                                         matcher: matcher, floor: 20)
-        guard case .identified(let cardId, _) = state else {
-            return XCTFail("expected .identified, got \(state)")
-        }
-        XCTAssertEqual(cardId, sample.cardId)
-    }
-
-    /// An absent/unusable similarity index must fail LOUDLY through `identify`, not silently as
-    /// `.noMatch` — `.noMatch` already means "genuine miss" and is indistinguishable from a broken
-    /// pack if narrow's failure is swallowed into it.
-    func testIdentifyReportsUnreadableWhenNarrowHasNoUsableVectors() throws {
-        let broken = try Self.storeWithZeroFingerprintRows()
-        defer { try? broken.close() }
-        let brokenMatcher = try Matcher(store: broken, codebook: try Codebook.bundled(in: Bundle(for: Self.self)))
-        let state = LensMatcher.identify(fingerprint: try fingerprint(plate: truth[0].plate),
-                                         matcher: brokenMatcher, floor: 20)
-        guard case .unreadable = state else {
-            return XCTFail("expected .unreadable (loud failure), got \(state) — a broken pack must never read as a plain miss")
-        }
-    }
-
-    private static func storeWithZeroFingerprintRows() throws -> FingerprintStore {
-        let path = NSTemporaryDirectory() + "fp-empty-\(UUID().uuidString).sqlite"
-        let q = try DatabaseQueue(path: path)
-        try q.write { db in
-            try db.execute(sql: """
-            CREATE TABLE card_fp(card_id TEXT PRIMARY KEY, fp_version INTEGER, global_vec BLOB,
-                                  kp_count INTEGER, keypoints BLOB, descriptors BLOB);
-            """)
-        }
-        try q.close()
-        return try FingerprintStore(path: path)
-    }
 }

@@ -22,6 +22,8 @@ final class LensModel {
     private let source: LensPhotoSource?
     private let catalog: CatalogStore?
     private let matcher: Matcher?
+    /// The OCR gate's narrowing index — the same one the live scanner uses, built once per pack.
+    private let index: CandidateNarrowing?
     private let wanted: Set<String>
     /// Built on the first shutter press, not in `init`: `LiveLensWork` has to capture a closure
     /// that reads `images` off this very model, which does not exist yet at init time.
@@ -31,10 +33,11 @@ final class LensModel {
     private var session = UUID()
 
     init(source: LensPhotoSource? = nil, catalog: CatalogStore? = nil, matcher: Matcher? = nil,
-         wanted: Set<String> = [], owned: Set<String> = []) {
+         index: CandidateNarrowing? = nil, wanted: Set<String> = [], owned: Set<String> = []) {
         self.source = source
         self.catalog = catalog
         self.matcher = matcher
+        self.index = index
         self.wanted = wanted
         self.ownedIds = owned
     }
@@ -135,8 +138,8 @@ final class LensModel {
 
     private func ensureQueue() -> LensQueue? {
         if let queue { return queue }
-        guard let matcher else { return nil }
-        let work = LiveLensWork(matcher: matcher,
+        guard let matcher, let index else { return nil }
+        let work = LiveLensWork(matcher: matcher, index: index,
                                 imageForPhoto: { [weak self] id in await self?.images[id] },
                                 wanted: wanted)
         let token = session

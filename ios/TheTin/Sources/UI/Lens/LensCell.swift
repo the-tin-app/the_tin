@@ -9,6 +9,10 @@ enum LensCellState: Equatable {
     /// user distrust the answers the lens DID get right.
     case unreadable(String)
     case identified(cardId: String, inliers: Int)
+    /// The lock gate found a strong match it could not separate or could not corroborate against the
+    /// OCR read. Carries the top four for the chooser — measured at 48 of 48 for containing the true
+    /// card, so this is a near-guaranteed tap-to-resolve, not a failure.
+    case ambiguous([String])
     case noMatch
 }
 
@@ -16,6 +20,13 @@ struct LensCell: Identifiable, Equatable {
     let id: UUID
     /// Position in the source photo, so the cell can be outlined on it.
     let quad: CardQuad
+    /// The upright rotation detection resolved for this cell. With `quad` it is everything needed to
+    /// rebuild this exact plate later — which is what lets the expensive OCR run in the LAST stage
+    /// without holding a 2.4 MB plate or re-running non-deterministic detection.
+    var degrees: Int = 0
+    /// ORB keypoints found. The best single predictor of "is this a card at all": phantom quads sit
+    /// at a median of 15 against a real card's saturated 650.
+    var fpCount: Int = 0
     /// Set by pass A, independently of `state` — a card can be a known wishlist hit while pass B
     /// has not run yet.
     var onWishlist: Bool
@@ -26,10 +37,25 @@ struct LensCell: Identifiable, Equatable {
     var wishlistCardId: String?
     var state: LensCellState
 
-    init(id: UUID = UUID(), quad: CardQuad, onWishlist: Bool = false,
-         wishlistCardId: String? = nil, state: LensCellState = .pending) {
-        self.id = id; self.quad = quad; self.onWishlist = onWishlist
+    init(id: UUID = UUID(), quad: CardQuad, degrees: Int = 0, fpCount: Int = 0,
+         onWishlist: Bool = false, wishlistCardId: String? = nil,
+         state: LensCellState = .pending) {
+        self.id = id; self.quad = quad; self.degrees = degrees; self.fpCount = fpCount
+        self.onWishlist = onWishlist
         self.wishlistCardId = wishlistCardId; self.state = state
+    }
+
+    /// The card this cell resolved to, if it is settled. `.ambiguous` deliberately has none — four
+    /// candidates is not an answer, and showing the leader would be exactly the confident wrong
+    /// answer the gate refused to give.
+    var resolvedCardId: String? {
+        if case .identified(let id, _) = state { return id }
+        return nil
+    }
+
+    var chooserOptions: [String] {
+        if case .ambiguous(let ids) = state { return ids }
+        return []
     }
 
     /// Pass B's answer once it exists, pass A's until then. Pass B wins when both are known: pass A

@@ -197,7 +197,7 @@ struct ScanTabContainer: View {
     @ViewBuilder private var lens: some View {
         if let lensModel, let lensSource {
             LensView(model: lensModel, source: lensSource)
-        } else if let matcher = pack.matcher {
+        } else if let matcher = pack.matcher, let index = pack.index {
             // Assigned from a task, never built in the branch: `body` must not construct either
             // of these (see `model`).
             //
@@ -215,7 +215,8 @@ struct ScanTabContainer: View {
                 let source = lensSource ?? LensPhotoSource(built.camera)
                 lensSource = source
                 lensModel = LensModel(source: source, catalog: store, matcher: matcher,
-                                      wanted: wants?.wanted ?? [], owned: built.owned)
+                                      index: index, wanted: wants?.wanted ?? [],
+                                      owned: built.owned)
             }
         } else {
             TinLoadingView()

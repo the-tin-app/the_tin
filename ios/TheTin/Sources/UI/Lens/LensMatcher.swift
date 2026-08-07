@@ -29,48 +29,58 @@ enum LensMatcher {
         return best.inliers >= floor ? best.cardId : nil
     }
 
-    /// Pass B. Open-set identification against the whole pack.
+    /// Pass B. Open-set identification through the **OCR gate** — the live single-card scanner's
+    /// proposer, on a cell cut out of a multi-card photograph.
     ///
-    /// Two stages: `Matcher.narrow` (cheap cosine over global vectors) cuts ~23,140 candidates
-    /// down to `topK`, then exhaustive `Matcher.match` (geometric RANSAC) ranks only those.
-    /// Deliberately NOT the early-exit `matchRanked` for that second stage. `matchRanked`'s own
-    /// doc comment says `rankedIds` MUST arrive in narrowing-agreement order — its early exit is
-    /// only sound because the true card sits in the top tier once the name OCRs. This feature has
-    /// no OCR gate, and `narrow`'s output, while topK-limited, is not "the true card is near the
-    /// front" reliable enough to bound a search by early-exit rather than by set membership — so
-    /// an early exit here has nothing to make it safe: any candidate that clears `floor` and
-    /// dominates its batch ends the search, whether or not a much better match sits later in the
-    /// list. `Matcher.match` has no early exit and so nothing for candidate order to break — don't
-    /// swap this back to `matchRanked` without an ordering source as strong as OCR narrowing.
+    /// ⚠️ This replaced a global visual-word vector (`Matcher.narrow`) that was built, shipped and
+    /// then measured against 118 real cells: it kept the true card 35.4% of the time at top-300, at
+    /// 3,460 ms/cell, and 34% of every answer the feature gave was the WRONG card. The OCR gate keeps
+    /// it 75.8% of the time inside a ≤160 pool at 731 ms — more than twice as accurate and 4.7×
+    /// cheaper, with no trade-off to weigh. **Do not restore narrowing.** The reason is physical, not
+    /// incidental: appearance summaries drift under lighting, glare and blur; the geometric
+    /// arrangement RANSAC verifies does not, and a printed collector number does not either. A
+    /// correct number read alone gives 100% pool recall.
     ///
-    /// `topK` default is 300 — a ~77x reduction against the ~23,140-card pack, chosen as a
-    /// starting point ahead of calibration against real photographs (the fixture-measured recall
-    /// and typical true-card rank are far inside this, see `LensMatcherTests`); it is a threshold,
-    /// not a constant, and is expected to move.
+    /// The verdict is `ScanSession`'s F1 lock gate, minus the frame-denominated predicates — a
+    /// photograph has exactly one look, so `stable` and `covered` have nothing to count:
     ///
-    /// `candidateIds` bypasses `narrow` entirely when given — it exists purely as a test seam
-    /// (same pattern as `MultiCardDetector.forEachCell`'s `orienter` parameter) so a test can pin
-    /// that `match`'s ranking does not depend on candidate order. No production caller passes it.
-    static func identify(fingerprint: CardFingerprint, matcher: Matcher, floor: Int,
-                         candidateIds: [String]? = nil, topK: Int = 300) -> LensCellState {
+    /// ```
+    /// !strong                            -> noMatch      (nothing clears the inlier floor)
+    /// strong && separated && consistent  -> identified   (measured: 0 wrong in 346 cells)
+    /// otherwise                          -> ambiguous    (top 4; held the truth 48 of 48)
+    /// ```
+    ///
+    /// Exhaustive `Matcher.match`, not the early-exit `matchRanked`: this is byte-for-byte the gate
+    /// that produced the 63.3%/0-wrong measurement, and an early exit would change what is measured.
+    ///
+    /// ⚠️ Do not raise `CandidateIndex.pool`'s 160 cap for this. Measured 2026-08-07 at 400: the same
+    /// 57 locks over the same 90 cells for ~26% more wall clock. 28 card-sized cells were pinned at
+    /// the cap and 26 of them already held the true card — the proposer stopped being the bottleneck.
+    static func identify(plate: CanonicalFrame, fingerprint: CardFingerprint, matcher: Matcher,
+                         index: CandidateNarrowing, config: LockConfig = LockConfig()) -> LensCellState {
         guard fingerprint.count > 0 else { return .noMatch }
-        let pool: [String]
-        if let candidateIds {
-            pool = candidateIds
-        } else {
-            do {
-                pool = try matcher.narrow(query: fingerprint, topK: topK)
-            } catch {
-                // Loud, not `.noMatch`: a broken/absent similarity index must never read as "we
-                // looked and found nothing" — that's indistinguishable from a genuine miss and
-                // would hide a pack-integrity defect behind an answer that looks ordinary. Reuses
-                // `.unreadable`, which `LensCell.swift` already documents as "never a silent drop".
-                return .unreadable("no similarity index")
-            }
-        }
-        guard let best = (try? matcher.match(query: fingerprint, candidateIds: pool))?.first,
-              best.inliers >= floor else { return .noMatch }
-        return .identified(cardId: best.cardId, inliers: best.inliers)
+        let fields = TextGate.extract(plate: plate)
+        let pool = index.pool(fields: fields)
+        guard !pool.isEmpty,
+              let results = try? matcher.match(query: fingerprint, candidateIds: pool),
+              let top = results.first else { return .noMatch }
+        return verdict(results: results,
+                       consistency: index.consistency(cardId: top.cardId, fields: fields,
+                                                      pool: Set(pool)),
+                       config: config)
+    }
+
+    /// The gate itself, separated from what feeds it so the three-way table is testable without a
+    /// camera, a plate or a catalog. `results` must be inlier-descending — `Matcher.match` sorts.
+    static func verdict(results: [MatchCandidate], consistency: CandidateConsistency,
+                        config: LockConfig = LockConfig()) -> LensCellState {
+        guard let top = results.first, top.inliers >= config.tLock else { return .noMatch }
+        let second = results.dropFirst().first?.inliers ?? 0
+        let separated = Double(top.inliers) / Double(max(second, 1)) >= config.ratioR
+        let consistent = consistency.nameAgrees && consistency.denomOk
+            && !consistency.hasTwinInPool
+        guard separated, consistent else { return .ambiguous(results.prefix(4).map(\.cardId)) }
+        return .identified(cardId: top.cardId, inliers: top.inliers)
     }
 }
 
@@ -90,8 +100,18 @@ enum LensMatcher {
 /// a plate's 2.4 MB, so a 40-card photo holds ~1 MB instead of ~97 MB. The
 /// plates-must-not-accumulate constraint was always about the plates. Jetsam is uncatchable by
 /// Crashlytics and has killed this app once.
+///
+/// ⚠️ **OCR lives in pass B, and that placement is the product.** The gate needs the plate, and the
+/// plate is gone by then — so pass B rebuilds exactly one at a time from the cell's `quad` and
+/// `degrees` (`MultiCardDetector.plate`). The obvious alternative, OCR inside `detect` while the
+/// plate is still in hand, is cheaper by one render per cell and wrong: OCR is 731 ms/cell against
+/// pass A's 250 ms, so it would put the slowest work in the FIRST stage and make every photo's
+/// "is anything I want here" wait behind the previous photo's pricing detail. Same total time,
+/// wishlist answers ~3× later, and that ordering is the whole reason `LensQueue` exists.
 struct LiveLensWork: LensWork {
     let matcher: Matcher
+    /// The OCR gate's index. Also the scanner's — one `CandidateIndex` per pack, built above the tab.
+    let index: CandidateNarrowing
     let imageForPhoto: @Sendable (UUID) async -> CIImage?
     let wanted: Set<String>
     var floor: Int = 20                 // == the live scanner's LockConfig.tLock
@@ -112,14 +132,24 @@ struct LiveLensWork: LensWork {
         // leaves no crash report at all.
         MultiCardDetector.forEachCell(in: ci, context: context) { detected in
             guard detected.plate.glareCoverage <= glareCeiling else {
-                cells.append(LensCell(quad: detected.quad, state: .unreadable("reflection")))
+                cells.append(LensCell(quad: detected.quad, degrees: detected.degrees,
+                                      state: .unreadable("reflection")))
                 return
             }
             guard let fp = LensMatcher.fingerprint(detected.plate) else {
-                cells.append(LensCell(quad: detected.quad, state: .unreadable("blur")))
+                cells.append(LensCell(quad: detected.quad, degrees: detected.degrees,
+                                      state: .unreadable("blur")))
                 return
             }
-            let cell = LensCell(quad: detected.quad, state: .pending)
+            // ⚠️ Phantoms are dropped HERE, not reported as a failure, and not carried downstream.
+            // ~49% of detected quads over a binder page are glare bands, empty pockets and page
+            // edges, at a median 15 keypoints against a real card's 650. Dropping them halves the
+            // work of both remaining passes for one comparison — and they must not become
+            // `.unreadable` either, or the screen tells the user nine cards couldn't be read on a
+            // page holding four.
+            guard fp.count >= BinderPlan.minFpCount else { return }
+            let cell = LensCell(quad: detected.quad, degrees: detected.degrees, fpCount: fp.count,
+                                state: .pending)
             fingerprints[cell.id] = fp
             cells.append(cell)
         }
@@ -143,10 +173,18 @@ struct LiveLensWork: LensWork {
 
     func passB(photoId: UUID, cells: [LensCell]) async -> [LensCell] {
         let fps = await cache.fingerprints(photoId)
+        guard let ci = await imageForPhoto(photoId) else { return cells }
+        let context = CIContext()
         let out = cells.map { cell -> LensCell in
-            guard let fp = fps[cell.id] else { return cell }
+            // Same streaming discipline as `detect`: one plate alive at a time, released before the
+            // next cell is rebuilt.
+            guard let fp = fps[cell.id],
+                  let plate = MultiCardDetector.plate(quad: cell.quad, in: ci, context: context,
+                                                      degrees: cell.degrees)
+            else { return cell }
             var c = cell
-            c.resolve(LensMatcher.identify(fingerprint: fp, matcher: matcher, floor: floor),
+            c.resolve(LensMatcher.identify(plate: plate, fingerprint: fp, matcher: matcher,
+                                           index: index),
                       wanted: wanted)
             return c
         }

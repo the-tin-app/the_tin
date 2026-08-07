@@ -6,6 +6,10 @@ import Vision
 struct DetectedCell {
     let quad: CardQuad
     let plate: CanonicalFrame
+    /// The upright rotation resolved for this cell. Kept so a later stage can rebuild this exact
+    /// plate from `quad` without re-detecting and without holding the plate — see
+    /// `MultiCardDetector.plate(quad:in:context:degrees:)`.
+    let degrees: Int
 }
 
 /// A whole photo → every card in it, each as a canonical 660×920 plate.
@@ -110,8 +114,32 @@ enum MultiCardDetector {
                                      quadConfidence: q.confidence) else { continue }
             // Handed over and released: the caller's `body` returns before the next plate is
             // rendered, so only one 2.4 MB plate is ever resident.
-            body(DetectedCell(quad: q.quad, plate: plate))
+            body(DetectedCell(quad: q.quad, plate: plate, degrees: oriented.degrees))
         }
+    }
+
+    /// Rebuilds ONE plate for an already-detected quad. This is how a later stage gets a plate back
+    /// after `forEachCell` released it, and it is deliberately not "detect again":
+    ///
+    /// - `VNDetectDocumentSegmentationRequest` is documented **in this codebase** as
+    ///   non-deterministic over the same input, so re-detecting genuinely returns a different set of
+    ///   cells and nothing can be matched up with what the first pass found.
+    /// - Passing the already-resolved `degrees` makes `orientUpright` skip its scoring entirely —
+    ///   two full renders and two Vision text passes, the bulk of `detect`'s cost.
+    ///
+    /// So this is one perspective-correct, one rotate and one 660×920 render, and it holds the plate
+    /// only for as long as the caller does. That is what lets OCR live in the LAST stage instead of
+    /// the first — which is the whole reason wishlist answers arrive before pricing answers.
+    ///
+    /// `quadConfidence` comes back 0: the confidence belonged to the detection, which is not being
+    /// repeated. Callers that need it kept it the first time.
+    static func plate(quad: CardQuad, in ci: CIImage, context: CIContext,
+                      degrees: Int) -> CanonicalFrame? {
+        guard let corrected = perspectiveCorrect(quad, in: ci),
+              let oriented = OrientationNormalizer.orientUpright(corrected, context: context,
+                                                                 preferred: degrees)
+        else { return nil }
+        return render(oriented.image, context: context, quadConfidence: 0)
     }
 
     /// Perspective-corrects `quad` out of `ci` to a natural-aspect image (orientation not yet
