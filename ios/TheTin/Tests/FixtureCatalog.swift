@@ -50,6 +50,24 @@ enum FixtureCatalog {
         return try CatalogStore(path: path)
     }
 
+    // No shipped fixture card has an apostrophe or a hyphen in its name, and those are precisely the
+    // characters the name leg used to trip over — so the case has to be grafted on.
+    static let punctuatedNameCardId = "sv10-209"
+    static let punctuatedName = "Ethan's Ho-Oh ex"
+
+    static func makeWithPunctuatedName() throws -> CatalogStore {
+        let path = try copyToTemp()
+        let q = try DatabaseQueue(path: path)
+        try q.write { db in
+            try db.execute(sql: """
+            INSERT OR REPLACE INTO card(id, set_id, number, name, hp)
+              VALUES ('\(punctuatedNameCardId)', 'sv1', '209', '\(punctuatedName.replacingOccurrences(of: "'", with: "''"))', 230);
+            """)
+        }
+        try q.close()
+        return try CatalogStore(path: path)
+    }
+
     // Real row from the fixture DB (verified: card sv1-25 "Pikachu", set sv1 printed total 198):
     static let knownCardId = "sv1-25"
     static let knownNumber = "25"

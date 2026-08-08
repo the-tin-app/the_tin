@@ -90,6 +90,36 @@ final class CandidateIndexPoolTests: XCTestCase {
         }
     }
 
+    // MARK: - consistency(): the name leg, compared in a space Vision cannot break
+
+    /// ⚠️ **Both sides of the name comparison must be normalized the same way**, and for months only
+    /// one of them was: `baseName` stripped apostrophes, "mega " and mechanic suffixes off the
+    /// CATALOG name, then substring-tested it against the OCR text exactly as Vision returned it.
+    /// Vision decides word breaks and punctuation for itself, so three cards whose names it read
+    /// *perfectly* were refused a lock on Tomas's own binder pages on 2026-08-07 —
+    /// "GarchompEX" against `garchomp-ex`, "Team Rocket's Moltres(" against `team rockets moltres`,
+    /// "Ethan's Ho-Ohe" against `ethans ho-oh`. Squashing both sides to alphanumerics took the
+    /// held-out page measurement from 13 locks to 15 of 18 with zero wrong locks, the 85-cell
+    /// fixture set from 56 to 60, and `LabeledPhotoAccuracyTests` from 51/64 to 52/64.
+    ///
+    /// This is not a loosening: a genuinely garbled read still fails, which is the last assertion.
+    func testTheNameLegIgnoresWhereVisionPutTheSpacesAndPunctuation() throws {
+        let index = try CandidateIndex(store: try FixtureCatalog.makeWithPunctuatedName())
+        let id = FixtureCatalog.punctuatedNameCardId
+        func agrees(_ text: String) -> Bool {
+            index.consistency(cardId: id,
+                              fields: OcrFields(rawText: text, numerators: [], denominator: nil,
+                                                hp: nil),
+                              pool: [id]).nameAgrees
+        }
+        // Exactly what Vision returned off a 24.5 MP binder photograph.
+        XCTAssertTrue(agrees("BASIG Ethan's Ho-Ohe HP 230 Ability Golden Flame"))
+        // Same word, Vision's other favourite rendering: no spaces at all.
+        XCTAssertTrue(agrees("BASIC EthansHoOh HP230"))
+        // And a genuinely misread name is still refused — the leg still does its job.
+        XCTAssertFalse(agrees("BASIG Ethan's Ho-Ah HP 230"))
+    }
+
     // MARK: - consistency(): the twin guard, read from `card_twin`
 
     /// ⚠️ **The one link in the chain that was dead in production, and the only one nothing tested.**
