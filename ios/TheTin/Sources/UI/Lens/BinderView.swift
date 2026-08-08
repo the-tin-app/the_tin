@@ -174,6 +174,15 @@ struct BinderCaptureView: View {
                     .font(.caption2).multilineTextAlignment(.center)
                     .foregroundStyle(.yellow)
             }
+            // ⚠️ Stated, because the alternative is a shutter that silently does nothing. This used to
+            // be a crash: `capturePhoto` raises an NSException for invalid settings and Swift cannot
+            // catch it, so the app aborted mid-scan. It is caught now (see `AVSafeCapture.h`) and the
+            // refusal has to be visible or the fix just trades a crash for a dead button.
+            if let failure = source.captureFailure {
+                Text("The camera refused that shot — \(failure). Tell Tomas; this should not happen.")
+                    .font(.caption2).multilineTextAlignment(.center)
+                    .foregroundStyle(.orange)
+            }
             // DEBUG-only, and it earns its place: "the photo came back small" has several possible
             // causes and one device session was already spent telling them apart by inference.
             if let diagnostic = source.diagnostic {

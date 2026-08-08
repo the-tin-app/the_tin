@@ -19,15 +19,17 @@ final class LensPhotoSource: NSObject {
     struct Configured {
         let session: AVCaptureSession
         let output: AVCapturePhotoOutput
-        /// What the camera said it could deliver. Carried purely so a device test can report the
-        /// reason a photograph came back small instead of guessing at it — see `diagnostic`.
-        var offeredDimensions: [String] = []
+        /// Kept so `capture()` can ask the LIVE active format what it supports. The whole ordering bug
+        /// was reading that once, early, and trusting it later.
+        let device: AVCaptureDevice
     }
 
     let session: AVCaptureSession
     private let output: AVCapturePhotoOutput
     private(set) var isAvailable: Bool
-    private let offeredDimensions: [String]
+    private let device: AVCaptureDevice?
+    /// What the live active format offered at the last capture, for the on-screen diagnostic.
+    private var offeredDimensions: [String] = []
     // Serial, off-main queue for start/stop — same pattern as AVCaptureFrameSource. Apple
     // documents startRunning()/stopRunning() as blocking; a shared serial queue is what makes
     // "start, then immediately stop" (a fast tab switch) resolve in call order instead of
@@ -49,7 +51,7 @@ final class LensPhotoSource: NSObject {
         session = built?.session ?? AVCaptureSession()
         output = built?.output ?? AVCapturePhotoOutput()
         isAvailable = built != nil
-        offeredDimensions = built?.offeredDimensions ?? []
+        device = built?.device
         super.init()
     }
 
@@ -61,7 +63,8 @@ final class LensPhotoSource: NSObject {
     var diagnostic: String? {
         #if DEBUG
         let got = megapixels.map { String(format: "%.1f MP", $0) } ?? "—"
-        return "got \(got) · offers \(offeredDimensions.joined(separator: ", "))"
+        let offers = offeredDimensions.isEmpty ? "(not asked yet)" : offeredDimensions.joined(separator: ", ")
+        return "got \(got) · offers \(offers)"
         #else
         return nil
         #endif
@@ -111,30 +114,12 @@ final class LensPhotoSource: NSObject {
             }
         }
         session.commitConfiguration()
-
-        // ⚠️ AFTER `commitConfiguration`, and by AREA — both halves were wrong and cost a device run
-        // that came back 12.2 MP on every shot.
-        //
-        // Read before the commit, `device.activeFormat` is still whatever the device booted with, not
-        // the format the `.photo` preset selects — so we asked the wrong format what it supported. And
-        // `supportedMaxPhotoDimensions` is not documented as sorted, so `.last` is not "the biggest";
-        // it just happened to be the 12 MP entry.
-        //
-        // ⚠️ 24 MP is Apple's own computational fusion and is NOT offered to third-party apps — the
-        // reference photographs that measured 63.3% were taken with the system Camera app. So the goal
-        // here is not "match 24.5 MP", it is "take the largest this camera will give us", which on a
-        // 48 MP sensor is more pixels than the reference, not fewer.
-        var offered: [String] = []
-        if #available(iOS 16.0, *) {
-            let sizes = device.activeFormat.supportedMaxPhotoDimensions
-            offered = sizes.map { "\($0.width)×\($0.height)" }
-            if let best = sizes.max(by: { Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height) }) {
-                session.beginConfiguration()
-                output.maxPhotoDimensions = best
-                session.commitConfiguration()
-            }
-        }
-        return Configured(session: session, output: output, offeredDimensions: offered)
+        // ⚠️ Photo dimensions are NOT chosen here. They are chosen per capture, from the format that is
+        // active at that moment — see `capture()`. Choosing them here is what crashed a device build:
+        // `.photo` re-selects the active format when the session starts, so a value read before
+        // `startRunning()` can be absent from `supportedMaxPhotoDimensions` by the time the shutter is
+        // pressed, and `capturePhoto` raises an NSException for exactly that. Swift cannot catch it.
+        return Configured(session: session, output: output, device: device)
     }
 
     /// Starts the session and suspends until `startRunning()` has actually returned. Callers
@@ -178,18 +163,59 @@ final class LensPhotoSource: NSObject {
     func capture() async -> CIImage? {
         guard isAvailable, session.isRunning, pending == nil else { return nil }
         let settings = AVCapturePhotoSettings()
-        // Ask for the full sensor per shot. `maxPhotoDimensions` on the OUTPUT sets the ceiling;
-        // without asking here too, a capture comes back at the preset's default instead.
-        if #available(iOS 16.0, *) { settings.maxPhotoDimensions = output.maxPhotoDimensions }
+        applyPhotoDimensions(to: settings)
         let image = await withCheckedContinuation { (c: CheckedContinuation<CIImage?, Never>) in
             pendingID = settings.uniqueID
             pending = c
-            output.capturePhoto(with: settings, delegate: self)
+            // ⚠️ Through the shim, because this call is documented to RAISE and Swift cannot catch it.
+            // A crash here happened, twice, mid-scan. See `AVSafeCapture.h`.
+            var reason: NSString?
+            if !TinCapturePhotoSafely(output, settings, self, &reason) {
+                captureFailure = (reason as String?) ?? "the camera refused the capture"
+                pending = nil
+                pendingID = nil
+                c.resume(returning: nil)
+            }
         }
         guard let image else { return nil }
         megapixels = Double(image.extent.width * image.extent.height) / 1_000_000
+        captureFailure = nil
         return image
     }
+
+    /// Asks for the biggest photograph the ACTIVE format will give us, and asks at capture time.
+    ///
+    /// ⚠️ Every part of this is where it is because of a crash. `settings.maxPhotoDimensions` must be
+    /// one of the live `activeFormat.supportedMaxPhotoDimensions` or `capturePhoto` raises — so the
+    /// list is read here, immediately before the call, and `settings` is only given a value that came
+    /// out of that very list. Nothing is remembered from configuration time, because `.photo` changes
+    /// the active format when the session starts.
+    ///
+    /// ⚠️ And it deliberately prefers the largest option **at or under ~26 MP** rather than the
+    /// absolute largest. The 63.3% auto-lock figure was measured on 24.5 MP photographs; a 48 MP
+    /// sensor option is four times the pixels of 12 MP for a card whose short side is already well past
+    /// the >1,300 px band where accuracy stopped improving, and it would be an unmeasured 4× increase
+    /// in memory on a screen that holds a photograph, runs two Vision requests over it and renders a
+    /// plate per card. Matching the configuration the number was measured at is the conservative
+    /// choice; raising it is a change that should come with its own measurement.
+    private func applyPhotoDimensions(to settings: AVCapturePhotoSettings) {
+        guard #available(iOS 16.0, *), let device else { return }
+        let sizes = device.activeFormat.supportedMaxPhotoDimensions
+        offeredDimensions = sizes.map { "\($0.width)×\($0.height)" }
+        guard !sizes.isEmpty else { return }
+        let area = { (d: CMVideoDimensions) in Int(d.width) * Int(d.height) }
+        let ceiling = 26_000_000
+        let pick = sizes.filter { area($0) <= ceiling }.max { area($0) < area($1) }
+            ?? sizes.min { area($0) < area($1) }
+        guard let pick else { return }
+        // The OUTPUT's ceiling has to admit it too, or the settings are still invalid.
+        if area(output.maxPhotoDimensions) < area(pick) { output.maxPhotoDimensions = pick }
+        settings.maxPhotoDimensions = pick
+    }
+
+    /// Set when the camera refused a capture, so the screen can say so instead of a shutter that
+    /// silently does nothing.
+    private(set) var captureFailure: String?
 
     /// Megapixels the last capture actually delivered.
     ///
