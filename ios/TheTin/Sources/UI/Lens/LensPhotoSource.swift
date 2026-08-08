@@ -137,8 +137,6 @@ final class LensPhotoSource: NSObject {
                 c.resume()
             }
         }
-        // Only now is the active format final — see `raisePhotoCeiling`.
-        raisePhotoCeiling()
     }
 
     /// Stops the session. Settles any in-flight `capture()` with nil FIRST: `AVCapturePhotoOutput`
@@ -166,11 +164,8 @@ final class LensPhotoSource: NSObject {
     func capture() async -> CIImage? {
         guard isAvailable, session.isRunning, pending == nil else { return nil }
         let settings = AVCapturePhotoSettings()
-        // ⚠️ Copied FROM the output, never computed independently. AVFoundation raises with
-        // "must not be larger than the maxPhotoDimensions set on the AVCapturePhotoOutput", and taking
-        // the output's own value makes that inequality structurally impossible. Choosing a value here
-        // and hoping the output agreed is what raised on a device, twice.
-        if #available(iOS 16.0, *) { settings.maxPhotoDimensions = output.maxPhotoDimensions }
+        // ⚠️ Re-derived per shot, and left unset if it cannot be made valid — see `photoDimensions()`.
+        if #available(iOS 16.0, *), let dims = photoDimensions() { settings.maxPhotoDimensions = dims }
         let image = await withCheckedContinuation { (c: CheckedContinuation<CIImage?, Never>) in
             pendingID = settings.uniqueID
             pending = c
@@ -195,43 +190,54 @@ final class LensPhotoSource: NSObject {
         return processed
     }
 
-    /// Raises the photo output's ceiling to the biggest the ACTIVE format offers.
+    /// The largest photo size we can legally ask for **right now**, or nil to ask for nothing.
     ///
-    /// ⚠️ Three things here are each a bug that reached a device:
+    /// ⚠️ Recomputed before EVERY shot, because the active format changes underneath us — and it is a
+    /// 48 MP capture itself that changes it. Measured on a device: the first shot succeeded at 48 MP and
+    /// shots two, three and four were all refused with "must match one of the supportedMaxPhotoDimensions
+    /// of the video device's active format", so a page came back with one photograph out of four. A
+    /// value established once at `start()` is not a value that is still true at the shutter.
     ///
-    /// 1. **It runs after `startRunning()`.** The `.photo` preset re-selects the active format when the
-    ///    session starts, so `supportedMaxPhotoDimensions` read during configuration describes a format
-    ///    that is about to be replaced. The first crash was a value read too early.
-    /// 2. **It is inside `beginConfiguration`/`commitConfiguration`.** Assigning
-    ///    `output.maxPhotoDimensions` outside one does not take, silently — which left the output capped
-    ///    at 12 MP while `settings` asked for 48 and produced
-    ///    "must not be larger than the maxPhotoDimensions set on the AVCapturePhotoOutput".
-    /// 3. **It goes through the exception shim.** The setter itself raises for a value the active format
-    ///    does not support, and Swift cannot catch that either.
+    /// Two documented raises have to be satisfied at the same instant, which is why this is one function:
+    ///   • `settings.maxPhotoDimensions` must not exceed `output.maxPhotoDimensions`, and
+    ///   • it must be one of the LIVE `activeFormat.supportedMaxPhotoDimensions`.
+    /// Returning the output's own value after checking it against the live list satisfies both. Swift
+    /// cannot catch either raise, so "probably valid" is not good enough.
     ///
-    /// Failing leaves the default ceiling in place: a smaller photograph, which is a worse scan rather
-    /// than a dead one.
+    /// ⚠️ Returning nil is a real outcome, not a failure path to tidy away: no `maxPhotoDimensions` means
+    /// the default photo size, which is smaller but always legal. A smaller photograph is a worse scan;
+    /// a refused shot is a missing quarter of the page.
     ///
-    /// ⚠️ It asks for the LARGEST the format offers, and the downscale in `capture()` is what keeps that
-    /// affordable. An earlier version capped the REQUEST at ~26 MP intending to select a 24 MP option —
-    /// and on a real iPhone 17 Pro Max the format offers 12 MP and 48 MP with nothing between, so
-    /// "conservative" selected **12.2 MP**: measured, a card's short side came out at ~1,119 px, which
-    /// sits in the 65%-in-top-300 band rather than the 90% band above 1,300 px. Capping the request was
-    /// the wrong lever; capping what gets PROCESSED is the right one.
-    private func raisePhotoCeiling() {
-        guard #available(iOS 16.0, *), let device else { return }
-        let sizes = device.activeFormat.supportedMaxPhotoDimensions
-        offeredDimensions = sizes.map { "\($0.width)×\($0.height)" }
-        guard let best = sizes.max(by: {
+    /// It asks for the LARGEST the format offers, with `capture()`'s downscale keeping that affordable.
+    /// An earlier version capped the REQUEST at ~26 MP intending to select a 24 MP option — and this
+    /// phone offers 12 MP and 48 MP with nothing between, so "conservative" selected 12.2 MP and a card's
+    /// short side came out at ~1,119 px: the 65%-in-top-300 band rather than the 90% band above 1,300 px.
+    /// Capping the request was the wrong lever; capping what gets PROCESSED is the right one.
+    @available(iOS 16.0, *)
+    private func photoDimensions() -> CMVideoDimensions? {
+        guard let device else { return nil }
+        let live = device.activeFormat.supportedMaxPhotoDimensions
+        offeredDimensions = live.map { "\($0.width)×\($0.height)" }
+        let same = { (a: CMVideoDimensions, b: CMVideoDimensions) in a.width == b.width && a.height == b.height }
+        guard let best = live.max(by: {
             Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height)
-        }) else { return }
-        var reason: NSString?
-        let ok = TinRunCatchingObjCException({ [session, output] in
-            session.beginConfiguration()
-            output.maxPhotoDimensions = best
-            session.commitConfiguration()
-        }, &reason)
-        if !ok { captureFailure = "couldn't request full resolution — \((reason as String?) ?? "?")" }
+        }) else { return nil }
+
+        // Raise (or lower) the output to something this format actually supports. ⚠️ Inside a
+        // configuration block, without which the assignment silently does not take — that was its own
+        // device failure, and the symptom was settings asking for 48 MP against an output still at 12.
+        if !same(output.maxPhotoDimensions, best) {
+            var reason: NSString?
+            let ok = TinRunCatchingObjCException({ [session, output] in
+                session.beginConfiguration()
+                output.maxPhotoDimensions = best
+                session.commitConfiguration()
+            }, &reason)
+            if !ok { captureFailure = "couldn't request full resolution — \((reason as String?) ?? "?")" }
+        }
+        // Ask only for what is verifiably legal after all that.
+        let settled = output.maxPhotoDimensions
+        return live.contains(where: { same($0, settled) }) ? settled : nil
     }
 
     /// Set when the camera refused a capture or a configuration change, so the screen can say so
