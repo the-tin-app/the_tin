@@ -22,12 +22,6 @@ struct BinderBrowseView: View {
                     .opacity(showingList ? 1 : 0).allowsHitTesting(showingList)
             }
         }
-        // ⚠️ The capture screen PAUSES the queue in its `onDisappear`, and leaving it for this screen is
-        // exactly that. Without resuming here, every photograph still being read when the user tapped
-        // Done stays paused forever — its pockets frozen on whatever `detect` had put in them, which
-        // reads as a page of unidentifiable cards. Pass B is the slow stage, so the window is the width
-        // of the whole last page.
-        .onAppear { model.resume() }
         .sheet(item: $openSlot) { slot in
             NavigationStack {
                 BinderSlotSheet(model: model, store: store, slot: slot)

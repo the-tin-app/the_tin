@@ -62,9 +62,10 @@ final class LensPhotoSource: NSObject {
     /// already spent narrowing them by inference. A line on screen answers it in one look.
     var diagnostic: String? {
         #if DEBUG
-        let got = megapixels.map { String(format: "%.1f MP", $0) } ?? "—"
+        let shot = capturedMegapixels.map { String(format: "%.1f", $0) } ?? "—"
+        let used = megapixels.map { String(format: "%.1f", $0) } ?? "—"
         let offers = offeredDimensions.isEmpty ? "(not asked yet)" : offeredDimensions.joined(separator: ", ")
-        return "got \(got) · offers \(offers)"
+        return "shot \(shot) MP → processed \(used) MP · offers \(offers)"
         #else
         return nil
         #endif
@@ -178,9 +179,11 @@ final class LensPhotoSource: NSObject {
             }
         }
         guard let image else { return nil }
-        megapixels = Double(image.extent.width * image.extent.height) / 1_000_000
+        let processed = Self.downscaledForProcessing(image)
+        capturedMegapixels = Double(image.extent.width * image.extent.height) / 1_000_000
+        megapixels = Double(processed.extent.width * processed.extent.height) / 1_000_000
         captureFailure = nil
-        return image
+        return processed
     }
 
     /// Asks for the biggest photograph the ACTIVE format will give us, and asks at capture time.
@@ -191,23 +194,19 @@ final class LensPhotoSource: NSObject {
     /// out of that very list. Nothing is remembered from configuration time, because `.photo` changes
     /// the active format when the session starts.
     ///
-    /// ⚠️ And it deliberately prefers the largest option **at or under ~26 MP** rather than the
-    /// absolute largest. The 63.3% auto-lock figure was measured on 24.5 MP photographs; a 48 MP
-    /// sensor option is four times the pixels of 12 MP for a card whose short side is already well past
-    /// the >1,300 px band where accuracy stopped improving, and it would be an unmeasured 4× increase
-    /// in memory on a screen that holds a photograph, runs two Vision requests over it and renders a
-    /// plate per card. Matching the configuration the number was measured at is the conservative
-    /// choice; raising it is a change that should come with its own measurement.
+    /// ⚠️ It asks for the LARGEST the format offers, and the downscale in `capture()` is what keeps
+    /// that affordable. An earlier version capped the request at ~26 MP intending to select a 24 MP
+    /// option — and on a real iPhone 17 Pro Max the format offers 12 MP and 48 MP with nothing between,
+    /// so "conservative" selected **12.2 MP**: measured, a card's short side came out at ~1,119 px,
+    /// which sits in the 65%-in-top-300 band rather than the 90% band above 1,300 px. Capping the
+    /// REQUEST was the wrong lever; capping what gets processed is the right one.
     private func applyPhotoDimensions(to settings: AVCapturePhotoSettings) {
         guard #available(iOS 16.0, *), let device else { return }
         let sizes = device.activeFormat.supportedMaxPhotoDimensions
         offeredDimensions = sizes.map { "\($0.width)×\($0.height)" }
         guard !sizes.isEmpty else { return }
         let area = { (d: CMVideoDimensions) in Int(d.width) * Int(d.height) }
-        let ceiling = 26_000_000
-        let pick = sizes.filter { area($0) <= ceiling }.max { area($0) < area($1) }
-            ?? sizes.min { area($0) < area($1) }
-        guard let pick else { return }
+        guard let pick = sizes.max(by: { area($0) < area($1) }) else { return }
         // The OUTPUT's ceiling has to admit it too, or the settings are still invalid.
         if area(output.maxPhotoDimensions) < area(pick) { output.maxPhotoDimensions = pick }
         settings.maxPhotoDimensions = pick
@@ -216,6 +215,30 @@ final class LensPhotoSource: NSObject {
     /// Set when the camera refused a capture, so the screen can say so instead of a shutter that
     /// silently does nothing.
     private(set) var captureFailure: String?
+
+    /// What the sensor delivered, before the downscale. Distinct from `megapixels`, which is what the
+    /// pipeline actually sees.
+    private(set) var capturedMegapixels: Double?
+
+    /// Everything downstream — detection, plates, the tile JPEG, the DEBUG fixture — sees THIS, not the
+    /// 48 MP original.
+    ///
+    /// ⚠️ The number is the measurement, not a guess. The 63.3% auto-lock figure was taken on 24.5 MP
+    /// photographs (5712×4284) from the system Camera app, and card size is the strongest predictor we
+    /// have: >1,300 px short side gave 90% in top-300 against 65% for 1,000–1,300. A 48 MP capture
+    /// downscaled to ~24 MP reproduces the measured configuration almost exactly, and caps the memory
+    /// every later stage pays — one screen holds the photograph, runs two Vision requests over it and
+    /// renders a 660×920 plate per card, and jetsam samples the peak.
+    nonisolated static func downscaledForProcessing(_ image: CIImage) -> CIImage {
+        let ext = image.extent
+        let pixels = Double(ext.width * ext.height)
+        guard ext.width > 0, ext.height > 0, pixels > processingPixelCeiling else { return image }
+        let s = (processingPixelCeiling / pixels).squareRoot()
+        return image.transformed(by: CGAffineTransform(scaleX: s, y: s))
+    }
+
+    /// 24.5 MP — the resolution the accuracy was measured at.
+    static let processingPixelCeiling: Double = 5_712 * 4_284
 
     /// Megapixels the last capture actually delivered.
     ///

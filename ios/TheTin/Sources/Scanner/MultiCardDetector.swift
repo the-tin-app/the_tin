@@ -2,6 +2,42 @@ import CoreImage
 import Foundation
 import Vision
 
+/// How big a card is allowed to be, in units of the photograph's short side.
+///
+/// ⚠️ **This is the filter an aspect ratio cannot do, and the reason is a geometric coincidence.**
+/// One card is 63×88 mm, so short/long = **0.716**. TWO cards side by side are 126×88, so short/long
+/// = **0.698** — inside any window wide enough to accept a real card at an angle. `QuadFilter`
+/// therefore accepts a card PAIR exactly as readily as a card, and measured on real device
+/// photographs it did: 2 of 21 detected quads spanned two pockets, each taking one pocket and leaving
+/// its neighbour's reading empty. That is what "the right cards, in the wrong order" looks like.
+///
+/// The way out is that **capture is always 2×2**, so a card's size in the frame is known within a
+/// factor of about two whatever the binder's shape. Measured over one 3×3 page (21 quads, 4 tiles) at
+/// 3024×4032: real cards had a short edge of **0.296–0.396** of the frame's short side and a long edge
+/// of 0.37–0.51, while the two card-pairs had long edges of **0.68 and 0.75**, and five slivers had
+/// short edges of 0.11–0.20 (three of which cleared the 300-keypoint floor, so that floor does not
+/// catch them).
+struct CardSizeWindow {
+    /// Below this the quad is a sliver — a text band, a sleeve edge, the gap between pockets.
+    var minShortSide: Double
+    /// Above this it spans more than one pocket. 0.60 sits between the widest real card measured
+    /// (0.51) and the narrowest card-pair (0.68).
+    var maxLongSide: Double
+
+    /// ⚠️ The floor is deliberately permissive relative to the measured card floor of 0.296, because
+    /// the two errors are not symmetric: a phantom that survives usually loses its pocket to a real
+    /// card on inlier count anyway, whereas a real card dropped here is a pocket that reads EMPTY and
+    /// cannot be recovered.
+    static let twoByTwoTile = CardSizeWindow(minShortSide: 0.22, maxLongSide: 0.60)
+
+    func admits(quad: ScoredQuad, frameShortSide: Double) -> Bool {
+        guard frameShortSide > 0 else { return true }
+        let w = Double(quad.size.width), h = Double(quad.size.height)
+        let short = min(w, h) / frameShortSide, long = max(w, h) / frameShortSide
+        return short >= minShortSide && long <= maxLongSide
+    }
+}
+
 /// One card found in a photo: where it was, and its canonical plate.
 struct DetectedCell {
     let quad: CardQuad
@@ -33,10 +69,13 @@ enum MultiCardDetector {
     /// themselves now.
     ///
     /// - Parameters:
-    ///   - minShortSideFraction: a quad's short side must be at least this fraction of the photo's
-    ///     short side. The single-card detector uses `VNDetectRectanglesRequest.minimumSize = 0.15`,
-    ///     which caps a photo at ~6 cards across — far too strict here. 0.04 is the starting point
-    ///     and is calibrated against real fixtures in Task 8.
+    ///   - minShortSideFraction: what `VNDetectRectanglesRequest.minimumSize` is set to. The
+    ///     single-card detector uses 0.15, which caps a photo at ~6 cards across — too strict here.
+    ///   - sizeWindow: the quad's own short and long edges, as fractions of the PHOTO's short side,
+    ///     outside which it is not a card. See `CardSizeWindow` — the filter an aspect ratio cannot do.
+    ///     ⚠️ Defaults to nil, i.e. no assumption: a window encodes how the CALLER framed the shot, and
+    ///     this detector does not know that. The binder passes `.twoByTwoTile` because its capture is
+    ///     always two pockets by two.
     ///   - orienter: injected so the rotation reuse (see below) is verifiable by a test rather
     ///     than trusted by inspection — same seam pattern as `ScanStagingStore`'s injected persist
     ///     sink. Defaults to the real `OrientationNormalizer.orientUpright`; no production caller
@@ -45,6 +84,7 @@ enum MultiCardDetector {
                             context: CIContext,
                             maxCards: Int = 48,
                             minShortSideFraction: Double = 0.04,
+                            sizeWindow: CardSizeWindow? = nil,
                             orienter: (CIImage, CIContext, Int?) -> (image: CIImage, degrees: Int)? = { corrected, context, preferred in
                                 OrientationNormalizer.orientUpright(corrected, context: context, preferred: preferred)
                             },
@@ -85,8 +125,11 @@ enum MultiCardDetector {
 
         // A quad covering essentially the whole frame is the page/case itself, not a card.
         let frameArea = ext.width * ext.height
+        let frameShort = Double(min(ext.width, ext.height))
         let scored = observations.map(toPixels).filter { q in
-            q.size.width * q.size.height < frameArea * 0.6
+            guard q.size.width * q.size.height < frameArea * 0.6 else { return false }
+            guard let sizeWindow else { return true }
+            return sizeWindow.admits(quad: q, frameShortSide: frameShort)
         }
         let selected = QuadFilter.select(scored, maxCards: maxCards)
         guard !selected.isEmpty else { return }

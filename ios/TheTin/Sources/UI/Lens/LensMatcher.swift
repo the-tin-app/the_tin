@@ -130,7 +130,11 @@ struct LiveLensWork: LensWork {
         // fingerprinted (~26 KB) and released here. Collecting them first would be 2,428,800 B
         // each × up to 48 = ~117 MB resident at once — a jetsam kill on an A10, and jetsam
         // leaves no crash report at all.
-        MultiCardDetector.forEachCell(in: ci, context: context) { detected in
+        // ⚠️ `.twoByTwoTile` is passed because the binder's capture is ALWAYS two pockets by two, which
+        // is what makes a card's size in the frame knowable — and that is the only thing that separates
+        // one card from two side by side, whose aspect ratios are 0.716 and 0.698. See `CardSizeWindow`.
+        MultiCardDetector.forEachCell(in: ci, context: context,
+                                      sizeWindow: .twoByTwoTile) { detected in
             guard detected.plate.glareCoverage <= glareCeiling else {
                 cells.append(LensCell(quad: detected.quad, degrees: detected.degrees,
                                       state: .unreadable("reflection")))

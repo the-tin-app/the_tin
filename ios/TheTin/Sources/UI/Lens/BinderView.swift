@@ -18,6 +18,19 @@ struct BinderView: View {
             // ⚠️ Here, not inside `.browsing`. A scan restored from the cache arrives with entries and
             // no metadata, and the grid is grey rectangles until this runs.
             .task(id: model.scan.entries.count) { await model.hydrate() }
+            // ⚠️ **The reading queue is paused and resumed HERE, on the parent**, not on the capture
+            // screen — and that placement is the whole fix for a measured failure. It was on
+            // `BinderCaptureView`, so moving from capture to the grid fired that view's `onDisappear`
+            // → `cancel()`. SwiftUI runs the incoming view's `onAppear` BEFORE the outgoing view's
+            // `onDisappear`, so the grid's `resume()` ran first and the capture screen's `cancel()`
+            // then paused the queue again — permanently. Measured on a real 3×3 page: exactly one
+            // more pass B completed after Done and the other three tiles' cells stayed `.pending`
+            // forever, which renders as a page of unread pockets over perfectly readable cards.
+            //
+            // On the parent, disappearing means leaving the binder altogether, which is the only time
+            // pausing is actually wanted.
+            .onAppear { model.resume() }
+            .onDisappear { model.cancel() }
     }
 
     @ViewBuilder private var phaseContent: some View {
@@ -150,12 +163,12 @@ struct BinderCaptureView: View {
         //
         // `start()` is idempotent, and `capture()` refuses to fire against a session that isn't running,
         // so an early shutter tap is a no-op rather than the AVFoundation crash it would otherwise be.
-        .onAppear {
-            Task { await source.start() }
-            // ⚠️ A pause with no resume leaves every pocket unread forever, showing as nothing at all.
-            model.resume()
-        }
-        .onDisappear { source.stop(); model.cancel() }
+        //
+        // ⚠️ Only the CAMERA is started and stopped here. Pausing the reading queue belongs to
+        // `BinderView`, because leaving this screen for the grid is not leaving the feature — see the
+        // comment there for the failure that taught us the difference.
+        .onAppear { Task { await source.start() } }
+        .onDisappear { source.stop() }
     }
 
     private var header: some View {
