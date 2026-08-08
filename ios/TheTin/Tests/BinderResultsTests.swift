@@ -34,10 +34,29 @@ final class BinderResultsTests: XCTestCase {
             owned: ["owned"]))
     }
 
-    /// An unresolved pocket gets no row: a row with no card is not information, and the grid is where
-    /// an unresolved pocket is visible and tappable.
-    func testOnlyResolvedPocketsBecomeRows() {
+    /// An unresolved pocket with nothing to name gets no row: that is not information, and the grid is
+    /// where it is visible and tappable.
+    func testOnlyNameablePocketsBecomeRows() {
         XCTAssertEqual(rows().count, 4)
+    }
+
+    /// ⚠️ An unconfirmed wishlist candidate DOES get a row, flagged. Both halves matter: "is anything I
+    /// want here" is the question this feature exists to answer and must survive pass A being demoted out
+    /// of the answer — and a row that looks identical to a confirmed one is exactly the confident wrong
+    /// answer the demotion was for.
+    func testAnUnconfirmedWishlistCandidateGetsAFlaggedRow() throws {
+        var s = BinderScan(shape: .default, createdAt: Date())
+        var e = BinderSlotEntry(slot: slot(0, 0, 0))
+        e.wishlistCandidate = "want"
+        e.onWishlist = true
+        e.options = ["want"]
+        s.put(e)
+        let out = BinderResults.rows(s, prices: ["want": 3], cards: ["want": card("want", "Bulbasaur")],
+                                     sets: [:], owned: [])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].cardId, "want")
+        XCTAssertFalse(out[0].confirmed, "a guess must not present as an identification")
+        XCTAssertTrue(out[0].onWishlist)
     }
 
     /// Wishlist hits lead unconditionally. Burying a $3 wanted card under a $200 one the user does not

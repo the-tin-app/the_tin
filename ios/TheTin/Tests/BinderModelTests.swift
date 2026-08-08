@@ -266,6 +266,61 @@ final class BinderModelTests: XCTestCase {
         XCTAssertEqual(m.entry(centre)?.cardId, "found")
     }
 
+    // MARK: - Pass A is a hint, never an answer
+
+    /// ⚠️ **Found on a device by Tomas, from the shape of the errors: "all the false locks are cards from
+    /// my wishlist".** Not a coincidence — `LensCell.cardId` fell back to pass A's wishlist match whenever
+    /// pass B declined to lock, so a pocket showed a confident answer backed by a far weaker gate. Pass A
+    /// matches ~120 wanted cards on **inlier count alone**: no separation ratio, no OCR name/number
+    /// agreement, no twin check. That was a fair trade when a hit meant "walk over and look at that case";
+    /// it is not when the same signal is rendered as the pocket's identity with a price beside it.
+    func testAWishlistHitDoesNotResolveAPocketOnItsOwn() throws {
+        let m = model()
+        let tile = try XCTUnwrap(m.currentTile)
+        var c = cell(at: CGPoint(x: 0.25, y: 0.25), options: ["b", "c", "d", "e"])
+        c.wishlistCardId = "wanted"
+        c.onWishlist = true
+        m.assignSlots(cells: [c], tile: tile, extent: extent)
+
+        let e = try XCTUnwrap(m.entry(BinderSlot(page: 0, row: 0, col: 0)))
+        XCTAssertNil(e.cardId, "pass A must not answer for the pocket")
+        XCTAssertFalse(e.isResolved)
+        XCTAssertEqual(e.wishlistCandidate, "wanted")
+        XCTAssertTrue(e.onWishlist, "…but the mark survives — 'is anything I want here' is the point")
+        XCTAssertEqual(e.options.first, "wanted",
+                       "pass A's candidate leads the chooser: it is real evidence, just not enough to answer with")
+        XCTAssertEqual(m.unconfirmedWishlistCount, 1)
+        XCTAssertEqual(m.resolvedCount, 0)
+    }
+
+    /// A pass-A hit on a cell pass B could not match AT ALL still gets a one-option chooser rather than
+    /// nothing. That is the case that matters most in a shop.
+    func testAWishlistHitAloneStillOffersSomethingToTap() throws {
+        let m = model()
+        let tile = try XCTUnwrap(m.currentTile)
+        var c = cell(at: CGPoint(x: 0.25, y: 0.25))            // .noMatch from pass B
+        c.wishlistCardId = "wanted"
+        c.onWishlist = true
+        m.assignSlots(cells: [c], tile: tile, extent: extent)
+        let e = try XCTUnwrap(m.entry(BinderSlot(page: 0, row: 0, col: 0)))
+        XCTAssertEqual(e.options, ["wanted"])
+        XCTAssertTrue(e.needsAChoice)
+    }
+
+    /// Pass B's lock still wins the pocket outright, and is not diluted into a "probably".
+    func testPassBStillAnswers() throws {
+        let m = model()
+        let tile = try XCTUnwrap(m.currentTile)
+        var c = cell(at: CGPoint(x: 0.25, y: 0.25), cardId: "locked", inliers: 64)
+        c.wishlistCardId = "locked"
+        c.onWishlist = true
+        m.assignSlots(cells: [c], tile: tile, extent: extent)
+        let e = try XCTUnwrap(m.entry(BinderSlot(page: 0, row: 0, col: 0)))
+        XCTAssertEqual(e.cardId, "locked")
+        XCTAssertTrue(e.isResolved)
+        XCTAssertEqual(m.unconfirmedWishlistCount, 0)
+    }
+
     // MARK: - Corrections
 
     func testAPickWinsAndIsRemembered() throws {

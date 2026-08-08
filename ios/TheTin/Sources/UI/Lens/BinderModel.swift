@@ -251,7 +251,7 @@ final class BinderModel {
     /// rectangles with no names and no prices. The feature looks broken at exactly the moment the
     /// cache did its job. Cheap and idempotent: `resolveMetadata` skips anything already cached.
     func hydrate() async {
-        await resolveMetadata(for: scan.entries.compactMap(\.cardId))
+        await resolveMetadata(for: scan.entries.compactMap(\.displayCardId))
     }
 
     func slots(onPage page: Int) -> [BinderSlot] {
@@ -264,6 +264,12 @@ final class BinderModel {
         BinderResults.apply(filter, to: BinderResults.rows(scan, prices: priceCache,
                                                            cards: cardCache, sets: setNameCache,
                                                            owned: ownedIds))
+    }
+
+    /// Wishlist hits the app is only ~sure of. Counted separately so the footer can promise exactly as
+    /// much as it knows.
+    var unconfirmedWishlistCount: Int {
+        scan.entries.filter { $0.cardId == nil && $0.wishlistCandidate != nil }.count
     }
 
     /// Distinct set names present in the scan, for the set filter. Sorted, and only what is actually
@@ -347,7 +353,8 @@ final class BinderModel {
             tileByPhoto[photoId] = nil
             extentByPhoto[photoId] = nil
         }
-        await resolveMetadata(for: cells.compactMap(\.cardId))
+        // Both, because an unconfirmed wishlist candidate still needs its art and price to be shown.
+        await resolveMetadata(for: cells.compactMap(\.resolvedCardId) + cells.compactMap(\.wishlistCardId))
     }
 
     /// One photograph's detections → pockets. Quantize every detection onto the tile's 2×2 sub-grid,
@@ -387,11 +394,38 @@ final class BinderModel {
         BinderDiag.record(cells: real, rects: keptRects, slots: slots, tile: tile)
         for (slot, found) in BinderPlan.assign(observations, shape: shape) {
             let (cell, rect) = found
-            scan.put(BinderSlotEntry(slot: slot, cardId: cell.cardId, options: cell.chooserOptions,
+            // ⚠️ `resolvedCardId`, NOT `cardId`. `LensCell.cardId` falls back to pass A's wishlist match
+            // when pass B did not lock, and that fallback is what put confident wrong answers in
+            // pockets — every one of them a wishlist card, which is how Tomas spotted it on a device.
+            //
+            // Pass A is a far weaker gate than pass B by design: it matches against ~120 wanted cards on
+            // 20 inliers ALONE, with no separation ratio, no OCR name/number agreement and no twin
+            // check. That was a fair trade when a pass-A hit meant "walk over and look at that case" —
+            // its own comment says a false positive costs a glance. It is not a fair trade when the same
+            // signal is rendered as the pocket's identity with a price beside it.
+            //
+            // So pass A now contributes a MARK and a chooser candidate, never an answer.
+            scan.put(BinderSlotEntry(slot: slot, cardId: cell.resolvedCardId,
+                                     options: Self.chooserOptions(for: cell),
                                      inliers: cell.inliers, onWishlist: cell.onWishlist,
-                                     tile: tile.id, crop: rect, unreadable: cell.unreadableReason))
+                                     tile: tile.id, crop: rect, unreadable: cell.unreadableReason,
+                                     wishlistCandidate: cell.wishlistCardId))
         }
         persist()
+    }
+
+    /// What to offer when the pocket is unresolved: pass B's four, with pass A's wishlist candidate
+    /// promoted to the front when it has one.
+    ///
+    /// ⚠️ Pass A's answer is real evidence — it is a match against a ~120-card set, which has none of the
+    /// open-set confusion that makes pass B hard — it is just not evidence enough to answer with. Putting
+    /// it first in the chooser keeps its value and costs one tap. And a pass-A hit on a cell pass B could
+    /// not match at all now yields a one-option chooser rather than nothing, which is the case that
+    /// matters most: standing in a shop, "is this the card I want?" is the whole question.
+    static func chooserOptions(for cell: LensCell) -> [String] {
+        var out = cell.chooserOptions
+        if let wanted = cell.wishlistCardId, !out.contains(wanted) { out.insert(wanted, at: 0) }
+        return out
     }
 
     private func persist() { cache.save(scan) }
