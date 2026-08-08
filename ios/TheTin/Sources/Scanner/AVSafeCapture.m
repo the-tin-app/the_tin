@@ -1,16 +1,13 @@
 #import "AVSafeCapture.h"
 
-BOOL TinCapturePhotoSafely(AVCapturePhotoOutput *output,
-                           AVCapturePhotoSettings *settings,
-                           id<AVCapturePhotoCaptureDelegate> delegate,
-                           NSString **reason) {
+BOOL TinRunCatchingObjCException(void (NS_NOESCAPE ^block)(void), NSString **reason) {
     @try {
-        [output capturePhotoWithSettings:settings delegate:delegate];
+        block();
         return YES;
     } @catch (NSException *e) {
-        // ⚠️ Reported, never swallowed. The whole point of surviving this is to be able to say what
-        // happened — an exception here means the camera was configured wrongly, and a silent shutter
-        // that does nothing is a worse bug than the crash it replaced.
+        // ⚠️ Reported, never swallowed. The point of surviving this is to be able to say what happened:
+        // a silent no-op is a worse bug than the crash it replaced, and the reason string is what turns
+        // the next configuration mistake into a one-look diagnosis.
         if (reason) {
             *reason = e.reason.length ? e.reason : e.name;
         }

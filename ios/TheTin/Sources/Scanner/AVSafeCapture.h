@@ -1,21 +1,16 @@
-#import <AVFoundation/AVFoundation.h>
+#import <Foundation/Foundation.h>
 
-/// `-[AVCapturePhotoOutput capturePhotoWithSettings:delegate:]` is **documented to raise an
-/// NSException** for a whole family of invalid-argument conditions, and Swift cannot catch an
-/// Objective-C exception. So a mistake in one line of camera configuration is not a recoverable
-/// error — it is `abort()`.
+/// Runs `block` and converts any Objective-C exception into `NO` plus a reason string.
 ///
-/// That is not theoretical. On 2026-08-07 a device build crashed on the shutter press, twice, with
-/// SIGABRT and this exact frame on top: settings carried a `maxPhotoDimensions` read from the active
-/// format BEFORE `startRunning()`, and the preset had re-selected a format by capture time, so the
-/// value was no longer one the format supported. The user was mid-binder-scan.
+/// ⚠️ This exists because **AVFoundation's camera-configuration API raises, and Swift cannot catch an
+/// Objective-C exception** — so a mistake in one line of setup is not a recoverable error, it is
+/// `abort()`. Both `-[AVCapturePhotoOutput capturePhotoWithSettings:delegate:]` and the
+/// `maxPhotoDimensions` setters are documented to raise for invalid arguments, and on 2026-08-07 a
+/// device build crashed twice on the shutter press for exactly that, mid-binder-scan.
 ///
-/// The caller now builds settings that cannot be invalid (see `LensPhotoSource.capture`). This exists
-/// because that is a reason not to crash TODAY, and a `@try` is what makes it true for every other
-/// throwing condition in the same API — a session that stopped between the guard and the call, a
-/// missing video connection, a duplicate `uniqueID`. Returning NO costs a shutter press; the
-/// alternative costs the scan.
-BOOL TinCapturePhotoSafely(AVCapturePhotoOutput *output,
-                           AVCapturePhotoSettings *settings,
-                           id<AVCapturePhotoCaptureDelegate> delegate,
-                           NSString **reason);
+/// It is a safety net, not a substitute for correctness: callers still have to pass valid arguments.
+/// What it buys is that getting one wrong costs a shutter press and a visible message instead of the
+/// user's scan — and the message is how the *next* mistake gets diagnosed in one look rather than in
+/// a device session. The first version of this crash had its reason swallowed by Crashlytics' terminate
+/// handler and cost a round trip to identify.
+BOOL TinRunCatchingObjCException(void (NS_NOESCAPE ^block)(void), NSString **reason);
