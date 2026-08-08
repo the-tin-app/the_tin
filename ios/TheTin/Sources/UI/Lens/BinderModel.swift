@@ -364,34 +364,15 @@ final class BinderModel {
     /// Internal rather than private so a test can drive the whole capture-to-pocket path with hand-made
     /// cells — no camera, no Vision, no fingerprint pack.
     func assignSlots(cells: [LensCell], tile: BinderTile, extent: CGRect) {
-        // ⚠️ Phantoms are excluded BEFORE the sub-grid is worked out, not after. `BinderPlan.slots`
-        // decides where the dividing line falls from the spread of what it is given, so one glare band
-        // at the edge of the frame would drag that line and mis-row every real card with it.
-        //
-        // ⚠️ And `.unreadable` cells are KEPT, which `fpCount` alone cannot express — a card lost to
-        // glare or too blurred to fingerprint has no keypoints at all, so a keypoint floor drops it and
-        // the pocket renders as EMPTY. "There is nothing in this pocket" and "there is a card here I
-        // could not read" are different answers, and quietly giving the first one is the silent miss this
-        // whole feature exists to avoid.
-        let rects = cells.map { $0.quad.normalizedRect(in: extent) }
-        let short = min(extent.width, extent.height)
-        let keep = zip(cells, rects).filter { cell, rect in
-            if cell.fpCount >= BinderPlan.minFpCount { return true }
-            guard cell.isUnreadable else { return false }
-            // No fingerprint to judge by, so judge by size — and because capture is ALWAYS 2×2, a card
-            // occupies about half the frame whatever the binder's shape, which makes a fraction of the
-            // frame a principled test rather than a fitted one. Measured over 179 real cells: every
-            // card-sized quad was ≥ 0.27 of the frame's short side and every phantom ≤ 0.262, and
-            // nothing above 0.20 failed to fingerprint at all.
-            return min(rect.width * extent.width, rect.height * extent.height)
-                >= short * BinderPlan.minCardShortSideFraction
+        // Phantom filtering and the sub-grid split are `BinderPlan.place` — shared with the replay
+        // harness so a measurement cannot quietly stop describing what the device does.
+        let placed = BinderPlan.place(cells: cells, tile: tile, extent: extent)
+        let observations = placed.map {
+            (slot: $0.slot, score: $0.cell.inliers, fpCount: $0.cell.fpCount,
+             value: ($0.cell, $0.rect))
         }
-        let real = keep.map(\.0), keptRects = keep.map(\.1)
-        let slots = BinderPlan.slots(rects: keptRects, in: tile)
-        let observations = zip(zip(real, keptRects), slots).map { pair, slot in
-            (slot: slot, score: pair.0.inliers, fpCount: pair.0.fpCount, value: (pair.0, pair.1))
-        }
-        BinderDiag.record(cells: real, rects: keptRects, slots: slots, tile: tile)
+        BinderDiag.record(cells: placed.map(\.cell), rects: placed.map(\.rect),
+                          slots: placed.map(\.slot), tile: tile)
         for (slot, found) in BinderPlan.assign(observations, shape: shape) {
             let (cell, rect) = found
             // ⚠️ `resolvedCardId`, NOT `cardId`. `LensCell.cardId` falls back to pass A's wishlist match
