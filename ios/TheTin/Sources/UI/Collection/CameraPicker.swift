@@ -20,10 +20,19 @@ struct CameraPicker: UIViewControllerRepresentable {
     let onFinish: (UIImage?) -> Void
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
+        let picker = PortraitImagePickerController()
         picker.sourceType = .camera
         picker.delegate = context.coordinator
         return picker
+    }
+
+    /// `UISupportedInterfaceOrientations` is portrait-only, and `UIImagePickerController` ignores
+    /// it: turn the phone while the camera is up and the whole capture UI goes landscape (device,
+    /// 2026-08-10). A card is photographed portrait, and the report's exhibit is laid out for
+    /// portrait, so pin it rather than accept whichever way the phone was tilted.
+    final class PortraitImagePickerController: UIImagePickerController {
+        override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+        override var shouldAutorotate: Bool { false }
     }
 
     func updateUIViewController(_ picker: UIImagePickerController, context: Context) {}

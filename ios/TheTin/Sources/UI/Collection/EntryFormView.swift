@@ -36,7 +36,7 @@ struct EntryFormView: View {
     @State private var photos = EntryPhotos()
     /// Which photo tile was tapped. Lives here, not in the section, because the presentation it
     /// drives has to be attached to the Form's root — see `photoCapture(...)`.
-    @State private var photoTarget: EntryPhotos.Slot?
+    @State private var photoRequest: PhotoRequest?
     /// Snapshot of the fields as populated, so Cancel/swipe-down can tell typed-then-abandoned
     /// from untouched (only dirty forms earn a discard confirmation).
     @State private var baseline: [String] = []
@@ -110,11 +110,11 @@ struct EntryFormView: View {
             } footer: {
                 Text("Collects this copy in your trade list, which you can share as a link or print as a sheet.")
             }
-            EntryPhotosSection(entryId: entryId, photos: $photos, target: $photoTarget)
+            EntryPhotosSection(entryId: entryId, photos: $photos, request: $photoRequest)
         }
         // ⚠️ On the Form, NOT on the section above. Attached to the Section this presented and
         // instantly dismissed itself, closing the whole entry sheet with it (device, 2026-08-10).
-        .photoCapture(entryId: entryId, photos: $photos, target: $photoTarget)
+        .photoCapture(entryId: entryId, photos: $photos, request: $photoRequest)
         .navigationTitle(existing == nil ? "Save to tin" : "Edit entry")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
