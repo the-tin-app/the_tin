@@ -111,6 +111,32 @@ final class LabelPayloadTests: XCTestCase {
         XCTAssertLessThan(url.absoluteString.count, 140, "a label URL stays a comfortable QR")
     }
 
+    /// The website is stateless and a card id can never reach the CDN on its own, so the art has
+    /// to travel on the URL — under `img`, which share links already carry and the page already
+    /// renders. A new letter here would have meant a site change for no gain.
+    func testTheArtRidesAlongUnderTheShareLinksOwnParameter() throws {
+        let url = LabelPayload.url(cardId: "neo1-5", printing: .holo, condition: .nm, entryId: "e1",
+                                   name: "Feraligatr",
+                                   imageURL: "https://assets.tcgdex.net/en/neo/neo1/5/high.png")
+        let img = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "img" }?.value
+        XCTAssertEqual(img, "https://assets.tcgdex.net/en/neo/neo1/5/high.png")
+        // …and the app still ignores it, exactly as it ignores `n`.
+        XCTAssertEqual(try XCTUnwrap(LabelPayload.parse(url)).printing, .holo)
+    }
+
+    /// The whole payload has to stay a scannable 0.75" code. A worst case — every parameter
+    /// present, a real UUID entry id, a capped name and a full TCGdex art URL — is ~200 bytes,
+    /// which is QR version 9 (53 modules ≈ 14 mil printed). Below ~10 mil is where phones start
+    /// to struggle, so this is the headroom, not the limit.
+    func testAFullyLoadedLabelStaysAScannableCode() {
+        let url = LabelPayload.url(cardId: "sv03.5-025", printing: .reverseHolo, condition: .nm,
+                                   entryId: "1B4E28BA-2FA1-11D2-883F-0016D3CCA427",
+                                   name: String(repeating: "z", count: LabelPayload.maxNameLength),
+                                   imageURL: "https://assets.tcgdex.net/en/sv/sv03.5/025/high.png")
+        XCTAssertLessThan(url.absoluteString.count, 260, "a label URL stays a comfortable QR")
+    }
+
     /// A card the catalog lost still gets a sticker — that is exactly when a label matters most.
     func testNoNameIsFineAndOmitsTheParameterEntirely() throws {
         let url = LabelPayload.url(cardId: "ghost-1", printing: nil, condition: nil, entryId: nil)

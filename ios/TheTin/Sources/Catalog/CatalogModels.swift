@@ -54,6 +54,17 @@ struct CardRecord: Identifiable, Equatable {
         if let imageUrl { return URL(string: imageUrl) }
         return nil
     }
+
+    /// Art for a WEB page — the share preview and the printed label's landing page, both of which
+    /// are stateless and can only show what the URL hands them.
+    ///
+    /// PNG/JPEG on purpose: og:image renderers (iMessage, WhatsApp) have spotty webp support, so
+    /// this is NOT `imageURL(quality:)`. Only the TCGdex branch differs — the TCGplayer-CDN and
+    /// legacy branches are already JPEG, so they're reused rather than restated.
+    var webArtURL: URL? {
+        if let imageBase { return URL(string: "\(imageBase)/high.png") }
+        return imageURL(quality: "high")
+    }
 }
 
 enum Grade: String, CaseIterable, Identifiable {
