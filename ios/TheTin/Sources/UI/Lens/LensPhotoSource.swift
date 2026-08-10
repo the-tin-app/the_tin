@@ -137,6 +137,28 @@ final class LensPhotoSource: NSObject {
                 c.resume()
             }
         }
+        // ⚠️ Settle the photo dimensions HERE, seconds before the user can reach the shutter, and not
+        // for the value — `capture()` re-derives it per shot and must keep doing so (see
+        // `photoDimensions()`). This call is for its SIDE EFFECT: raising `output.maxPhotoDimensions`
+        // to the format's best, once, while nothing is waiting on it.
+        //
+        // Measured on a device 2026-08-09 over three 3×3 pages: shot 1 came back 3024×4032 = 12.2 MP
+        // and shots 2, 3 and 4 all came back 4284×5712 = 24.5 MP. Exactly one bad shot, always the
+        // first, which is the signature of the raise itself rather than of the format. On shot 1
+        // `output.maxPhotoDimensions` still holds the format's DEFAULT (12 MP), so `photoDimensions()`
+        // takes its `beginConfiguration`/`commitConfiguration` branch and `capturePhoto` is called
+        // microseconds later, before the commit has propagated — the capture goes out at the old
+        // value. From shot 2 the output already equals `best`, the branch is skipped, and there is no
+        // race, which is why only the first shot was ever wrong.
+        //
+        // Macro handoff is NOT the cause and should not be re-investigated: `configured()` pins
+        // `.builtInWideAngleCamera`, a physical device with no constituents to hand off to.
+        //
+        // 12.2 MP costs about a third of the auto-locks — a card's short side lands at ~1,119 px, the
+        // 65%-in-top-300 band rather than the 90% band above 1,300 px. It cost nothing on the run that
+        // found it only because that tile's pockets were all covered by an overlapping tile; on a
+        // corner, which gets exactly one look, it would have cost the pocket outright.
+        if #available(iOS 16.0, *) { _ = photoDimensions() }
     }
 
     /// Stops the session. Settles any in-flight `capture()` with nil FIRST: `AVCapturePhotoOutput`
