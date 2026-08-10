@@ -56,6 +56,7 @@ struct GroupDetailView: View {
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
     @State private var printRequest: PrintSheetRequest?
+    @State private var labelRequest: LabelPrintRequest?
     var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
     @State private var searchIndex = CardSearchIndex()
     // Bulk refiling — stock List multi-select, the same gesture Photos and Files use.
@@ -120,6 +121,7 @@ struct GroupDetailView: View {
             newDividerAlertActions
         }
         .printSheetFlow($printRequest)
+        .labelPrintFlow($labelRequest, store: store)
         .onChange(of: model.catalogGeneration) { searchIndex.clear() }
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
@@ -178,19 +180,30 @@ struct GroupDetailView: View {
             }
             if let group {
                 ToolbarItem {
-                    Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
-                        label: {
-                            // Spelled out as an HStack, not a `Label` + `.labelStyle(.titleAndIcon)`:
-                            // the toolbar overrides the label style and renders icon-only, which is
-                            // exactly the problem — a lone printer glyph reads as "print the screen"
-                            // when what it makes is a shareable PDF price list of this divider.
-                            HStack(spacing: 4) {
-                                Image(systemName: "printer")
-                                Text("Trade sheet")
-                            }
+                    // A MENU, not two buttons: this toolbar already carries Sort and Select, and
+                    // a fourth text-bearing item both eats the inline nav title and risks the
+                    // iPadOS "third trailing item is silently dropped" behaviour CollectionView
+                    // documents. One slot, both printables.
+                    Menu {
+                        Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
+                            label: { Label("Trade sheet", systemImage: "printer") }
+                            .disabled(model.entries(in: group.id).isEmpty)
+                        Button { labelRequest = LabelPrintRequest(title: group.name,
+                                                                  entries: model.entries(in: group.id)) }
+                            label: { Label("Card labels", systemImage: "qrcode") }
+                            .disabled(model.entries(in: group.id).isEmpty)
+                    } label: {
+                        // Spelled out as an HStack, not a `Label` + `.labelStyle(.titleAndIcon)`:
+                        // the toolbar overrides the label style and renders icon-only, which is
+                        // exactly the problem — a lone printer glyph reads as "print the screen"
+                        // when what it makes is a shareable PDF.
+                        HStack(spacing: 4) {
+                            Image(systemName: "printer")
+                            Text("Print")
                         }
-                        .accessibilityLabel("Trade sheet")
-                        .disabled(model.entries(in: group.id).isEmpty)
+                    }
+                    .accessibilityLabel("Print")
+                    .disabled(model.entries(in: group.id).isEmpty)
                 }
             }
             if !scope.isEmpty {

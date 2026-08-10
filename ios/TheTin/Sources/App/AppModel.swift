@@ -39,9 +39,12 @@ final class AppModel {
     /// pushes `CardID(pendingCardId)` onto the Tin stack — same pattern as the wishlist route.
     private(set) var cardRouteToken = 0
     private(set) var pendingCardId: String?
+    /// Set when the link was a printed label (`?v=1&p=…&c=…`); nil for a plain share link.
+    private(set) var pendingCardHighlight: CardHighlight?
 
-    func openCard(id: String) {
+    func openCard(id: String, highlight: CardHighlight? = nil) {
         pendingCardId = id
+        pendingCardHighlight = highlight
         cardRouteToken += 1
     }
 
@@ -130,7 +133,18 @@ final class AppModel {
             return
         }
         guard parts.count >= 3, parts[1] == "c", !parts[2].isEmpty else { return }
-        openCard(id: parts[2])
+        // A printed label is this same link with `?v=1&p=…&c=…&e=…` on it, so one parser reads
+        // both and the two can't drift — `LabelPayload` owns the version rules, including
+        // "an unknown `v` opens the card and drops the rest".
+        //
+        // The `parts[2]` fallback deliberately keeps this branch host-agnostic, which it has
+        // always been: `LabelPayload.parse` requires thetinapp.com because a label URL is a
+        // printed contract, and tightening the deep-link handler to match is a behaviour change
+        // this feature has no business making.
+        let payload = LabelPayload.parse(url)
+        openCard(id: payload?.cardId ?? parts[2],
+                 highlight: payload.flatMap { CardHighlight(printing: $0.printing,
+                                                            condition: $0.condition) })
     }
     /// iCloud backup of the local collection/wishlist. nil in catalog-only unit tests
     /// (`skipFirebase`) — every consumer must tolerate nil.
