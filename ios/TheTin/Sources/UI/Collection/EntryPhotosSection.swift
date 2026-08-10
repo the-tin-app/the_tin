@@ -157,17 +157,23 @@ private struct PhotoCaptureModifier: ViewModifier {
             .photosPicker(isPresented: $showingLibrary, selection: $pickerItem, matching: .images)
             .onChange(of: request) { _, r in
                 switch r?.source {
-                case .camera: showingCamera = true
-                case .library: showingLibrary = true
-                case nil: break
+                case .camera: showingCamera = true; PhotoDiag.record("present", "camera")
+                case .library: showingLibrary = true; PhotoDiag.record("present", "library")
+                case nil: PhotoDiag.record("request", "cleared")
                 }
             }
             .onChange(of: pickerItem) { _, item in
                 guard let item else { return }
+                PhotoDiag.record("picked")
                 Task {
                     defer { pickerItem = nil }
                     guard let data = try? await item.loadTransferable(type: Data.self),
-                          let image = UIImage(data: data) else { request = nil; return }
+                          let image = UIImage(data: data) else {
+                        PhotoDiag.record("loadTransferable", "FAILED")
+                        request = nil
+                        return
+                    }
+                    PhotoDiag.record("loaded", "\(data.count) bytes")
                     store(image)
                 }
             }
@@ -182,10 +188,17 @@ private struct PhotoCaptureModifier: ViewModifier {
     /// cleared the slot out from under the selection that was already on its way and the photo
     /// landed nowhere, silently. A stale request costs nothing — the next tile tap replaces it.
     private func store(_ image: UIImage) {
-        guard let slot = request?.slot else { return }
+        guard let slot = request?.slot else {
+            PhotoDiag.record("store", "NO REQUEST — dropped")
+            return
+        }
         request = nil
-        guard let name = try? photoStore.save(image, entryId: entryId) else { return }
+        guard let name = try? photoStore.save(image, entryId: entryId) else {
+            PhotoDiag.record("save", "FAILED entry=\(entryId)")
+            return
+        }
         photos.set(name, slot)
+        PhotoDiag.record("stored", "entry=\(entryId) file=\(name)")
         let store = photoStore
         Task.detached(priority: .utility) { store.mirrorUp(entryId: entryId, file: name) }
     }
