@@ -167,13 +167,18 @@ struct CardDetailView: View {
     let store: CatalogStore
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    /// What a scanned label said about the copy in your hand. Scopes the printing menu and tints
+    /// the matching condition tile; nil for every other way of reaching this screen.
+    var highlight: CardHighlight? = nil
 
     init(model: CardDetailModel, store: CatalogStore,
-         collection: CollectionModel? = nil, wants: WantsModel? = nil) {
+         collection: CollectionModel? = nil, wants: WantsModel? = nil,
+         highlight: CardHighlight? = nil) {
         _model = State(wrappedValue: model)
         self.store = store
         self.collection = collection
         self.wants = wants
+        self.highlight = highlight
     }
 
     @State private var showingAddSheet = false
@@ -200,6 +205,15 @@ struct CardDetailView: View {
     private var currentPrinting: VariantPrice? {
         guard model.variants.count > 1 else { return nil }
         if let selectedPrinting, let v = model.variants.first(where: { $0.printing == selectedPrinting }) {
+            return v
+        }
+        // A label states which printing this copy is, so honour it until the user picks another.
+        // Resolved HERE rather than seeded into `selectedPrinting` on appear: `model.variants` is
+        // filled by `load()`, so an .onAppear seed would race an empty array and silently do
+        // nothing. ⚠️ `matches`, never `==` — a PPT key ("Reverse Holofoil") never equals a
+        // CardVariant rawValue, which is exactly what that bridge exists for.
+        if let labelled = highlight?.printing,
+           let v = model.variants.first(where: { labelled.matches(printing: $0.printing) }) {
             return v
         }
         let def = CardVariant.defaultFor(rarity: model.card.rarity)
@@ -355,7 +369,8 @@ struct CardDetailView: View {
                                     ForEach(Condition.allCases.compactMap { c in printingMatrix.first { $0.condition == c } }) { cell in
                                         PriceTile(label: cell.condition.label, value: cell.usd,
                                                   delta: model.delta(.matrix, "\(p.printing)|\(cell.condition.rawValue)")
-                                                      ?? model.delta(.condition, cell.condition.rawValue))
+                                                      ?? model.delta(.condition, cell.condition.rawValue),
+                                                  highlighted: cell.condition == highlight?.condition?.catalog)
                                     }
                                 }
                             } else {
@@ -363,7 +378,8 @@ struct CardDetailView: View {
                                     ForEach(model.conditions) { cp in
                                         PriceTile(label: cp.condition.label, value: cp.usd,
                                                   delta: model.delta(.condition, cp.condition.rawValue),
-                                                  footnote: cp.salesCount.map { "\($0) sale\($0 == 1 ? "" : "s")" })
+                                                  footnote: cp.salesCount.map { "\($0) sale\($0 == 1 ? "" : "s")" },
+                                                  highlighted: cp.condition == highlight?.condition?.catalog)
                                     }
                                 }
                                 if let p = currentPrinting, !model.conditions.isEmpty {
@@ -972,6 +988,8 @@ private struct PriceTile: View {
     let value: Double?
     var delta: DeltaRecord? = nil
     var footnote: String? = nil
+    /// This is the condition a scanned label says the copy in your hand is in.
+    var highlighted: Bool = false
 
     var body: some View {
         VStack(spacing: 2) {
@@ -990,5 +1008,10 @@ private struct PriceTile: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            if highlighted {
+                RoundedRectangle(cornerRadius: 10).strokeBorder(Color.accentColor, lineWidth: 2)
+            }
+        }
     }
 }
