@@ -35,8 +35,15 @@ struct LabelPayload: Equatable {
     static let version = 1
     static let host = "thetinapp.com"
 
+    /// `name` is for the WEBSITE and nothing else. The app never reads it — it has the catalog and
+    /// looks the card up by id, which is always more current than a string frozen onto a sticker.
+    /// But `site/functions/c/[id].js` is stateless by design, so without this the page can only
+    /// say "A trading card" (found on device, step 11). Same reason share links carry `n`.
+    ///
+    /// Rule 3 permits this: parameters are only ever ADDED. A label printed before this still
+    /// parses identically, because `parse` ignores `n` exactly as it always did.
     static func url(cardId: String, printing: CardVariant?, condition: CardCondition?,
-                    entryId: String?) -> URL {
+                    entryId: String?, name: String? = nil) -> URL {
         var components = URLComponents()
         components.scheme = "https"
         components.host = host
@@ -51,14 +58,26 @@ struct LabelPayload: Equatable {
         if let printing { items.append(URLQueryItem(name: "p", value: printing.rawValue)) }
         if let condition { items.append(URLQueryItem(name: "c", value: condition.rawValue)) }
         if let entryId { items.append(URLQueryItem(name: "e", value: entryId)) }
+        // LAST, and capped. Every character here costs QR modules, and this is the one parameter
+        // nothing functional depends on — so it is the first thing to sacrifice if a code ever
+        // scans unreliably, and it must never push the id or the copy's facts out of a short code.
+        if let name, !name.isEmpty {
+            items.append(URLQueryItem(name: "n", value: String(name.prefix(maxNameLength))))
+        }
         components.queryItems = items
         return components.url!
     }
 
+    /// Long enough for the longest real card names ("Iron Valiant ex", "Hisuian Zoroark VSTAR").
+    static let maxNameLength = 40
+
     /// The label for one owned copy: its own printing and condition, and its own id.
-    static func url(for entry: CollectionEntry) -> URL {
+    ///
+    /// `name` is optional because a card the catalog has lost still gets a label — the sticker's
+    /// job is to identify the thing in your hand, and that is exactly when it matters most.
+    static func url(for entry: CollectionEntry, name: String? = nil) -> URL {
         url(cardId: entry.cardId, printing: entry.variantValue,
-            condition: entry.conditionValue, entryId: entry.id)
+            condition: entry.conditionValue, entryId: entry.id, name: name)
     }
 
     /// nil when this isn't a card link at all. A card link with nothing else on it is valid and

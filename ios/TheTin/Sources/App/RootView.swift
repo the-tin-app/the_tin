@@ -160,7 +160,11 @@ private struct MainTabView: View {
 
             NavigationStack {
                 ScanTabContainer(store: store, collection: collection, wants: model.wants,
-                                 pack: pack, network: model.network, staging: staging)
+                                 pack: pack, network: model.network,
+                                 onOpenLabel: { id, highlight in
+                                     model.openCard(id: id, highlight: highlight)
+                                 },
+                                 staging: staging)
                     .fundingBanner(model: model, store: store, pack: pack)
             }
             // The Scan tab shows the full-screen progress view for the whole transfer, so a
@@ -223,14 +227,24 @@ private struct MainTabView: View {
     }
 
     private func consumeCardRoute() {
-        guard model.cardRouteToken > consumedCardToken, let id = model.pendingCardId else { return }
+        DeepLinkDiag.record("consumeCardRoute",
+                            "token=\(model.cardRouteToken) consumed=\(consumedCardToken) "
+                            + "pendingId=\(model.pendingCardId ?? "nil") tab=\(selection)")
+        guard model.cardRouteToken > consumedCardToken, let id = model.pendingCardId else {
+            DeepLinkDiag.record("dropped", "stale token or no pending id")
+            return
+        }
         consumedCardToken = model.cardRouteToken
         // A deep link can carry an unknown id (garbage link, or a card missing from an older
         // local catalog). The CardID destination has no not-found branch, so pushing it would
         // land on a blank screen — only navigate when the card actually resolves.
-        guard (try? store.card(id: id)) != nil else { return }
+        guard (try? store.card(id: id)) != nil else {
+            DeepLinkDiag.record("dropped", "catalog has no card '\(id)'")
+            return
+        }
         selection = .tin
         tinPath.append(CardID(raw: id, highlight: model.pendingCardHighlight))
+        DeepLinkDiag.record("pushed", "\(id) depth=\(tinPath.count)")
     }
 
     /// Someone's shared trade list, opened in the app: land on a live trade with their side

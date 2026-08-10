@@ -47,7 +47,27 @@ struct TheTin: App {
             RootView(model: model)
                 .preferredColorScheme(appearance.colorScheme)
                 .task { await model.start() }
+                // Custom schemes and opened FILES (the CSV import) arrive here.
                 .onOpenURL { model.handleDeepLink($0) }
+                // ⚠️ UNIVERSAL LINKS DO NOT RELIABLY ARRIVE VIA `onOpenURL`, and on a cold launch
+                // they do not arrive there at all. They are delivered as an `NSUserActivity` of
+                // type `NSUserActivityTypeBrowsingWeb`, and without this handler the app launches
+                // and sits there.
+                //
+                // Measured on device 2026-08-10, not inferred: force-quit, scan a printed label
+                // with the system Camera, tap the banner — the app launches and the breadcrumb
+                // trail shows `consumeCardRoute: token=0 pendingId=nil`. No `handleDeepLink`, no
+                // `openCard`. iOS handed us nothing.
+                //
+                // This is PRE-EXISTING and has nothing to do with labels: every `/c/<id>` share
+                // link since v1.0 has behaved the same way. It stayed hidden because
+                // `DeepLinkRoutingTests` only ever tested `handleDeepLink`, never how a URL
+                // reaches it, and because the `/l` trade-link bug was diagnosed with the app
+                // already running.
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    guard let url = activity.webpageURL else { return }
+                    model.handleDeepLink(url)
+                }
         }
         .onChange(of: scenePhase) {
             if scenePhase == .background { BackgroundRefresh.scheduleRefresh() }

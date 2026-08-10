@@ -41,8 +41,18 @@ final class AppModel {
     private(set) var pendingCardId: String?
     /// Set when the link was a printed label (`?v=1&p=…&c=…`); nil for a plain share link.
     private(set) var pendingCardHighlight: CardHighlight?
+    /// The last universal link acted on, to collapse a double delivery (see `handleDeepLink`).
+    /// Short enough that deliberately opening the same link twice still works — a second tap is
+    /// seconds away, two deliveries of one tap are milliseconds apart.
+    private var lastHandledLink: (url: String, at: Date)?
+    static let duplicateLinkWindow: TimeInterval = 1
 
     func openCard(id: String, highlight: CardHighlight? = nil) {
+        // Recorded HERE so every route in is captured, not just the deep-link one. A trail with a
+        // preceding "handleDeepLink" line came from a universal link; one without came from an
+        // in-app scanner. That distinction is the whole question for the step-5 report and the
+        // first trail could not answer it.
+        DeepLinkDiag.record("openCard", "\(id) highlight=\(highlight != nil)")
         pendingCardId = id
         pendingCardHighlight = highlight
         cardRouteToken += 1
@@ -103,6 +113,21 @@ final class AppModel {
     /// below and the app would launch and sit there, which is a worse experience than never
     /// offering "Open in The Tin" at all.
     func handleDeepLink(_ url: URL) {
+        // DEBUG-only breadcrumb for the "scanning a label just launches the app" report. Written to
+        // UserDefaults rather than logged because `log stream` can't attach to a device on this
+        // macOS, while `devicectl device copy from … Library/Preferences` can — see CLAUDE.md.
+        // Two hypotheses were argued into and both were wrong; this records what actually happens.
+        DeepLinkDiag.record("handleDeepLink", url.absoluteString)
+        // ⚠️ The app now listens on TWO doors — `onOpenURL` and `onContinueUserActivity` — because
+        // universal links don't reliably come through the first. Both can fire for the SAME link,
+        // and without this the token would bump twice and `consumeCardRoute` would push the card
+        // twice, leaving a duplicate screen on the stack to back out of.
+        if let last = lastHandledLink, last.url == url.absoluteString,
+           now().timeIntervalSince(last.at) < Self.duplicateLinkWindow {
+            DeepLinkDiag.record("ignored", "same link delivered twice")
+            return
+        }
+        lastHandledLink = (url.absoluteString, now())
         if url.isFileURL {
             pendingImportURL = url
             importRouteToken += 1
@@ -142,7 +167,8 @@ final class AppModel {
         // printed contract, and tightening the deep-link handler to match is a behaviour change
         // this feature has no business making.
         let payload = LabelPayload.parse(url)
-        openCard(id: payload?.cardId ?? parts[2],
+        let id = payload?.cardId ?? parts[2]
+        openCard(id: id,
                  highlight: payload.flatMap { CardHighlight(printing: $0.printing,
                                                             condition: $0.condition) })
     }

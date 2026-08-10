@@ -76,7 +76,7 @@ enum LabelSheet {
                 .compactMap { $0 }.joined(separator: " · ")
             let item = LabelItem(id: entry.id, name: card?.name ?? entry.cardId,
                                  setLine: setLine, detail: detail,
-                                 url: LabelPayload.url(for: entry))
+                                 url: LabelPayload.url(for: entry, name: card?.name))
             return Array(repeating: item, count: max(entry.qty, 1))
         }
     }
