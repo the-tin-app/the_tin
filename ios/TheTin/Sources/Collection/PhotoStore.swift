@@ -80,4 +80,53 @@ struct PhotoStore: Sendable {
             image.draw(in: CGRect(origin: .zero, size: size))
         }
     }
+
+    /// The production store: local disk plus the user's own iCloud container.
+    static func live() -> PhotoStore { .default(mirror: ICloudBackupStore()) }
+
+    // MARK: iCloud mirror
+    //
+    // Photos ride the BackupStore seam rather than BackupSnapshot: the snapshot is one JSON
+    // rewritten on a 5 s debounce, and base64 photos in it would push megabytes on every
+    // quantity edit. Every call here is best-effort and never surfaces an error — the same rule
+    // BackupService follows for all iCloud failure.
+    //
+    // ⚠️ Both are blocking file IO. Call them off the main thread.
+
+    /// Copy one photo up to `<container>/photos/<entryId>/<file>`.
+    func mirrorUp(entryId: String, file: String) {
+        guard let mirror, let container = mirror.containerURL(),
+              let data = try? Data(contentsOf: url(entryId: entryId, file: file)) else { return }
+        try? mirror.write(data, to: container
+            .appendingPathComponent("photos", isDirectory: true)
+            .appendingPathComponent(entryId, isDirectory: true)
+            .appendingPathComponent(file))
+    }
+
+    /// Pull every mirrored photo down. Files that already exist locally are left ALONE, so this
+    /// is safe to re-run and can never overwrite a newer local capture.
+    ///
+    /// `requestDownload` then a coordinated `read` is the same not-yet-local materialisation
+    /// dance `BackupService.loadBackup` does.
+    func mirrorDown() {
+        guard let mirror, let container = mirror.containerURL() else { return }
+        let fm = FileManager.default
+        let remoteRoot = container.appendingPathComponent("photos", isDirectory: true)
+        guard let dirs = try? fm.contentsOfDirectory(at: remoteRoot, includingPropertiesForKeys: nil)
+        else { return }
+        for remoteDir in dirs {
+            let entryId = remoteDir.lastPathComponent
+            guard let files = try? fm.contentsOfDirectory(at: remoteDir,
+                                                          includingPropertiesForKeys: nil)
+            else { continue }
+            for remoteFile in files {
+                let dest = url(entryId: entryId, file: remoteFile.lastPathComponent)
+                guard !fm.fileExists(atPath: dest.path) else { continue }
+                mirror.requestDownload(remoteFile)
+                guard let data = try? mirror.read(remoteFile) else { continue }
+                try? fm.createDirectory(at: directory(for: entryId), withIntermediateDirectories: true)
+                try? data.write(to: dest, options: .atomic)
+            }
+        }
+    }
 }
