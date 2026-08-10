@@ -107,6 +107,12 @@ struct ReportRow: Identifiable, Equatable {
     let acquiredFrom: String?
     let pricePaid: Double?    // entry total (spec-locked)
     let currentValue: Double? // entry total — GroupStats.entryValue, qty-inclusive
+    /// The user's own photographs of this copy; nil or empty = nothing to exhibit.
+    ///
+    /// `var … = nil` rather than `let`: a synthesized memberwise init only gives a parameter a
+    /// default when the property has one, and only `var` properties can. That default is what
+    /// keeps every existing `ReportRow(...)` call site in the tests compiling.
+    var photos: EntryPhotos? = nil
 }
 
 extension InsuranceReport {
@@ -137,7 +143,8 @@ extension InsuranceReport {
                                                     variants: variantsByCard[entry.cardId] ?? [],
                                                     conditions: conditionsByCard[entry.cardId] ?? [],
                                                     matrix: matrixByCard[entry.cardId] ?? [],
-                                                    gradedByPrinting: gradedByPrintingByCard[entry.cardId] ?? []))
+                                                    gradedByPrinting: gradedByPrintingByCard[entry.cardId] ?? []),
+                photos: entry.photos)
         }
     }
 }

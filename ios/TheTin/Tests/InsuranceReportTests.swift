@@ -174,4 +174,41 @@ final class InsuranceReportTests: XCTestCase {
         XCTAssertEqual(without, 3)      // cover + 1 table page + 1 appendix
         XCTAssertEqual(with, without + 1)
     }
+
+    // MARK: Photo exhibit paging
+
+    private func photoRow(_ id: String, photos: EntryPhotos?) -> ReportRow {
+        ReportRow(id: id, card: nil, name: "Feraligatr", setLine: "Neo Genesis · #5",
+                  detail: "Holo · NM", qty: 1, acquiredAt: nil, acquiredFrom: nil,
+                  pricePaid: nil, currentValue: 12, photos: photos)
+    }
+
+    /// Nothing photographed ⇒ no exhibit pages and no markers, so a report for a collection with no
+    /// photos is byte-identical to what it was before this feature.
+    func testNoPhotosMeansNoExhibitPagesAndNoMarkers() {
+        let rows = [photoRow("a", photos: nil), photoRow("b", photos: EntryPhotos())]
+        let index = ReportPages.photoPageIndex(rowPages: 2, sealedPages: 0,
+                                               photoRows: ReportPages.photoRows(rows))
+        XCTAssertTrue(index.isEmpty)
+        XCTAssertTrue(ReportPages.photoRows(rows).isEmpty)
+    }
+
+    /// Four photographed entries at 3/page = 2 exhibit pages, starting after cover + rows + sealed.
+    func testExhibitPagesFollowTheSealedSectionAndPackThreeToAPage() {
+        let rows = (1...4).map { photoRow("e\($0)", photos: EntryPhotos(front: "f.jpg")) }
+        let index = ReportPages.photoPageIndex(rowPages: 2, sealedPages: 1,
+                                               photoRows: ReportPages.photoRows(rows))
+        // page 1 cover, pages 2-3 inventory, page 4 sealed ⇒ exhibits start at 5.
+        XCTAssertEqual(index["e1"], 5)
+        XCTAssertEqual(index["e2"], 5)
+        XCTAssertEqual(index["e3"], 5)
+        XCTAssertEqual(index["e4"], 6)
+    }
+
+    func testPhotoRowsKeepsOnlyEntriesThatActuallyHaveFiles() {
+        let rows = [photoRow("a", photos: EntryPhotos(front: "f.jpg")),
+                    photoRow("b", photos: EntryPhotos()),
+                    photoRow("c", photos: nil)]
+        XCTAssertEqual(ReportPages.photoRows(rows).map(\.id), ["a"])
+    }
 }
