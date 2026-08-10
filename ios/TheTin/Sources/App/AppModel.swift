@@ -371,14 +371,23 @@ final class AppModel {
             // launch covers entry deletion, a form cancelled after a capture, a CSV "Replace
             // collection" and a restore. The first emission of entriesStream is the current
             // state on subscribe (same one-shot read `currentCounts` uses).
+            // The same sweep pulls down anything a restore's own pass didn't get. iCloud
+            // materialises a file when it materialises it, and the restore fires once — without a
+            // retry, a photo that was still in flight at that moment would never arrive at all.
+            // Both halves skip what is already on disk, so this is cheap on every ordinary launch.
             Task { [repository] in
-                var ids = Set<String>()
-                for await entries in repository.entriesStream() {
-                    ids = Set(entries.map(\.id))
+                var entries: [CollectionEntry] = []
+                for await v in repository.entriesStream() {
+                    entries = v
                     break
                 }
+                let ids = Set(entries.map(\.id))
+                let needed = PhotoStore.needed(from: entries)
                 let store = PhotoStore.live()
-                await Task.detached(priority: .background) { store.prune(keeping: ids) }.value
+                await Task.detached(priority: .background) {
+                    store.prune(keeping: ids)
+                    store.mirrorDown(needed: needed)
+                }.value
             }
         }
 

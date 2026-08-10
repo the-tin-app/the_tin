@@ -44,6 +44,12 @@ final class PhotoStoreMirrorTests: XCTestCase {
         PhotoStore(root: dir.appendingPathComponent(local, isDirectory: true), mirror: mirror)
     }
 
+    private func entry(_ id: String) -> CollectionEntry {
+        CollectionEntry(id: id, cardId: "c-\(id)", groupId: "", qty: 1, condition: "NM",
+                        grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
+                        addedAt: Date())
+    }
+
     private func solid() -> UIImage {
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 1
@@ -80,12 +86,43 @@ final class PhotoStoreMirrorTests: XCTestCase {
         let restorer = makeStore(local: "b", mirror: TempDirStore(dir: container))
         XCTAssertNil(restorer.image(entryId: "e1", file: file))
 
-        restorer.mirrorDown()
+        restorer.mirrorDown(needed: ["e1": [file]])
 
         XCTAssertNotNil(restorer.image(entryId: "e1", file: file))
     }
 
-    /// Re-running must not clobber a local file — mirrorDown is called on every restore.
+    /// The bug this whole path was rewritten for: the file is not in iCloud yet when the restore
+    /// runs, and a later pass has to get it. The old listing-based pull had no later pass, so a
+    /// photo still in flight at restore time was lost for good (iPad, 2026-08-10).
+    func testMirrorDownRetriesAFileThatArrivesLater() throws {
+        let uploader = makeStore(local: "a", mirror: TempDirStore(dir: container))
+        let file = try uploader.save(solid(), entryId: "e1")
+
+        // Restore happens first; nothing has been mirrored up yet.
+        let restorer = makeStore(local: "b", mirror: TempDirStore(dir: container))
+        restorer.mirrorDown(needed: ["e1": [file]])
+        XCTAssertNil(restorer.image(entryId: "e1", file: file))
+
+        uploader.mirrorUp(entryId: "e1", file: file)   // arrives afterwards
+        restorer.mirrorDown(needed: ["e1": [file]])    // the next launch's pass
+
+        XCTAssertNotNil(restorer.image(entryId: "e1", file: file))
+    }
+
+    /// Only what the entries name. A file left in the container by a deleted entry must not be
+    /// resurrected onto the device.
+    func testMirrorDownIgnoresAContainerFileNoEntryReferences() throws {
+        let uploader = makeStore(local: "a", mirror: TempDirStore(dir: container))
+        let orphan = try uploader.save(solid(), entryId: "gone")
+        uploader.mirrorUp(entryId: "gone", file: orphan)
+
+        let restorer = makeStore(local: "b", mirror: TempDirStore(dir: container))
+        restorer.mirrorDown(needed: [:])
+
+        XCTAssertNil(restorer.image(entryId: "gone", file: orphan))
+    }
+
+    /// Re-running must not clobber a local file — mirrorDown runs on every restore AND launch.
     func testMirrorDownLeavesAnExistingLocalFileAlone() throws {
         let uploader = makeStore(local: "a", mirror: TempDirStore(dir: container))
         let file = try uploader.save(solid(), entryId: "e1")
@@ -94,12 +131,23 @@ final class PhotoStoreMirrorTests: XCTestCase {
         let local = uploader.url(entryId: "e1", file: file)
         try Data("local-wins".utf8).write(to: local, options: .atomic)
 
-        uploader.mirrorDown()
+        uploader.mirrorDown(needed: ["e1": [file]])
 
         XCTAssertEqual(try Data(contentsOf: local), Data("local-wins".utf8))
     }
 
     func testMirrorDownWithNothingMirroredDoesNothing() {
-        makeStore(local: "a", mirror: TempDirStore(dir: container)).mirrorDown()
+        makeStore(local: "a", mirror: TempDirStore(dir: container))
+            .mirrorDown(needed: ["e1": ["nope.jpg"]])
+    }
+
+    func testNeededSkipsEntriesWithoutPhotos() {
+        var withPhotos = entry("e1")
+        withPhotos.photos = EntryPhotos(front: "f.jpg", back: nil, details: ["d.jpg"])
+        let without = entry("e2")
+
+        let needed = PhotoStore.needed(from: [withPhotos, without])
+
+        XCTAssertEqual(needed, ["e1": ["f.jpg", "d.jpg"]])
     }
 }

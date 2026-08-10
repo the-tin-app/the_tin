@@ -310,7 +310,8 @@ final class BackupService {
         // restored entry whose photo hasn't arrived yet is a far smaller failure than a restore
         // that blocks on a few hundred file downloads.
         let photos = self.photos
-        Task.detached(priority: .utility) { photos.mirrorDown() }
+        let needed = PhotoStore.needed(from: snapshot.entries)
+        Task.detached(priority: .utility) { photos.mirrorDown(needed: needed) }
     }
 
     private func currentCounts() async -> (entries: Int, wants: Int) {

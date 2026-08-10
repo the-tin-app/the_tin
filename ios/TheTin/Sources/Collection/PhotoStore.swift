@@ -93,40 +93,78 @@ struct PhotoStore: Sendable {
     //
     // ⚠️ Both are blocking file IO. Call them off the main thread.
 
-    /// Copy one photo up to `<container>/photos/<entryId>/<file>`.
-    func mirrorUp(entryId: String, file: String) {
-        guard let mirror, let container = mirror.containerURL(),
-              let data = try? Data(contentsOf: url(entryId: entryId, file: file)) else { return }
-        try? mirror.write(data, to: container
-            .appendingPathComponent("photos", isDirectory: true)
+    private func remoteURL(container: URL, entryId: String, file: String) -> URL {
+        container.appendingPathComponent("photos", isDirectory: true)
             .appendingPathComponent(entryId, isDirectory: true)
-            .appendingPathComponent(file))
+            .appendingPathComponent(file)
     }
 
-    /// Pull every mirrored photo down. Files that already exist locally are left ALONE, so this
-    /// is safe to re-run and can never overwrite a newer local capture.
+    /// Copy one photo up to `<container>/photos/<entryId>/<file>`.
+    func mirrorUp(entryId: String, file: String) {
+        guard let mirror, let container = mirror.containerURL() else {
+            PhotoDiag.record("mirrorUp", "no iCloud container")
+            return
+        }
+        guard let data = try? Data(contentsOf: url(entryId: entryId, file: file)) else {
+            PhotoDiag.record("mirrorUp", "local file missing \(entryId)/\(file)")
+            return
+        }
+        do {
+            try mirror.write(data, to: remoteURL(container: container, entryId: entryId, file: file))
+            PhotoDiag.record("mirrorUp", "\(entryId)/\(file) \(data.count) bytes")
+        } catch {
+            PhotoDiag.record("mirrorUp", "FAILED \(entryId)/\(file): \(error)")
+        }
+    }
+
+    /// The files these entries reference, as `entryId → [filename]`. Entries with no photos are
+    /// dropped, so an all-photoless collection produces an empty pull.
+    static func needed(from entries: [CollectionEntry]) -> [String: [String]] {
+        var out: [String: [String]] = [:]
+        for entry in entries {
+            guard let photos = entry.photos, !photos.isEmpty else { continue }
+            out[entry.id] = photos.all
+        }
+        return out
+    }
+
+    /// Pull the photos `needed` names. Files that already exist locally are left ALONE, so this
+    /// is safe to re-run and can never overwrite a newer local capture — which is the point: it
+    /// runs after a restore AND at every launch, and the launch pass is what eventually gets a
+    /// slow-arriving file.
     ///
     /// `requestDownload` then a coordinated `read` is the same not-yet-local materialisation
     /// dance `BackupService.loadBackup` does.
-    func mirrorDown() {
-        guard let mirror, let container = mirror.containerURL() else { return }
+    ///
+    /// ⚠️ **Driven by the entries, never by listing the container.** Listing was the first design
+    /// and it failed on precisely the device it exists for: a device that has just restored has
+    /// never touched `photos/`, so its metadata has not enumerated yet, `contentsOfDirectory`
+    /// throws, and a one-shot pass ends silently — iPad, 2026-08-10, which came out of the restore
+    /// without so much as a `CardPhotos` directory. Undownloaded files also enumerate under
+    /// placeholder names (`.name.jpg.icloud`), so even a listing that worked would have written
+    /// them under names no entry references. A known path needs neither. The tests missed all of
+    /// this because their double is a plain temp dir, where enumeration is instant and total.
+    func mirrorDown(needed: [String: [String]]) {
+        guard !needed.isEmpty else { return }
+        guard let mirror, let container = mirror.containerURL() else {
+            PhotoDiag.record("mirrorDown", "no iCloud container")
+            return
+        }
         let fm = FileManager.default
-        let remoteRoot = container.appendingPathComponent("photos", isDirectory: true)
-        guard let dirs = try? fm.contentsOfDirectory(at: remoteRoot, includingPropertiesForKeys: nil)
-        else { return }
-        for remoteDir in dirs {
-            let entryId = remoteDir.lastPathComponent
-            guard let files = try? fm.contentsOfDirectory(at: remoteDir,
-                                                          includingPropertiesForKeys: nil)
-            else { continue }
-            for remoteFile in files {
-                let dest = url(entryId: entryId, file: remoteFile.lastPathComponent)
-                guard !fm.fileExists(atPath: dest.path) else { continue }
-                mirror.requestDownload(remoteFile)
-                guard let data = try? mirror.read(remoteFile) else { continue }
-                try? fm.createDirectory(at: directory(for: entryId), withIntermediateDirectories: true)
+        var pulled = 0, waiting = 0, had = 0
+        for (entryId, files) in needed {
+            for file in files {
+                let dest = url(entryId: entryId, file: file)
+                guard !fm.fileExists(atPath: dest.path) else { had += 1; continue }
+                let remote = remoteURL(container: container, entryId: entryId, file: file)
+                mirror.requestDownload(remote)
+                guard let data = try? mirror.read(remote) else { waiting += 1; continue }
+                try? fm.createDirectory(at: directory(for: entryId),
+                                        withIntermediateDirectories: true)
                 try? data.write(to: dest, options: .atomic)
+                pulled += 1
             }
         }
+        PhotoDiag.record("mirrorDown", "pulled=\(pulled) local=\(had) notYetInICloud=\(waiting)")
     }
 }
