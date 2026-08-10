@@ -59,10 +59,14 @@ enum LensMatcher {
     static func identify(plate: CanonicalFrame, fingerprint: CardFingerprint, matcher: Matcher,
                          index: CandidateNarrowing, config: LockConfig = LockConfig()) -> LensCellState {
         guard fingerprint.count > 0 else { return .noMatch }
-        let fields = TextGate.extract(plate: plate)
-        let pool = index.pool(fields: fields)
+        // Per-stage timing, DEBUG only and compiled out of Release — the A10 is where this feature's
+        // viability is decided and it had never been measured there. See `BinderDiag.timing`.
+        let fields = BinderDiag.timed("ocr") { TextGate.extract(plate: plate) }
+        let pool = BinderDiag.timed("pool") { index.pool(fields: fields) }
         guard !pool.isEmpty,
-              let results = try? matcher.match(query: fingerprint, candidateIds: pool),
+              let results = BinderDiag.timed("match", detail: "pool=\(pool.count)",
+                                             { try? matcher.match(query: fingerprint,
+                                                                  candidateIds: pool) }),
               let top = results.first else { return .noMatch }
         return verdict(results: results,
                        consistency: index.consistency(cardId: top.cardId, fields: fields,
@@ -122,6 +126,8 @@ struct LiveLensWork: LensWork {
     private let cache = FingerprintCache()
 
     func detect(photoId: UUID) async -> [LensCell] {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer { BinderDiag.timing("DETECT (photo)", CFAbsoluteTimeGetCurrent() - t0) }
         guard let ci = await imageForPhoto(photoId) else { return [] }
         let context = CIContext()
         var cells: [LensCell] = []
@@ -192,6 +198,9 @@ struct LiveLensWork: LensWork {
     }
 
     func passA(photoId: UUID, cells: [LensCell]) async -> [LensCell] {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer { BinderDiag.timing("PASS A (photo)", CFAbsoluteTimeGetCurrent() - t0,
+                                  detail: "cells=\(cells.count) wanted=\(wanted.count)") }
         let fps = await cache.fingerprints(photoId)
         return cells.map { cell in
             guard let fp = fps[cell.id] else { return cell }
@@ -206,6 +215,9 @@ struct LiveLensWork: LensWork {
     }
 
     func passB(photoId: UUID, cells: [LensCell]) async -> [LensCell] {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer { BinderDiag.timing("PASS B (photo)", CFAbsoluteTimeGetCurrent() - t0,
+                                  detail: "cells=\(cells.count)") }
         let fps = await cache.fingerprints(photoId)
         guard let ci = await imageForPhoto(photoId) else { return cells }
         let context = CIContext()
