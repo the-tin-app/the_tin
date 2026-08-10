@@ -786,6 +786,10 @@ struct CollectionView: View {
     /// Lands the user on the tray after a trade, so filing what they just took is the obvious
     /// next step rather than something they discover later.
     var onExecutedTrade: (() -> Void)? = nil
+    /// Where a scanned label goes. Routed through the host (and so through `AppModel.openCard`)
+    /// rather than pushed straight onto the path, so scanning a sticker in-app and scanning the
+    /// SAME sticker with the system Camera cannot end up behaving differently.
+    var onOpenLabel: ((String, CardHighlight?) -> Void)? = nil
     /// Opens the settings sheet, which the host owns.
     ///
     /// The gear used to be a SECOND `.toolbar` applied by `RootView` over this view. On iPadOS 18
@@ -800,6 +804,11 @@ struct CollectionView: View {
     @State private var renameGroupName = ""
     @State private var editMode: EditMode = .inactive
     @State private var printRequest: PrintSheetRequest?
+    @State private var labelRequest: LabelPrintRequest?
+    /// ⚠️ The label scanner is the app's THIRD AVCaptureSession and it opens from HERE precisely
+    /// because the Tin has no camera running — see QRScannerView's header.
+    @State private var showingLabelScanner = false
+    @State private var labelScanError: String?
     @State private var showingReport = false
     @State private var deletingGroup: CardGroup?
     /// Second-stage confirmation for the one action that destroys cards rather than just a
@@ -883,6 +892,8 @@ struct CollectionView: View {
         .environment(\.editMode, $editMode)
         .printSheetFlow($printRequest)
         .collectionReportFlow(isActive: $showingReport, collection: model, store: store)
+        .labelPrintFlow($labelRequest, store: store)
+        .fullScreenCover(isPresented: $showingLabelScanner) { labelScannerCover }
         .navigationTitle("The Tin")
         .navigationBarTitleDisplayMode(.inline)
         // ONE toolbar for this screen, every item explicitly placed. Items used to arrive from two
@@ -918,6 +929,14 @@ struct CollectionView: View {
                     }
                     Button { showingReport = true }
                         label: { Label("Collection report (PDF)", systemImage: "doc.text") }
+                        .disabled(model.entries.isEmpty)
+                    // Both label actions live in this menu rather than as their own toolbar items:
+                    // the comment above is not hypothetical — a third trailing item is DROPPED on
+                    // iPadOS 18, and menu contents are never subject to toolbar overflow.
+                    Button { labelScanError = nil; showingLabelScanner = true }
+                        label: { Label("Scan a label", systemImage: "qrcode.viewfinder") }
+                    Button { labelRequest = LabelPrintRequest(title: "The Tin", entries: model.entries) }
+                        label: { Label("Print labels", systemImage: "qrcode") }
                         .disabled(model.entries.isEmpty)
                 } label: {
                     // A Label, not a bare Image: when iPadOS folds this into its overflow menu it
@@ -1059,10 +1078,52 @@ struct CollectionView: View {
         .navigationDestination(for: CardID.self) { cardID in
             if let card = try? store.card(id: cardID.raw) {
                 CardDetailView(model: CardDetailModel(store: store, card: card, history: CatalogPriceHistory(store: store)),
-                               store: store, collection: model, wants: wants)
+                               store: store, collection: model, wants: wants,
+                               highlight: cardID.highlight)
             }
         }
         .onChange(of: model.catalogGeneration) { searchIndex.clear() }
+    }
+
+    /// Broken out of `body` — and `handleScannedCode` broken out of THIS — for the reason this
+    /// file already documents twice: inline, the multi-statement scanner closure inside the
+    /// modifier chain sent the type checker away for twenty minutes and never came back.
+    private var labelScannerCover: some View {
+        NavigationStack {
+            QRScannerView(onCode: handleScannedCode)
+                .ignoresSafeArea()
+                .overlay(alignment: .bottom) { labelScanErrorBanner }
+                .navigationTitle("Scan a label")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Done") { showingLabelScanner = false }
+                    }
+                }
+        }
+    }
+
+    @ViewBuilder private var labelScanErrorBanner: some View {
+        if let labelScanError {
+            Text(labelScanError)
+                .font(.footnote)
+                .padding(10)
+                .background(.thinMaterial, in: Capsule())
+                .padding(.bottom, 40)
+        }
+    }
+
+    /// Returns true to stop scanning. A QR that isn't one of our labels returns FALSE so the
+    /// viewfinder keeps running — pointing at a random sticker must not dead-end the camera.
+    private func handleScannedCode(_ code: String) -> Bool {
+        guard let url = URL(string: code), let payload = LabelPayload.parse(url) else {
+            labelScanError = "That isn't a Tin label."
+            return false
+        }
+        showingLabelScanner = false
+        onOpenLabel?(payload.cardId,
+                     CardHighlight(printing: payload.printing, condition: payload.condition))
+        return true
     }
 
     /// Only rendered once there's a card to total — `emptyTin` owns the first-run screen.
@@ -1177,6 +1238,9 @@ struct CollectionView: View {
                 Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
                     label: { Label("Trade sheet…", systemImage: "printer") }
                     .disabled(model.entries(in: group.id).isEmpty)
+                Button { labelRequest = LabelPrintRequest(title: group.name, entries: entries) }
+                    label: { Label("Print labels…", systemImage: "qrcode") }
+                    .disabled(entries.isEmpty)
                 Button(role: .destructive) { deletingGroup = group }
                     label: { Label("Delete divider", systemImage: "trash") }
             }
