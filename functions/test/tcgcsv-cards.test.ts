@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   numberKeys, denominatorFits, parseAttack, cleanName, mapGroupsToSets, synthesizeMissingCards,
-  nameNumberKey, type CardRef, type TcgcsvProduct,
+  nameNumberKey, findPrintRuns, type CardRef, type TcgcsvProduct,
 } from "../src/pipeline/tcgcsv-cards";
 
 const ext = (o: Record<string, string>) => Object.entries(o).map(([name, value]) => ({ name, value }));
@@ -257,5 +257,66 @@ describe("name+number fallback", () => {
       cardsByNameNumber: index(linked),
     });
     expect(r.links).toHaveLength(0);
+  });
+});
+
+describe("findPrintRuns", () => {
+  const totals = new Map([
+    ["ex1", { total: 109, printedTotal: 109 }],
+    ["P-A", { total: 149, printedTotal: 149 }],
+    ["base1", { total: 102, printedTotal: 102 }],
+  ]);
+  const index = (cards: { id: string; setId: string; name: string; number: string }[]) => {
+    const m = new Map<string, CardRef[]>();
+    for (const c of cards) {
+      for (const k of numberKeys(c.number)) {
+        const key = nameNumberKey(c.name, k);
+        (m.get(key) ?? m.set(key, []).get(key)!).push({ id: c.id, setId: c.setId, linked: true });
+      }
+    }
+    return m;
+  };
+  const wc = (productId: number, name: string, number: string) =>
+    product(productId, name, { Number: number, HP: "60", "Card Type": "Fire" });
+
+  it("keeps a zero-padded promo from stealing the base-set card the denominator names", () => {
+    // Measured on the live feed: "Mewtwo 010/102" matched promo P-A-010 on the "010" key while
+    // base1-10 only holds "10", and the promo won. The printed /102 is what breaks the tie.
+    const idx = index([
+      { id: "base1-10", setId: "base1", name: "Mewtwo", number: "10" },
+      { id: "P-A-010", setId: "P-A", name: "Mewtwo", number: "010" },
+    ]);
+    const runs = findPrintRuns(
+      [{ groupId: 1, name: "Base Set (Shadowless)", products: [wc(1, "Mewtwo", "010/102")] }],
+      new Map(), new Map(), idx, totals);
+    expect(runs.map((r) => r.cardId)).toEqual(["base1-10"]);
+  });
+
+  it("collapses a card's many markers inside one group to the group itself", () => {
+    // World Championship Decks names the deck's AUTHOR, so a naive label gave one card sixteen
+    // printings. A card told apart by provenance has ONE print run: the group.
+    const idx = index([{ id: "ex1-74", setId: "ex1", name: "Torchic", number: "74" }]);
+    const runs = findPrintRuns([{
+      groupId: 2282, name: "World Championship Decks",
+      products: [wc(1, "Torchic - 2004 (Chris Fulop)", "74/109"),
+                 wc(2, "Torchic - 2004 (Reed Weichler)", "74/109")],
+    }], new Map(), new Map(), idx, totals);
+    expect(new Set(runs.map((r) => r.printing))).toEqual(new Set(["World Championship Decks 2004"]));
+  });
+
+  it("keeps a real print marker when it is the card's only one in that group", () => {
+    const idx = index([{ id: "ex1-74", setId: "ex1", name: "Torchic", number: "74" }]);
+    const runs = findPrintRuns([{
+      groupId: 9, name: "Miscellaneous Cards & Products",
+      products: [wc(1, "Torchic - 74/109 (Cosmos Holo)", "74/109")],
+    }], new Map(), new Map(), idx, totals);
+    expect(runs[0].printing).toBe("Cosmos Holo");
+  });
+
+  it("says nothing about a group a set already claimed, or a product some card already sells as", () => {
+    const idx = index([{ id: "ex1-74", setId: "ex1", name: "Torchic", number: "74" }]);
+    const groups = [{ groupId: 9, name: "Promos", products: [wc(1, "Torchic", "74/109")] }];
+    expect(findPrintRuns(groups, new Map([[9, "ex1"]]), new Map(), idx, totals)).toEqual([]);
+    expect(findPrintRuns(groups, new Map(), new Map([[1, "ex1"]]), idx, totals)).toEqual([]);
   });
 });
