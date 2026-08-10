@@ -30,7 +30,7 @@ import { PptClient, CreditBudget, parseCreditBudget } from "../src/upstream/ppt"
 import type { PptPrice } from "../src/upstream/ppt";
 import { resolvePptSetName } from "../src/pipeline/ppt-setmap";
 import { computeFills } from "../src/pipeline/ppt-enrich";
-import { synthesizeMissingCards, numberKeys, nameNumberKey, type CardRef, type TcgcsvProduct } from "../src/pipeline/tcgcsv-cards";
+import { synthesizeMissingCards, numberKeys, nameNumberKey, type CardRef, type PrintRun, type TcgcsvProduct } from "../src/pipeline/tcgcsv-cards";
 import type { FlatCard, FlatSet } from "./flatten-cards-db";
 import { pptPrintingName } from "./flatten-cards-db";
 import Database from "better-sqlite3";
@@ -74,6 +74,38 @@ async function fetchText(url: string): Promise<string> {
 const SUBTYPE_RANK: Record<string, number> = { "Normal": 0, "Holofoil": 1, "Reverse Holofoil": 2 };
 function subtypeRank(name?: string): number {
   return name && name in SUBTYPE_RANK ? SUBTYPE_RANK[name] : 9;
+}
+
+/**
+ * Market price for a handful of groups, fetched fresh and uncached.
+ *
+ * Export mode skips `loadUsdMap` entirely — PPT's bulk CSV is the price source there — but the
+ * print-run products are not in any card's SKU list, so PPT has nothing to say about them. This
+ * is ~48 groups against the 217 the product sweep already makes, so it is cheap enough not to
+ * need the cache discipline (and a stale price cache is worse than a slightly slower build).
+ */
+async function loadUsdForGroups(gids: number[]): Promise<Map<number, number>> {
+  const usd = new Map<number, number>();
+  const bestRank = new Map<number, number>();
+  let failed = 0;
+  for (const gid of gids) {
+    try {
+      const data = await fetchJson(`https://tcgcsv.com/tcgplayer/${TCGCSV_CATEGORY}/${gid}/prices`);
+      for (const row of data.results ?? []) {
+        const pid = row.productId, mp = row.marketPrice;
+        if (typeof pid !== "number" || typeof mp !== "number" || mp <= 0) continue;
+        const rank = subtypeRank(row.subTypeName);
+        if (!usd.has(pid) || rank < (bestRank.get(pid) ?? 99)) { usd.set(pid, mp); bestRank.set(pid, rank); }
+      }
+    } catch (e) {
+      // One unreachable group costs that group's print-run prices, never the build.
+      console.error(`  print-run prices failed for group ${gid}: ${(e as Error).message}`);
+      failed++;
+    }
+    await sleep(120);
+  }
+  console.log(`  print-run prices: ${gids.length} groups (${failed} failed), ${usd.size.toLocaleString()} priced products`);
+  return usd;
 }
 
 async function loadUsdMap(): Promise<Map<number, number>> {
@@ -237,6 +269,9 @@ async function main() {
   // lacks could never appear however well-priced it was upstream — that is how MEP 046-054
   // stayed missing while TCGplayer had them. Additive only: nothing existing is touched.
   console.log(`[2b] checking tcgcsv for cards TCGdex doesn't have…`);
+  // Cards we already hold, sold under a print run we don't model. Written at [4c] once the DB
+  // exists; declared here because it is the same sweep that finds them.
+  let printRuns: PrintRun[] = [];
   try {
     const setByTcgplayerId = new Map<number, string>();
     for (const c of meta.cards) for (const t of c.tcgplayerIds) if (!setByTcgplayerId.has(t)) setByTcgplayerId.set(t, c.setId);
@@ -266,6 +301,7 @@ async function main() {
       groups: productGroups, setByTcgplayerId, numbersBySet, setTotals, dexByName, cardsByNameNumber,
     });
     const { cards: added, addedBySet, skippedForeignDenominator, links } = result;
+    printRuns = result.printRuns;
     meta.cards.push(...added);
     // Give the cards we just identified the id every price feed joins on. Additive: a card that
     // already had one was never a candidate, so nothing that works today can change.
@@ -306,6 +342,14 @@ async function main() {
         groupsRejected: result.decisions.filter((d) => d.rejected).length,
         linkedCards: links.length,
         linkedBySet: Object.fromEntries([...linkedBySet].sort((a, b) => b[1] - a[1])),
+        // Print runs of cards we already have, found in the groups no set claimed. The count to
+        // watch is `printRunLabels` per card, not the total: the whole product risk is a finish
+        // picker growing forty rows long (see `findPrintRuns`).
+        printRuns: printRuns.length,
+        printRunCards: new Set(printRuns.map((r) => r.cardId)).size,
+        printRunLabels: Object.fromEntries([...printRuns.reduce((m, r) =>
+          m.set(r.printing, (m.get(r.printing) ?? 0) + 1), new Map<string, number>())]
+          .sort((a, b) => b[1] - a[1]).slice(0, 60)),
         // The only number that can see a set shipping upstream that we do not have at all —
         // `set_info.total` comes from the same stale record, so a set can't under-report itself
         // and a set that doesn't exist reports nothing. A NEW entry here is the thing to act on.
@@ -333,6 +377,7 @@ async function main() {
       + `${result.decisions.filter((d) => d.rejected === "ambiguous").length} ambiguous)`);
     console.log(`[tcgcsv-fill] ${skippedForeignDenominator} products skipped: printed denominator belongs to another set`);
     console.log(`[tcgcsv-fill] linked ${links.length} existing cards to a tcgplayer id they lacked`);
+    console.log(`[tcgcsv-fill] ${printRuns.length} print runs on ${new Set(printRuns.map((r) => r.cardId)).size} existing cards`);
     for (const [setId, n] of [...linkedBySet].sort((a, b) => b[1] - a[1]).slice(0, 15)) console.log(`[tcgcsv-fill]   link ${setId}: +${n}`);
     // Cards exist upstream that we cannot see at all. Never zero (deck kits, JP exclusives), so
     // the signal is the DELTA, not the level — a new line here is a set that just shipped.
@@ -542,6 +587,40 @@ async function main() {
     }
     // NOTE(hybrid): per-condition (NM/LP/MP) + EUR-from-PPT are NOT in the export — run the
     // existing REST enrichment (overnight-sweep) as the hybrid half to fill price_by_condition.
+  }
+
+  // [4c] Print runs. Extra `price_by_variant` rows on cards that already exist, so a WC-stamped
+  // Torchic can be recorded against ex1-74 at its own price instead of the base card's. No new
+  // card id — nothing here enters wants.json or the fingerprint pack.
+  if (printRuns.length) {
+    const gids = [...new Set(printRuns.map((r) => r.groupId))];
+    // Non-export mode already swept every group's prices at [2]; export mode skipped it.
+    const runUsd = exportDir ? await loadUsdForGroups(gids) : usd;
+    const db = new Database(dbPath);
+    try {
+      // Several products can collapse onto one label (one World Championship year holds many
+      // decks of the same card). Median, not first or max: any single figure is wrong for most
+      // of them, and the median is the one that is wrong by the least.
+      const byKey = new Map<string, number[]>();
+      for (const r of printRuns) {
+        const v = runUsd.get(r.productId);
+        if (v == null) continue;
+        const k = `${r.cardId}\u0000${r.printing}`;
+        (byKey.get(k) ?? byKey.set(k, []).get(k)!).push(v);
+      }
+      const ins = db.prepare("INSERT OR REPLACE INTO price_by_variant(card_id, printing, usd, as_of) VALUES (?,?,?,?)");
+      db.transaction(() => {
+        for (const [k, prices] of byKey) {
+          const [cardId, printing] = k.split("\u0000");
+          prices.sort((a, b) => a - b);
+          ins.run(cardId, printing, prices[Math.floor(prices.length / 2)], asOf);
+        }
+      })();
+      console.log(`[4c] print runs: ${byKey.size} price_by_variant rows from ${printRuns.length} products `
+        + `(${printRuns.length - [...byKey.values()].reduce((n, v) => n + v.length, 0)} had no market price)`);
+    } finally {
+      db.close();
+    }
   }
 
   console.log(`[5] publishing v${version} to ${outDir}/catalog/ …`);

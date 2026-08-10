@@ -186,6 +186,130 @@ function linkTarget(p: TcgcsvProduct, setId: string, index: Map<string, CardRef[
   return hits.size === 1 ? [...hits][0] : null;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Print runs — a card we ALREADY have, sold under a print run we do not model.
+//
+// The groups no set claims (World Championship Decks, Prize Pack Series, Trick or Trade, the
+// promo junk drawers) are not full of missing cards: 5,574 of their 7,325 card products are a
+// card we already hold, reprinted with a stamp or a different foil. They were invisible, and the
+// collector who owns one was being shown the base card's price. These become extra
+// `price_by_variant` rows on the card that already exists — no new card id, so nothing enters
+// `wants.json` or the fingerprint pack.
+// ---------------------------------------------------------------------------------------------
+
+/** A card we already hold, sold in a group we cannot place. `printing` is a `price_by_variant` key. */
+export interface PrintRun { cardId: string; groupId: number; productId: number; printing: string }
+
+/**
+ * The card a product IS, searched across the WHOLE catalog rather than one set.
+ *
+ * ⚠️ The global search is much weaker than `linkTarget`'s set-scoped one and needs the extra
+ * guard: `numberKeys` emits the zero-stripped form alongside the printed one, so "Mewtwo
+ * 010/102" matches promo `P-A-010` on the "010" key while the true `base1-10` only holds "10" —
+ * measured, and it returned the promo. `denominatorFits` is what breaks the tie, and applying it
+ * also RAISED the hit rate (5,294 → 5,574) because it un-ambiguates keys rather than only
+ * rejecting them.
+ */
+export function resolveCardGlobally(
+  p: TcgcsvProduct,
+  index: Map<string, CardRef[]>,
+  setTotals: Map<string, { total: number | null; printedTotal: number | null }>,
+): string | null {
+  const raw = extMap(p)["Number"];
+  const name = printBaseName(p.name, raw).replace(/\s*[([][^)\]]*[)\]]\s*$/, "").replace(/\s+-\s+.*$/, "").trim();
+  let found: string | null = null;
+  for (const k of numberKeys(raw)) {
+    const refs = (index.get(nameNumberKey(name, k)) ?? []).filter((r) => {
+      const t = setTotals.get(r.setId);
+      return denominatorFits(raw, t?.total ?? null, t?.printedTotal ?? null);
+    });
+    if (!refs.length) continue;
+    const id = refs[0].id;
+    if (refs.some((r) => r.id !== id)) continue; // the key is ambiguous — no vote
+    if (found && found !== id) return null;      // two keys, two cards — no vote
+    found = id;
+  }
+  return found;
+}
+
+/**
+ * The product name with TCGplayer's trailing " - <number>" removed, in every form it writes it.
+ *
+ * `cleanName` only strips the localId ("Chikorita - 046"); the promo groups also write the full
+ * printed fraction ("Kricketune V - 006/163"), which its `(?![\w/])` guard deliberately refuses.
+ * Widening `cleanName` itself would change which cards get synthesized, so this is separate.
+ */
+export function printBaseName(productName: string, raw: string | null | undefined): string {
+  const head = (raw ?? "").split("/")[0].trim();
+  for (const form of [raw, head, /(\d+)$/.exec(head)?.[1]]) {
+    if (!form) continue;
+    const esc = form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const next = productName.replace(new RegExp(`\\s+-\\s+0*${esc}\\s*$`, "i"), "");
+    if (next !== productName) return next.replace(/\s+/g, " ").trim();
+  }
+  return productName.replace(/\s+/g, " ").trim();
+}
+
+/** The trailing "(Cosmos Holo)" / "[Staff]" that says which print this is. */
+function printMarker(base: string): string | null {
+  return /[([]([^)\]]+)[)\]]\s*$/.exec(base)?.[1].trim() ?? null;
+}
+
+/**
+ * Every print run in the groups no set claimed.
+ *
+ * The label is the whole product risk. Derived naively — one label per distinct parenthetical —
+ * the real feed yields 596 labels and a single card with SIXTEEN, because World Championship
+ * Decks names the deck's AUTHOR ("Torchic - 2004 (Chris Fulop)"). A sixteen-row finish picker is
+ * a worse product than no picker at all.
+ *
+ * So: ONE print run per (card, group). A card carrying several different markers inside the same
+ * group is being told apart by provenance, not by print run, and the group is then the honest
+ * label. That single rule takes the worst card from 16 labels to 5 and leaves 77% of cards with
+ * exactly one — with no hand-maintained vocabulary and no threshold to tune.
+ */
+export function findPrintRuns(
+  groups: { groupId: number; name?: string; products: TcgcsvProduct[] }[],
+  mapped: Map<number, string>,
+  setByTcgplayerId: Map<number, string>,
+  index: Map<string, CardRef[]>,
+  setTotals: Map<string, { total: number | null; printedTotal: number | null }>,
+): PrintRun[] {
+  const cands: { gid: number; cardId: string; productId: number; mark: string | null; base: string }[] = [];
+  for (const g of groups) {
+    if (mapped.has(g.groupId)) continue;
+    for (const p of g.products) {
+      const ext = extMap(p);
+      if (!("HP" in ext) && !("Card Type" in ext)) continue;
+      // Already a SKU of some card: it is priced as that card today and is not ours to relabel.
+      if (setByTcgplayerId.has(p.productId)) continue;
+      const cardId = resolveCardGlobally(p, index, setTotals);
+      if (!cardId) continue;
+      const base = printBaseName(p.name, ext["Number"]);
+      cands.push({ gid: g.groupId, cardId, productId: p.productId, mark: printMarker(base), base });
+    }
+  }
+  const marksPerCardGroup = new Map<string, Set<string>>();
+  for (const c of cands) {
+    const k = `${c.cardId}|${c.gid}`;
+    const s = marksPerCardGroup.get(k) ?? marksPerCardGroup.set(k, new Set()).get(k)!;
+    s.add(c.mark ?? "");
+  }
+  const groupName = new Map(groups.map((g) => [g.groupId, g.name ?? String(g.groupId)]));
+  return cands.map((c) => {
+    const name = groupName.get(c.gid)!;
+    // The year is part of the print run ("World Championship Decks 2012"), and only the product
+    // carries it — the group is one bucket for every year.
+    const year = /\b(19|20)\d{2}\b/.exec(c.base)?.[0];
+    const fromGroup = year && !/\d{4}/.test(name) ? `${name} ${year}` : name;
+    // A year beats the marker outright. "Squirtle - 2006 (Hiroki Yano)" is the only World
+    // Championship 2006 Squirtle there is; the parenthetical names the player who built the
+    // deck, and "Printing: Hiroki Yano" is not a thing a collector can read off the card.
+    const useMark = !year && c.mark && marksPerCardGroup.get(`${c.cardId}|${c.gid}`)!.size === 1;
+    return { cardId: c.cardId, groupId: c.gid, productId: c.productId, printing: useMark ? c.mark! : fromGroup };
+  });
+}
+
 /**
  * Group → set id, voted by the products we already resolve. A set is claimed by at most one
  * group (the one with the most evidence), so an overlapping group can't steal it.
@@ -257,7 +381,8 @@ export function mapGroupsToSets(
 }
 
 export interface SynthesizeInput {
-  groups: { groupId: number; products: TcgcsvProduct[] }[];
+  /** `name` is only used to label a print run whose group no set claimed. */
+  groups: { groupId: number; name?: string; products: TcgcsvProduct[] }[];
   /** Every tcgplayer SKU already claimed by a card, → that card's set id. */
   setByTcgplayerId: Map<number, string>;
   /** setId → number keys already present in that set (union of `numberKeys` per card). */
@@ -284,6 +409,11 @@ export interface SynthesizeResult {
    * every price feed joins on that id and a card without one is silently priceless.
    */
   links: { cardId: string; setId: string; productId: number }[];
+  /**
+   * Cards we already hold, sold under a print run we do not model — see `findPrintRuns`. Empty
+   * unless `cardsByNameNumber` is supplied, like `links`.
+   */
+  printRuns: PrintRun[];
 }
 
 export function synthesizeMissingCards(input: SynthesizeInput): SynthesizeResult {
@@ -354,7 +484,10 @@ export function synthesizeMissingCards(input: SynthesizeInput): SynthesizeResult
       addedBySet.set(setId, (addedBySet.get(setId) ?? 0) + 1);
     }
   }
-  return { cards, addedBySet, skippedForeignDenominator, decisions, rejects, links };
+  const printRuns = input.cardsByNameNumber
+    ? findPrintRuns(input.groups, groupSets, input.setByTcgplayerId, input.cardsByNameNumber, input.setTotals)
+    : [];
+  return { cards, addedBySet, skippedForeignDenominator, decisions, rejects, links, printRuns };
 }
 
 /**
