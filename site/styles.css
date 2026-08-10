@@ -216,18 +216,6 @@ p { margin: 0 0 var(--space-4); text-wrap: pretty; }
 .btn-blue { background: var(--tin-blue); color: #fff; }
 .btn-blue:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgb(59 116 201 / 0.35); }
 
-.soon-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  border: 1px solid rgb(238 187 98 / 0.5);
-  border-radius: 999px;
-  color: var(--gold);
-  font-weight: 600;
-  font-size: 0.9375rem;
-}
-
 /* The ledger — real facts in the app's caption-ledger voice */
 .ledger {
   display: flex;

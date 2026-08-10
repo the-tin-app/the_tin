@@ -3,7 +3,10 @@
     "details": [
       {
         "appIDs": ["GXP2X83CRN.ai.reyes.thetin"],
-        "components": [{ "/": "/c/*" }]
+        "components": [
+          { "/": "/c/*" },
+          { "/": "/l", "?": { "d": "?*" }, "comment": "shared trade list — opens the trade screen" }
+        ]
       }
     ]
   }

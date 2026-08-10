@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import zlib from "node:zlib";
+import { readFile } from "node:fs/promises";
 import { renderListHTML, renderErrorHTML, decodePayload, base64urlToBytes } from "../functions/l.js";
 
 function encode(payload) {
@@ -76,5 +77,25 @@ assert.ok(!nastyHTML.includes('" onload="x'), "set name can't break out of an at
 const errorHTML = renderErrorHTML({ origin });
 assert.ok(errorHTML.includes("isn't readable"), "error page explains itself");
 assert.ok(errorHTML.includes('content="noindex, nofollow"'), "error page is noindex too");
+
+// --- universal link routing ----------------------------------------------
+
+// A link the app can't be handed is just a web page. `/l` was missing from the AASA the whole time
+// the in-app trade route was built and unit-tested against it, so every shared trade link opened
+// Safari instead — found by walking the flow on 2026-07-30, not by any test. This is the cheapest
+// place to stop that recurring. Note a malformed AASA takes `/c/*` down with it: the file is
+// parsed as a whole, so a `JSON.parse` failure here is a total outage of universal links.
+const aasa = JSON.parse(
+  await readFile(new URL("../.well-known/apple-app-site-association", import.meta.url), "utf8"),
+);
+const components = aasa.applinks.details.flatMap((d) => d.components ?? []);
+assert.ok(
+  components.some((c) => c["/"] === "/c/*"),
+  "AASA still routes the card preview /c/* to the app",
+);
+assert.ok(
+  components.some((c) => c["/"] === "/l" && c["?"]?.d),
+  "AASA routes /l?d=… to the app, or shared trade links only ever open the browser",
+);
 
 console.log("shared-list: all assertions passed");
