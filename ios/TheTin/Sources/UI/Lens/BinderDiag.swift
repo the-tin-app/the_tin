@@ -60,13 +60,20 @@ enum BinderDiag {
     /// budget. DEBUG only — compiled out of Release entirely, like the rest of this file.
     static func timing(_ stage: String, _ seconds: Double, detail: String = "") {
         #if DEBUG
-        let line = String(format: "%-22@ %8.0f ms  %@\n", stage as NSString, seconds * 1000,
-                          detail as NSString)
+        note(String(format: "%-22@ %8.0f ms  %@", stage as NSString, seconds * 1000,
+                    detail as NSString))
+        #endif
+    }
+
+    /// A free-text line in the same log. What the camera was asked for and what it delivered goes here
+    /// rather than on screen — see `BinderView`, where it used to be rendered.
+    static func note(_ line: String) {
+        #if DEBUG
         let dir = directory
         timingQueue.async {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let url = dir.appendingPathComponent("timings.txt")
-            guard let data = line.data(using: .utf8) else { return }
+            guard let data = (line + "\n").data(using: .utf8) else { return }
             if let h = try? FileHandle(forWritingTo: url) {
                 h.seekToEndOfFile(); h.write(data); try? h.close()
             } else {

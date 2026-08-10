@@ -55,22 +55,6 @@ final class LensPhotoSource: NSObject {
         super.init()
     }
 
-    /// What we asked for and what arrived, for a device runsheet to quote verbatim.
-    ///
-    /// ⚠️ DEBUG only. It exists because "the photo came back small" has several possible causes — the
-    /// wrong format queried, an unsorted dimensions list, a macro handoff — and one device session was
-    /// already spent narrowing them by inference. A line on screen answers it in one look.
-    var diagnostic: String? {
-        #if DEBUG
-        let shot = capturedMegapixels.map { String(format: "%.1f", $0) } ?? "—"
-        let used = megapixels.map { String(format: "%.1f", $0) } ?? "—"
-        let offers = offeredDimensions.isEmpty ? "(not asked yet)" : offeredDimensions.joined(separator: ", ")
-        return "shot \(shot) MP → processed \(used) MP · offers \(offers)"
-        #else
-        return nil
-        #endif
-    }
-
     /// Acquires the camera and configures the session.
     ///
     /// ⚠️ `nonisolated`, and it MUST be called off the MainActor — that is the only reason this is
@@ -209,6 +193,13 @@ final class LensPhotoSource: NSObject {
         capturedMegapixels = Double(image.extent.width * image.extent.height) / 1_000_000
         megapixels = Double(processed.extent.width * processed.extent.height) / 1_000_000
         captureFailure = nil
+        // What we asked for and what arrived. Used to be a monospaced line on the camera screen; it is
+        // the same information, written where a runsheet can quote it verbatim without a tester having
+        // to read debug text off a viewfinder.
+        BinderDiag.note(String(format: "CAPTURE                shot %.1f MP -> processed %.1f MP  offers %@",
+                               capturedMegapixels ?? 0, megapixels ?? 0,
+                               (offeredDimensions.isEmpty ? "(not asked)"
+                                : offeredDimensions.joined(separator: ", ")) as NSString))
         return processed
     }
 

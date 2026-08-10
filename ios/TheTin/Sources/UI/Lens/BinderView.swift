@@ -198,13 +198,11 @@ struct BinderCaptureView: View {
                     .font(.caption2).multilineTextAlignment(.center)
                     .foregroundStyle(.orange)
             }
-            // DEBUG-only, and it earns its place: "the photo came back small" has several possible
-            // causes and one device session was already spent telling them apart by inference.
-            if let diagnostic = source.diagnostic {
-                Text(diagnostic)
-                    .font(.system(size: 9).monospaced())
-                    .foregroundStyle(.white.opacity(0.6))
-            }
+            // ⚠️ The "shot N MP → processed N MP · offers …" line used to render HERE. It is not deleted,
+            // it MOVED: `LensPhotoSource.capture` writes it to `BinderDiag`. It still answers the
+            // question it was added for — "the photo came back small" has several causes and one device
+            // session was already spent telling them apart by inference — without putting a monospaced
+            // debug string on the camera in every Debug build a tester uses.
         }
         .foregroundStyle(.white)
         .padding(12)
