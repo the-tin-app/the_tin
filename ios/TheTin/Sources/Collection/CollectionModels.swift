@@ -36,28 +36,76 @@ extension CardCondition {
     }
 }
 
-/// Card finish/printing. Fixed list offered for every card (no per-card finish data exists yet).
-/// Recorded on drafts and committed entries so future per-variant pricing lights up with no UI rework.
-enum CardVariant: String, CaseIterable, Identifiable, Codable {
-    case regular, holo, reverseHolo, firstEdition
+/// How a copy was printed — the four finishes, plus any print RUN the catalog names for that card.
+///
+/// It was an enum of exactly four cases. That was right while `price_by_variant` held seven PPT
+/// finish keys and nothing else, and wrong the moment the catalog started naming print runs
+/// ("Cosmos Holo", "World Championship Decks 2004", "Prize Pack Series Cards"): the substring
+/// `matches` folds *every* one of those into `.holo` or `.regular`, so the card a collector
+/// actually owns could not be recorded and was priced as the base card.
+///
+/// So it is a String now, with the four finishes as constants. Nothing about storage changed —
+/// `CollectionEntry.variant` was already `String?` and this was already its rawValue, so an entry
+/// written before this decodes to exactly what it did before and one written after is just a
+/// longer string. There is no migration and no forward-decode hazard here.
+struct CardVariant: RawRepresentable, Hashable, Identifiable, Codable {
+    let rawValue: String
     var id: String { rawValue }
+
+    static let regular = CardVariant(known: "regular")
+    static let holo = CardVariant(known: "holo")
+    static let reverseHolo = CardVariant(known: "reverseHolo")
+    static let firstEdition = CardVariant(known: "firstEdition")
+    /// The four finishes, in picker order. (Was `CaseIterable`; a print run is not a "case".)
+    static let allCases: [CardVariant] = [.regular, .holo, .reverseHolo, .firstEdition]
+
+    private init(known: String) { rawValue = known }
+
+    /// Never fails — an unrecognised string IS a print run, which is the point. A catalog
+    /// printing that names one of the four finishes canonicalises onto it, so "Holofoil" and
+    /// "holo" are the same value and a CSV import round-trips exactly as it did before.
+    init?(rawValue: String) {
+        if let known = Self.allCases.first(where: { $0.rawValue == rawValue }) { self = known; return }
+        if Self.pptPrintings.contains(where: { $0.caseInsensitiveCompare(rawValue) == .orderedSame }),
+           let known = Self.allCases.first(where: { $0.matchesFinish(rawValue) }) { self = known; return }
+        self.rawValue = rawValue
+    }
+
+    /// PPT's whole finish vocabulary, verbatim — the only `price_by_variant.printing` values that
+    /// name a finish rather than a print run. Exact, because the substring test below cannot tell
+    /// "Holofoil" (a finish) from "Cosmos Holo" (a print run) and answers `.holo` to both.
+    private static let pptPrintings = ["Normal", "Unlimited", "Holofoil", "Unlimited Holofoil",
+                                       "Reverse Holofoil", "1st Edition", "1st Edition Holofoil"]
+
     var label: String {
         switch self {
         case .regular: return "Regular"
         case .holo: return "Holo"
         case .reverseHolo: return "Reverse Holo"
         case .firstEdition: return "1st Edition"
+        default: return rawValue   // a print run already reads as its own name
         }
     }
+
     /// Cheap heuristic pre-fill from the catalog `rarity` string. Manual selection overrides this.
     static func defaultFor(rarity: String?) -> CardVariant {
         (rarity?.lowercased().contains("holo") ?? false) ? .holo : .regular
     }
 
-    /// True when a PPT `price_by_variant.printing` key names this finish. Substring-tolerant
-    /// because PPT keys vary ("Holofoil", "Reverse Holofoil", "1st Edition Holofoil"). Order-safe:
-    /// each case's predicate excludes the others so `.holo` never swallows a reverse/1st-ed key.
+    /// True when a `price_by_variant.printing` key names this printing.
+    ///
+    /// For the four finishes this is the original substring test — PPT keys vary ("Holofoil",
+    /// "1st Edition Holofoil") and it is load-bearing in `GroupStats` and the CSV import. For a
+    /// print run it is exact: "Cosmos Holo" means that run and nothing else.
     func matches(printing: String) -> Bool {
+        Self.allCases.contains(self)
+            ? matchesFinish(printing)
+            : printing.caseInsensitiveCompare(rawValue) == .orderedSame
+    }
+
+    /// Order-safe: each finish's predicate excludes the others, so `.holo` never swallows a
+    /// reverse/1st-ed key.
+    private func matchesFinish(_ printing: String) -> Bool {
         let p = printing.lowercased()
         let firstEd = p.contains("1st edition") || p.contains("first edition")
         switch self {
@@ -67,13 +115,29 @@ enum CardVariant: String, CaseIterable, Identifiable, Codable {
         // WotC-era keys say "Unlimited" instead of "Normal"; a non-holo unlimited is regular.
         case .regular:      return (p.contains("normal") && !p.contains("reverse"))
                                 || (p.contains("unlimited") && !p.contains("holo"))
+        default:            return false
         }
     }
 
-    /// This finish's market price among a card's printings, if PPT priced it.
-    func price(in variants: [VariantPrice]) -> Double? {
-        variants.first { matches(printing: $0.printing) }?.usd
+    /// The row that IS this printing, out of rows keyed by a printing name.
+    ///
+    /// Exact first, substring second — and the order is the whole point. A card can now carry both
+    /// "Holofoil" and "Cosmos Holo", `matches` is true of BOTH for `.holo`, and every one of these
+    /// tables arrives cheapest-first (`ORDER BY usd, printing`). Without the exact pass, a plain
+    /// $40 holo would be valued at the $3 promo's price — in the tin total, the insurance report
+    /// and the trade session alike.
+    ///
+    /// ⚠️ Use this, not `first { matches(printing:) }`, for anything keyed off `price_by_variant`
+    /// or `price_delta` — those are the two tables print runs land in. `price_matrix` and
+    /// `graded_by_printing` carry no print-run rows, so a bare `matches` is still correct there.
+    func best<T>(in rows: [T], key: (T) -> String) -> T? {
+        rows.first { CardVariant(rawValue: key($0)) == self } ?? rows.first { matches(printing: key($0)) }
     }
+
+    func row(in variants: [VariantPrice]) -> VariantPrice? { best(in: variants) { $0.printing } }
+
+    /// This printing's market price among a card's printings, if it is priced.
+    func price(in variants: [VariantPrice]) -> Double? { row(in: variants)?.usd }
 }
 
 /// Where a committed scan lands. `.tin` = owned but ungrouped (groupId "").

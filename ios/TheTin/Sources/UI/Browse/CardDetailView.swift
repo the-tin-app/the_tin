@@ -203,7 +203,7 @@ struct CardDetailView: View {
             return v
         }
         let def = CardVariant.defaultFor(rarity: model.card.rarity)
-        return model.variants.first { def.matches(printing: $0.printing) } ?? model.variants.first
+        return def.row(in: model.variants) ?? model.variants.first
     }
 
     var body: some View {
@@ -318,7 +318,9 @@ struct CardDetailView: View {
                         // e.g. "Unlimited Holofoil"→.holo→matches "Holofoil"; "1st Edition
                         // Holofoil"→.firstEdition→matches "1st Edition"; "Unlimited"→.regular→
                         // matches "Normal".
-                        let printingVariant = currentPrinting.flatMap { p in CardVariant.allCases.first { $0.matches(printing: p.printing) } }
+                        // A print run ("Cosmos Holo") maps to itself, so it shows no graded rows
+                        // rather than borrowing plain Holofoil's — graded_by_printing has none.
+                        let printingVariant = currentPrinting.flatMap { p in CardVariant(rawValue: p.printing) }
                         let printingGraded = printingVariant.map { v in model.gradedByPrinting.filter { v.matches(printing: $0.printing) } } ?? []
                         // Graded (PSA) prices — only grades with data appear. When the selected
                         // printing has its own graded row for a grade, that value replaces the
