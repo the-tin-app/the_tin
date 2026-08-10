@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   numberKeys, denominatorFits, parseAttack, cleanName, mapGroupsToSets, synthesizeMissingCards,
-  type TcgcsvProduct,
+  nameNumberKey, findPrintRuns, type CardRef, type TcgcsvProduct,
 } from "../src/pipeline/tcgcsv-cards";
 
 const ext = (o: Record<string, string>) => Object.entries(o).map(([name, value]) => ({ name, value }));
@@ -170,5 +170,153 @@ describe("synthesizeMissingCards", () => {
   it("adds nothing from a group it could not map", () => {
     const r = synthesizeMissingCards({ ...base, groups: [{ groupId: 42, products: [CHIKORITA] }] });
     expect(r.cards).toHaveLength(0);
+  });
+});
+
+/**
+ * Hidden Fates: Shiny Vault, shaped like the real thing: 94 cards in the catalog, NOT ONE of them
+ * carrying a tcgplayer id, so the whole group resolves nothing and the set is invisible to both
+ * the group voter and every price feed. Same story for `bwp` (101 cards, 0 linked).
+ */
+describe("name+number fallback", () => {
+  /** `sma` cards SV1…SV20, none of them linked. Plus a decoy #1 in another set. */
+  const smaCards: { id: string; setId: string; localId: string; name: string; linked: boolean }[] = [
+    ...Array.from({ length: 20 }, (_, i) => ({
+      id: `sma-SV${i + 1}`, setId: "sma", localId: `SV${i + 1}`, name: `Mon${i + 1}`, linked: false,
+    })),
+    { id: "base1-1", setId: "base1", localId: "1", name: "Mon1", linked: true },
+  ];
+  const index = (cards: typeof smaCards) => {
+    const m = new Map<string, CardRef[]>();
+    for (const c of cards) {
+      const ref: CardRef = { id: c.id, setId: c.setId, linked: c.linked };
+      for (const k of numberKeys(c.localId)) {
+        const key = nameNumberKey(c.name, k);
+        m.set(key, [...(m.get(key) ?? []), ref]);
+      }
+    }
+    return m;
+  };
+  /** TCGplayer numbers these "SV1/SV94" and names them "Mon1" — no productId we know. */
+  const smaProducts = Array.from({ length: 20 }, (_, i) =>
+    product(900_000 + i, `Mon${i + 1}`, { Number: `SV${i + 1}/SV94`, "Card Type": "Water", HP: "60" }));
+  const smaGroup = [{ groupId: 2594, products: smaProducts }];
+
+  it("maps a group whose set has no linked card at all", () => {
+    expect(mapGroupsToSets(smaGroup, new Map(), undefined, index(smaCards)).get(2594)).toBe("sma");
+  });
+
+  it("does nothing without the index, which is the behaviour before this existed", () => {
+    expect(mapGroupsToSets(smaGroup, new Map()).size).toBe(0);
+  });
+
+  it("casts no vote on a bare number, which every set has one of", () => {
+    // "Mon1" numbered plainly is card 1 of sma AND of base1 — the exact ambiguity `numberKeys`
+    // creates by emitting the digits alongside the specific form. Two sets ⇒ no vote at all.
+    const bare = Array.from({ length: 20 }, (_, i) => product(910_000 + i, `Mon${i + 1}`, { Number: `${i + 1}/94`, "Card Type": "Water", HP: "60" }));
+    const d: any[] = [];
+    mapGroupsToSets([{ groupId: 3, products: bare }], new Map(), d, index(smaCards));
+    expect(d[0].matched).toBe(19); // every one but Mon1, whose bare "1" hits two sets
+  });
+
+  it("never outbids a group that resolved the same set by productId", () => {
+    // A weak-key group with MORE votes than the id-resolved one still loses. Base Set (Shadowless)
+    // name-matches all of base1 while the real Base Set group matches it by id; letting the weak
+    // key win would price every Base Set card off the shadowless print.
+    const linkedBase = Array.from({ length: 12 }, (_, i) => [700 + i, "sma"] as const);
+    const groups = [
+      { groupId: 1, products: linkedBase.map(([id]) => product(id, "x", {})) },
+      ...smaGroup,
+    ];
+    const m = mapGroupsToSets(groups, new Map(linkedBase), undefined, index(smaCards));
+    expect(m.get(1)).toBe("sma");
+    expect(m.has(2594)).toBe(false);
+  });
+
+  it("gives every unlinked card the tcgplayer id it was missing, and no card two", () => {
+    const r = synthesizeMissingCards({
+      groups: [{ groupId: 2594, products: [...smaProducts, product(999_999, "Mon1", { Number: "SV1/SV94", "Card Type": "Water", HP: "60" })] }],
+      setByTcgplayerId: new Map(),
+      numbersBySet: new Map([["sma", new Set(smaCards.filter((c) => c.setId === "sma").flatMap((c) => [...numberKeys(c.localId)]))]]),
+      setTotals: new Map([["sma", { total: 94, printedTotal: 94 }]]),
+      cardsByNameNumber: index(smaCards),
+    });
+    expect(r.cards).toHaveLength(0);                       // the cards exist; only the id was missing
+    expect(r.links).toHaveLength(20);
+    expect(r.links[0]).toEqual({ cardId: "sma-SV1", setId: "sma", productId: 900_000 });
+    expect(new Set(r.links.map((l) => l.cardId)).size).toBe(20);
+  });
+
+  it("leaves a card that already has an id alone", () => {
+    const linked = smaCards.map((c) => ({ ...c, linked: c.setId === "sma" ? true : c.linked }));
+    const r = synthesizeMissingCards({
+      groups: smaGroup,
+      setByTcgplayerId: new Map(),
+      numbersBySet: new Map([["sma", new Set(smaCards.filter((c) => c.setId === "sma").flatMap((c) => [...numberKeys(c.localId)]))]]),
+      setTotals: new Map([["sma", { total: 94, printedTotal: 94 }]]),
+      cardsByNameNumber: index(linked),
+    });
+    expect(r.links).toHaveLength(0);
+  });
+});
+
+describe("findPrintRuns", () => {
+  const totals = new Map([
+    ["ex1", { total: 109, printedTotal: 109 }],
+    ["P-A", { total: 149, printedTotal: 149 }],
+    ["base1", { total: 102, printedTotal: 102 }],
+  ]);
+  const index = (cards: { id: string; setId: string; name: string; number: string }[]) => {
+    const m = new Map<string, CardRef[]>();
+    for (const c of cards) {
+      for (const k of numberKeys(c.number)) {
+        const key = nameNumberKey(c.name, k);
+        (m.get(key) ?? m.set(key, []).get(key)!).push({ id: c.id, setId: c.setId, linked: true });
+      }
+    }
+    return m;
+  };
+  const wc = (productId: number, name: string, number: string) =>
+    product(productId, name, { Number: number, HP: "60", "Card Type": "Fire" });
+
+  it("keeps a zero-padded promo from stealing the base-set card the denominator names", () => {
+    // Measured on the live feed: "Mewtwo 010/102" matched promo P-A-010 on the "010" key while
+    // base1-10 only holds "10", and the promo won. The printed /102 is what breaks the tie.
+    const idx = index([
+      { id: "base1-10", setId: "base1", name: "Mewtwo", number: "10" },
+      { id: "P-A-010", setId: "P-A", name: "Mewtwo", number: "010" },
+    ]);
+    const runs = findPrintRuns(
+      [{ groupId: 1, name: "Base Set (Shadowless)", products: [wc(1, "Mewtwo", "010/102")] }],
+      new Map(), new Map(), idx, totals);
+    expect(runs.map((r) => r.cardId)).toEqual(["base1-10"]);
+  });
+
+  it("collapses a card's many markers inside one group to the group itself", () => {
+    // World Championship Decks names the deck's AUTHOR, so a naive label gave one card sixteen
+    // printings. A card told apart by provenance has ONE print run: the group.
+    const idx = index([{ id: "ex1-74", setId: "ex1", name: "Torchic", number: "74" }]);
+    const runs = findPrintRuns([{
+      groupId: 2282, name: "World Championship Decks",
+      products: [wc(1, "Torchic - 2004 (Chris Fulop)", "74/109"),
+                 wc(2, "Torchic - 2004 (Reed Weichler)", "74/109")],
+    }], new Map(), new Map(), idx, totals);
+    expect(new Set(runs.map((r) => r.printing))).toEqual(new Set(["World Championship Decks 2004"]));
+  });
+
+  it("keeps a real print marker when it is the card's only one in that group", () => {
+    const idx = index([{ id: "ex1-74", setId: "ex1", name: "Torchic", number: "74" }]);
+    const runs = findPrintRuns([{
+      groupId: 9, name: "Miscellaneous Cards & Products",
+      products: [wc(1, "Torchic - 74/109 (Cosmos Holo)", "74/109")],
+    }], new Map(), new Map(), idx, totals);
+    expect(runs[0].printing).toBe("Cosmos Holo");
+  });
+
+  it("says nothing about a group a set already claimed, or a product some card already sells as", () => {
+    const idx = index([{ id: "ex1-74", setId: "ex1", name: "Torchic", number: "74" }]);
+    const groups = [{ groupId: 9, name: "Promos", products: [wc(1, "Torchic", "74/109")] }];
+    expect(findPrintRuns(groups, new Map([[9, "ex1"]]), new Map(), idx, totals)).toEqual([]);
+    expect(findPrintRuns(groups, new Map(), new Map([[1, "ex1"]]), idx, totals)).toEqual([]);
   });
 });

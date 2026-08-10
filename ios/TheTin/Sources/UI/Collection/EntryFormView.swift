@@ -137,8 +137,14 @@ struct EntryFormView: View {
     /// sold as 1st Edition shouldn't offer it. No variant rows at all ⇒ the full list (no data ≠
     /// doesn't exist; minimal tiers). Unlike `validVariants` this does NOT fold in a current
     /// selection, so callers can tell whether a given finish is genuinely offered.
+    ///
+    /// The catalog names PRINT RUNS now, not only finishes — "Cosmos Holo", "World Championship
+    /// Decks 2004". Those are offered as themselves; the four finishes still come first and in
+    /// their canonical order, so the picker an ordinary card shows is exactly what it was.
     static func offeredVariants(catalog: [VariantPrice]) -> [CardVariant] {
-        let backed = CardVariant.allCases.filter { v in catalog.contains { v.matches(printing: $0.printing) } }
+        let named = catalog.compactMap { CardVariant(rawValue: $0.printing) }
+        var backed = CardVariant.allCases.filter(named.contains)
+        for v in named where !CardVariant.allCases.contains(v) && !backed.contains(v) { backed.append(v) }
         return backed.isEmpty ? CardVariant.allCases : backed
     }
 
@@ -147,8 +153,8 @@ struct EntryFormView: View {
     /// names it.
     static func validVariants(catalog: [VariantPrice], current: CardVariant?) -> [CardVariant] {
         let offered = offeredVariants(catalog: catalog)
-        guard let current else { return offered }
-        return CardVariant.allCases.filter { offered.contains($0) || $0 == current }
+        guard let current, !offered.contains(current) else { return offered }
+        return offered + [current]
     }
 
     /// "Reverse Holo · $140" when that printing is priced, else just the finish name.

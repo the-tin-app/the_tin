@@ -49,8 +49,11 @@ enum GroupStats {
            let cond = records.first(where: { $0.kind == .condition && $0.key == condition.catalog.rawValue }) {
             return cond
         }
+        // Exact-then-substring: `.printing` delta keys come straight from `price_by_variant`
+        // (publish-tiers joins old/new), so they now include print runs, and `.holo` matches the
+        // string "Cosmos Holo" too. See `CardVariant.best(in:key:)`.
         if let variant = entry.variantValue,
-           let printing = records.first(where: { $0.kind == .printing && variant.matches(printing: $0.key) }) {
+           let printing = variant.best(in: records.filter { $0.kind == .printing }, key: \.key) {
             return printing
         }
         return records.first { $0.kind == .raw }

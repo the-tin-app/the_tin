@@ -59,10 +59,14 @@ enum LensMatcher {
     static func identify(plate: CanonicalFrame, fingerprint: CardFingerprint, matcher: Matcher,
                          index: CandidateNarrowing, config: LockConfig = LockConfig()) -> LensCellState {
         guard fingerprint.count > 0 else { return .noMatch }
-        let fields = TextGate.extract(plate: plate)
-        let pool = index.pool(fields: fields)
+        // Per-stage timing, DEBUG only and compiled out of Release — the A10 is where this feature's
+        // viability is decided and it had never been measured there. See `BinderDiag.timing`.
+        let fields = BinderDiag.timed("ocr") { TextGate.extract(plate: plate) }
+        let pool = BinderDiag.timed("pool") { index.pool(fields: fields) }
         guard !pool.isEmpty,
-              let results = try? matcher.match(query: fingerprint, candidateIds: pool),
+              let results = BinderDiag.timed("match", detail: "pool=\(pool.count)",
+                                             { try? matcher.match(query: fingerprint,
+                                                                  candidateIds: pool) }),
               let top = results.first else { return .noMatch }
         return verdict(results: results,
                        consistency: index.consistency(cardId: top.cardId, fields: fields,
@@ -122,6 +126,8 @@ struct LiveLensWork: LensWork {
     private let cache = FingerprintCache()
 
     func detect(photoId: UUID) async -> [LensCell] {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer { BinderDiag.timing("DETECT (photo)", CFAbsoluteTimeGetCurrent() - t0) }
         guard let ci = await imageForPhoto(photoId) else { return [] }
         let context = CIContext()
         var cells: [LensCell] = []
@@ -157,11 +163,44 @@ struct LiveLensWork: LensWork {
             fingerprints[cell.id] = fp
             cells.append(cell)
         }
+        // A pocket Vision returned no quad for is still a pocket, and on a CORNER there is no second
+        // tile to recover it — see `BinderPlan.missingPocketQuads`. Extrapolate one from the cards that
+        // were found and give it the same chance as any other cell.
+        //
+        // ⚠️ The keypoint floor below does NOT make this safe, and an earlier version of this comment
+        // wrongly claimed it did ("a quad over a genuinely empty pocket fingerprints at ~15 keypoints").
+        // Measured on device 2026-08-09: two EMPTY pockets fingerprinted at 442 and 595. The floor only
+        // rejects slivers and glare bands. What keeps an empty pocket empty is `BinderPlan.place`,
+        // which discards a synthesised cell that never identified — hence the flag below.
+        //
+        // Only cells that fingerprinted are used to read the grid. An `.unreadable` cell may be a glare
+        // band rather than a card, and letting one set the median size or the row/column line would
+        // move every synthesised pocket with it.
+        let real = cells.filter { $0.fpCount >= BinderPlan.minFpCount }
+        // A page is photographed from one side, so every card in it is the same way up. Passing the
+        // resolved rotation makes `plate` skip `orientUpright`'s scoring — two renders and two Vision
+        // text passes, the bulk of detection's cost.
+        let degrees = Dictionary(grouping: real, by: \.degrees)
+            .max { $0.value.count < $1.value.count }?.key ?? 0
+        for quad in BinderPlan.missingPocketQuads(from: real.map(\.quad), extent: ci.extent) {
+            // Same streaming discipline as the loop above: one plate alive, released before the next.
+            guard let plate = MultiCardDetector.plate(quad: quad, in: ci, context: context,
+                                                      degrees: degrees),
+                  let fp = LensMatcher.fingerprint(plate),
+                  fp.count >= BinderPlan.minFpCount else { continue }
+            let cell = LensCell(quad: quad, degrees: degrees, fpCount: fp.count,
+                                synthesized: true, state: .pending)
+            fingerprints[cell.id] = fp
+            cells.append(cell)
+        }
         await cache.store(photoId, fingerprints)
         return cells
     }
 
     func passA(photoId: UUID, cells: [LensCell]) async -> [LensCell] {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer { BinderDiag.timing("PASS A (photo)", CFAbsoluteTimeGetCurrent() - t0,
+                                  detail: "cells=\(cells.count) wanted=\(wanted.count)") }
         let fps = await cache.fingerprints(photoId)
         return cells.map { cell in
             guard let fp = fps[cell.id] else { return cell }
@@ -176,6 +215,9 @@ struct LiveLensWork: LensWork {
     }
 
     func passB(photoId: UUID, cells: [LensCell]) async -> [LensCell] {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer { BinderDiag.timing("PASS B (photo)", CFAbsoluteTimeGetCurrent() - t0,
+                                  detail: "cells=\(cells.count)") }
         let fps = await cache.fingerprints(photoId)
         guard let ci = await imageForPhoto(photoId) else { return cells }
         let context = CIContext()

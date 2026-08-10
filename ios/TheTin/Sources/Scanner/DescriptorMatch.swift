@@ -29,12 +29,27 @@ struct ReferenceFingerprint {
 }
 
 enum DescriptorMatch {
-    static func ransacInliers(_ a: CardFingerprint, _ b: ReferenceFingerprint) -> Int {
-        var xyA = Data(capacity: a.count * 2 * 4)
+    /// The query's keypoints packed as the x,y float32 buffer the bridge wants.
+    ///
+    /// ⚠️ Hoisted out of `ransacInliers` because it does not depend on the candidate, and the caller
+    /// runs it against up to 160 of them: this loop appends 8 bytes at a time for up to 650 keypoints,
+    /// and it was rebuilding **byte-identical** output once per candidate. Pure waste, ~160× per cell.
+    static func queryKeypoints(_ a: CardFingerprint) -> Data {
+        var xy = Data(capacity: a.count * 2 * 4)
         for p in a.keypoints { var x = p.x, y = p.y
-            withUnsafeBytes(of: &x) { xyA.append(contentsOf: $0) }
-            withUnsafeBytes(of: &y) { xyA.append(contentsOf: $0) } }
-        return Int(OpenCVBridge.ransacInliers(between: a.descriptors, keypointsA: xyA, countA: Int32(a.count),
-                                              andDescriptors: b.descriptors, keypointsB: b.keypointsXY, countB: Int32(b.count)))
+            withUnsafeBytes(of: &x) { xy.append(contentsOf: $0) }
+            withUnsafeBytes(of: &y) { xy.append(contentsOf: $0) } }
+        return xy
+    }
+
+    static func ransacInliers(_ a: CardFingerprint, _ b: ReferenceFingerprint) -> Int {
+        ransacInliers(a, queryXY: queryKeypoints(a), b)
+    }
+
+    /// Same match with the query buffer prepared once by the caller. `queryXY` MUST be
+    /// `queryKeypoints(a)` — it is passed rather than derived so a loop over candidates pays for it once.
+    static func ransacInliers(_ a: CardFingerprint, queryXY: Data, _ b: ReferenceFingerprint) -> Int {
+        Int(OpenCVBridge.ransacInliers(between: a.descriptors, keypointsA: queryXY, countA: Int32(a.count),
+                                       andDescriptors: b.descriptors, keypointsB: b.keypointsXY, countB: Int32(b.count)))
     }
 }

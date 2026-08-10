@@ -205,4 +205,125 @@ final class BinderPlanTests: XCTestCase {
         }
         XCTAssertLessThanOrEqual(BinderPlan.assign(obs, shape: shape).count, shape.pocketsPerPage)
     }
+
+    // MARK: - A synthesised cell has to earn its pocket
+
+    /// ⚠️ Device data, 2026-08-09. Two EMPTY pockets produced synthesised quads that fingerprinted at
+    /// **442 and 595** keypoints — far above `minFpCount` — because woven binder fabric and
+    /// dot-textured sleeve plastic are real texture. Both came back `noMatch`, so no card was invented,
+    /// but both pockets rendered as "there is a card here I could not read" over nothing at all. The
+    /// keypoint floor cannot tell an empty pocket from a card; only the verdict can.
+    func testASynthesizedCellThatNeverIdentifiedIsDropped() {
+        let tile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+        let q = quad(cx: 300, cy: 300, w: 260, h: 340)
+        for state in [LensCellState.noMatch, .ambiguous(["a", "b", "c", "d"]), .pending] {
+            let cell = LensCell(quad: q, fpCount: 595, synthesized: true, state: state)
+            XCTAssertTrue(BinderPlan.place(cells: [cell], tile: tile, extent: frame).isEmpty,
+                          "a synthesised cell in state \(state) must not take a pocket")
+        }
+    }
+
+    /// The other half: one that DID identify is exactly what the extrapolation is for, and survives.
+    func testASynthesizedCellThatIdentifiedIsKept() {
+        let tile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+        let cell = LensCell(quad: quad(cx: 300, cy: 300, w: 260, h: 340), fpCount: 595,
+                            synthesized: true, state: .identified(cardId: "sv10-209", inliers: 59))
+        XCTAssertEqual(BinderPlan.place(cells: [cell], tile: tile, extent: frame).count, 1)
+    }
+
+    /// A DETECTED cell is unaffected — it still only needs keypoints, so a card the matcher could not
+    /// name still reports "couldn't read this" rather than vanishing into an empty pocket.
+    func testADetectedCellStillSurvivesWithoutIdentifying() {
+        let tile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+        let cell = LensCell(quad: quad(cx: 300, cy: 300, w: 260, h: 340), fpCount: 650,
+                            state: .noMatch)
+        XCTAssertEqual(BinderPlan.place(cells: [cell], tile: tile, extent: frame).count, 1)
+    }
+
+    // MARK: - Extrapolating a pocket nothing was detected in
+
+    /// Pixel space, bottom-left origin — the space quads arrive in from Vision.
+    private func quad(cx: Double, cy: Double, w: Double, h: Double) -> CardQuad {
+        CardQuad(topLeft: CGPoint(x: cx - w / 2, y: cy + h / 2),
+                 topRight: CGPoint(x: cx + w / 2, y: cy + h / 2),
+                 bottomLeft: CGPoint(x: cx - w / 2, y: cy - h / 2),
+                 bottomRight: CGPoint(x: cx + w / 2, y: cy - h / 2))
+    }
+
+    private let frame = CGRect(x: 0, y: 0, width: 1_000, height: 1_000)
+
+    /// Three cards seen, one pocket empty — the fourth corner of the rectangle, at the median size.
+    func testTheFourthPocketIsPlacedFromTheOtherThree() {
+        let seen = [quad(cx: 300, cy: 700, w: 260, h: 340),
+                    quad(cx: 700, cy: 700, w: 260, h: 340),
+                    quad(cx: 700, cy: 300, w: 260, h: 340)]
+        let out = BinderPlan.missingPocketQuads(from: seen, extent: frame)
+        XCTAssertEqual(out.count, 1)
+        let box = try! XCTUnwrap(out.first).boundingBox
+        XCTAssertEqual(box.midX, 300, accuracy: 1)
+        XCTAssertEqual(box.midY, 300, accuracy: 1)
+        XCTAssertEqual(box.width, 260, accuracy: 1)
+        XCTAssertEqual(box.height, 340, accuracy: 1)
+    }
+
+    /// ⚠️ The guard that keeps this honest. Two cards in ONE row give a column for each of them and a
+    /// row for neither of the empty pockets — where the other row sits is genuinely unknown, not
+    /// guessable, so nothing is placed. Without this the two empty pockets would be invented at the
+    /// frame's midpoint, which is exactly the "assume the pockets are centred" mistake that put a
+    /// whole page's bottom row into the top row's pockets.
+    func testASingleRowPlacesNothing() {
+        let seen = [quad(cx: 300, cy: 700, w: 260, h: 340), quad(cx: 700, cy: 700, w: 260, h: 340)]
+        XCTAssertTrue(BinderPlan.missingPocketQuads(from: seen, extent: frame).isEmpty)
+    }
+
+    /// Two cards on a diagonal do pin both axes for both empty pockets, so both are placed.
+    func testADiagonalPairPlacesBothEmptyPockets() {
+        let seen = [quad(cx: 300, cy: 700, w: 260, h: 340), quad(cx: 700, cy: 300, w: 260, h: 340)]
+        let centres = BinderPlan.missingPocketQuads(from: seen, extent: frame)
+            .map { ($0.boundingBox.midX, $0.boundingBox.midY) }
+        XCTAssertEqual(centres.count, 2)
+        XCTAssertTrue(centres.contains { abs($0.0 - 700) < 1 && abs($0.1 - 700) < 1 }, "\(centres)")
+        XCTAssertTrue(centres.contains { abs($0.0 - 300) < 1 && abs($0.1 - 300) < 1 }, "\(centres)")
+    }
+
+    func testAFullTilePlacesNothing() {
+        let seen = [quad(cx: 300, cy: 700, w: 260, h: 340), quad(cx: 700, cy: 700, w: 260, h: 340),
+                    quad(cx: 300, cy: 300, w: 260, h: 340), quad(cx: 700, cy: 300, w: 260, h: 340)]
+        XCTAssertTrue(BinderPlan.missingPocketQuads(from: seen, extent: frame).isEmpty)
+    }
+
+    /// One card gives a size but no pitch, so there is nothing to extrapolate along.
+    func testOneCardPlacesNothing() {
+        XCTAssertTrue(BinderPlan.missingPocketQuads(from: [quad(cx: 300, cy: 700, w: 260, h: 340)],
+                                                    extent: frame).isEmpty)
+    }
+
+    /// A pocket extrapolated off the edge of the photograph can't be perspective-corrected, and a card
+    /// hanging out of frame could not have been read anyway.
+    func testAPocketOffTheEdgeOfTheFrameIsRefused() {
+        let seen = [quad(cx: 300, cy: 700, w: 700, h: 700), quad(cx: 700, cy: 700, w: 700, h: 700),
+                    quad(cx: 700, cy: 300, w: 700, h: 700)]
+        XCTAssertTrue(BinderPlan.missingPocketQuads(from: seen, extent: frame).isEmpty)
+    }
+
+    /// ⚠️ Regression against the real thing. These are the three cells tile `0.1.0` actually returned
+    /// on the device on 2026-08-09, verbatim from `BinderDiag` — the photograph whose fourth pocket
+    /// (page 1, row 3, col 1) came back EMPTY because Vision returned no quad for it. The extrapolated
+    /// pocket has to land on that card: column from the card above it, row from the card beside it.
+    func testTheDeviceCaseThatCameBackEmpty() {
+        let w: Double = 4_284, h: Double = 5_712              // the real 24.5 MP capture
+        let extent = CGRect(x: 0, y: 0, width: w, height: h)
+        // Recorded as normalized, TOP-left origin; quads live in pixel, BOTTOM-left origin.
+        func recorded(cx: Double, cy: Double, rw: Double, rh: Double) -> CardQuad {
+            quad(cx: cx * w, cy: (1 - cy) * h, w: rw * w, h: rh * h)
+        }
+        let seen = [recorded(cx: 0.285, cy: 0.294, rw: 0.366, rh: 0.343),
+                    recorded(cx: 0.694, cy: 0.296, rw: 0.357, rh: 0.346),
+                    recorded(cx: 0.721, cy: 0.683, rw: 0.331, rh: 0.341)]
+        let out = BinderPlan.missingPocketQuads(from: seen, extent: extent)
+        XCTAssertEqual(out.count, 1, "the one undetected pocket should be placed")
+        let rect = try! XCTUnwrap(out.first).normalizedRect(in: extent)
+        XCTAssertEqual(Double(rect.midX), 0.285, accuracy: 0.01)   // column, from the card above
+        XCTAssertEqual(Double(rect.midY), 0.683, accuracy: 0.01)   // row, from the card beside
+    }
 }
