@@ -4,7 +4,30 @@ import Foundation
 /// collided two `navigationDestination(for: String.self)` in one NavigationStack,
 /// routing every String to the root-closest destination (the blank card-detail bug).
 struct SetID: Hashable { let raw: String }
-struct CardID: Hashable { let raw: String }
+
+/// What a printed label knows about the particular copy in your hand, carried along the route so
+/// card detail can open already scoped to it. Both halves are optional: a label whose entry has
+/// since been deleted, or a payload from a version we don't read, still opens the card plainly.
+struct CardHighlight: Hashable {
+    let printing: CardVariant?
+    let condition: CardCondition?
+
+    /// nil when the link said nothing about the copy — a plain share link, or a label from a
+    /// version we don't read. "Highlight nothing" and "no highlight" must be the same value, or
+    /// every ordinary `/c/<id>` link starts carrying an empty payload down the route.
+    init?(printing: CardVariant?, condition: CardCondition?) {
+        guard printing != nil || condition != nil else { return nil }
+        self.printing = printing
+        self.condition = condition
+    }
+}
+
+/// `highlight` is DEFAULTED so every existing `CardID(raw:)` call site is untouched — six
+/// `navigationDestination(for: CardID.self)` sites exist and only the Tin's forwards it.
+struct CardID: Hashable {
+    let raw: String
+    var highlight: CardHighlight? = nil
+}
 struct DexID: Hashable { let raw: Int }
 
 /// So a card can also be *presented* (`.sheet(item:)`), not only pushed — the scanner's look-up

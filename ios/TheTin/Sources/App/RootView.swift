@@ -143,6 +143,11 @@ private struct MainTabView: View {
                                // Filing the cards you just took is the obvious next step, so land
                                // on the tray rather than leaving it to be discovered later.
                                onExecutedTrade: { selection = .scan },
+                               // A scanned label takes the same route a deep link does, so the
+                               // in-app scanner and the system Camera land in the same place.
+                               onOpenLabel: { id, highlight in
+                                   model.openCard(id: id, highlight: highlight)
+                               },
                                // The gear belongs to CollectionView's own toolbar. Applying it
                                // here as a second `.toolbar` is what lost it on iPadOS 18.
                                onOpenSettings: { showingSettings = true })
@@ -225,7 +230,7 @@ private struct MainTabView: View {
         // land on a blank screen — only navigate when the card actually resolves.
         guard (try? store.card(id: id)) != nil else { return }
         selection = .tin
-        tinPath.append(CardID(raw: id))
+        tinPath.append(CardID(raw: id, highlight: model.pendingCardHighlight))
     }
 
     /// Someone's shared trade list, opened in the app: land on a live trade with their side
