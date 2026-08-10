@@ -160,7 +160,11 @@ private struct MainTabView: View {
 
             NavigationStack {
                 ScanTabContainer(store: store, collection: collection, wants: model.wants,
-                                 pack: pack, network: model.network, staging: staging)
+                                 pack: pack, network: model.network,
+                                 onOpenLabel: { id, highlight in
+                                     model.openCard(id: id, highlight: highlight)
+                                 },
+                                 staging: staging)
                     .fundingBanner(model: model, store: store, pack: pack)
             }
             // The Scan tab shows the full-screen progress view for the whole transfer, so a

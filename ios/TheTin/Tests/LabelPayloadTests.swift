@@ -78,6 +78,46 @@ final class LabelPayloadTests: XCTestCase {
         XCTAssertEqual(parsed.condition, .nm)
     }
 
+    // MARK: - The name, which exists only for the website
+
+    /// The page is stateless and can't look a card up, so without `n` it can only say
+    /// "A trading card" — which is what it said on the device (step 11).
+    func testTheNameRidesAlongForTheWebsite() throws {
+        let url = LabelPayload.url(cardId: "neo1-5", printing: .holo, condition: .nm,
+                                   entryId: "e1", name: "Feraligatr")
+        let n = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "n" }?.value
+        XCTAssertEqual(n, "Feraligatr")
+    }
+
+    /// The APP must not read it. A name frozen onto a sticker goes stale the moment the catalog
+    /// corrects one; the id is the truth and the app has the catalog.
+    func testTheAppIgnoresTheNameEntirely() throws {
+        let url = URL(string: "https://thetinapp.com/c/neo1-5?v=1&p=holo&c=NM&n=Not%20The%20Real%20Name")!
+        let parsed = try XCTUnwrap(LabelPayload.parse(url))
+        XCTAssertEqual(parsed.cardId, "neo1-5")
+        XCTAssertEqual(parsed.printing, .holo)
+    }
+
+    /// Every character costs QR modules, and the name is the one parameter nothing functional
+    /// depends on — so it is capped rather than allowed to bloat a code that must scan off a
+    /// 0.75" square.
+    func testAnAbsurdNameIsCappedRatherThanBloatingTheCode() throws {
+        let url = LabelPayload.url(cardId: "neo1-5", printing: nil, condition: nil,
+                                   entryId: nil, name: String(repeating: "z", count: 300))
+        let n = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "n" }?.value
+        XCTAssertEqual(n?.count, LabelPayload.maxNameLength)
+        XCTAssertLessThan(url.absoluteString.count, 140, "a label URL stays a comfortable QR")
+    }
+
+    /// A card the catalog lost still gets a sticker — that is exactly when a label matters most.
+    func testNoNameIsFineAndOmitsTheParameterEntirely() throws {
+        let url = LabelPayload.url(cardId: "ghost-1", printing: nil, condition: nil, entryId: nil)
+        XCTAssertFalse(url.absoluteString.contains("n="))
+        XCTAssertEqual(try XCTUnwrap(LabelPayload.parse(url)).cardId, "ghost-1")
+    }
+
     /// The four finishes still canonicalise, so a label written from a PPT key and one written
     /// from the rawValue are the same sticker.
     func testTheKnownFinishesStillCanonicalise() throws {
