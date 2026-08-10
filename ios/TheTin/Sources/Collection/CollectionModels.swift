@@ -181,6 +181,66 @@ enum AcquiredVia: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Your own photographs of ONE physical copy — filenames (never paths) under
+/// `CardPhotos/<entryId>/`, so moving the container can't invalidate a stored reference.
+///
+/// Front and back are named because an insurer reads them as a pair; `details` is free-form for
+/// the close-ups a condition claim actually turns on — a crease, a corner, a slab label.
+struct EntryPhotos: Codable, Equatable {
+    var front: String? = nil
+    var back: String? = nil
+    /// Dense and capped at `maxDetails`. Dense so the form's tiles never show a hole.
+    var details: [String] = []
+
+    static let maxDetails = 2
+
+    /// Which of the four tiles a photo belongs to. Defined here rather than in the view so the
+    /// tile↔model mapping is testable without rendering anything.
+    enum Slot: Hashable {
+        case front, back, detail(Int)
+    }
+
+    /// Every photo with the label the report prints under it, in print order. The single
+    /// definition of ordering — `all` is derived from it so the two can never drift.
+    ///
+    /// ⚠️ Labels come from the SLOT, not the position: an entry with only a back photo must say
+    /// "Back", not "Front".
+    var labelled: [(label: String, file: String)] {
+        var out: [(label: String, file: String)] = []
+        if let front { out.append((label: "Front", file: front)) }
+        if let back { out.append((label: "Back", file: back)) }
+        out += details.enumerated().map { (label: "Detail \($0.offset + 1)", file: $0.element) }
+        return out
+    }
+
+    var all: [String] { labelled.map(\.file) }
+    var isEmpty: Bool { all.isEmpty }
+
+    func file(_ slot: Slot) -> String? {
+        switch slot {
+        case .front: return front
+        case .back: return back
+        case .detail(let i): return i < details.count ? details[i] : nil
+        }
+    }
+
+    /// Set or clear one slot. Details append (never insert past the end) and removal closes the
+    /// gap, which is what keeps `details` dense.
+    mutating func set(_ file: String?, _ slot: Slot) {
+        switch slot {
+        case .front: front = file
+        case .back: back = file
+        case .detail(let i):
+            if let file {
+                if i < details.count { details[i] = file }
+                else if details.count < Self.maxDetails { details.append(file) }
+            } else if i < details.count {
+                details.remove(at: i)
+            }
+        }
+    }
+}
+
 /// One sealed product you own — a booster box, an Elite Trainer Box, a tin off the shelf.
 ///
 /// Deliberately NOT a `CollectionEntry`. That type is `cardId`-keyed and carries condition, grade
@@ -279,6 +339,10 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     /// existed would fail to decode. Same convention as `forTrade`, `soldAt` and `soldFor`.
     var acquiredVia: String? = nil
 
+    /// Your own photographs of this copy. A real `Optional` for the reason `acquiredVia`
+    /// documents above — a defaulted non-optional makes synthesized `Decodable` demand the key.
+    var photos: EntryPhotos? = nil
+
     var isForTrade: Bool { forTrade == true }
     var isSold: Bool { soldAt != nil }
 
@@ -296,6 +360,12 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     var hasAcquisitionDetail: Bool {
         pricePaid != nil || gradingFeeUsd != nil || acquiredAt != nil
             || !(acquiredFrom ?? "").isEmpty
+            // A photograph is a per-copy fact. Without this clause `isSameCopy` folds a
+            // photographed copy into a ×2 on the next bulk move and the photo link is destroyed
+            // silently — the same failure the `forTrade` comparison was added to prevent.
+            // Deliberately `isEmpty`, not `!= nil`: opening the form and backing out must not
+            // permanently split a stack.
+            || !(photos?.isEmpty ?? true)
     }
 
     /// True when `other` is the *same copy* as this one: same card, same divider, same printing,

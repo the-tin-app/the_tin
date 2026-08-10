@@ -53,6 +53,8 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan your cards to identify them and add to your collection.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Attach your own photos of a card to its entry, for insurance records.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

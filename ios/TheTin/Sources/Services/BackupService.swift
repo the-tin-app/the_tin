@@ -100,6 +100,9 @@ final class BackupService {
     private var offeredSnapshot: BackupSnapshot?
 
     private let store: BackupStore
+    /// Photos are NOT in the snapshot; they ride the same container. Injected so tests can point
+    /// it at a temp dir.
+    private let photos: PhotoStore
     private let collection: CollectionRepository
     private let wants: WantsRepository
     /// Set goals live in their own model, not a repository (a plain file of ids). Optional so
@@ -114,8 +117,10 @@ final class BackupService {
     init(store: BackupStore = ICloudBackupStore(),
          collection: CollectionRepository, wants: WantsRepository,
          setGoals: SetGoalsModel? = nil, uid: String,
+         photos: PhotoStore? = nil,
          debounce: Duration = .seconds(5), now: @escaping () -> Date = { Date() }) {
         self.store = store
+        self.photos = photos ?? .default(mirror: store)
         self.collection = collection
         self.wants = wants
         self.setGoals = setGoals
@@ -301,6 +306,11 @@ final class BackupService {
         try await wants.save(uid: uid, entries: restoredWants)
         // nil = a pre-v3 backup, which says nothing about goals; keep whatever is on the device.
         if let ids = snapshot.setGoals { setGoals?.replaceAll(Set(ids)) }
+        // Photos live beside the snapshot, not in it. Pulled down off-main and best-effort: a
+        // restored entry whose photo hasn't arrived yet is a far smaller failure than a restore
+        // that blocks on a few hundred file downloads.
+        let photos = self.photos
+        Task.detached(priority: .utility) { photos.mirrorDown() }
     }
 
     private func currentCounts() async -> (entries: Int, wants: Int) {

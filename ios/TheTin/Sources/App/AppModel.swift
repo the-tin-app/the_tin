@@ -340,6 +340,20 @@ final class AppModel {
                 self.backup = backupService
                 Task { await backupService.offerRestoreIfEligible() }
             }
+
+            // Photos are keyed by entry id and nothing deletes them per-entry. One sweep per
+            // launch covers entry deletion, a form cancelled after a capture, a CSV "Replace
+            // collection" and a restore. The first emission of entriesStream is the current
+            // state on subscribe (same one-shot read `currentCounts` uses).
+            Task { [repository] in
+                var ids = Set<String>()
+                for await entries in repository.entriesStream() {
+                    ids = Set(entries.map(\.id))
+                    break
+                }
+                let store = PhotoStore.live()
+                await Task.detached(priority: .background) { store.prune(keeping: ids) }.value
+            }
         }
 
         // 2. Catalog: offline-first — an installed catalog always wins over the network.

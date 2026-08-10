@@ -122,6 +122,7 @@ targets:
         AppIdentifierPrefix: $(AppIdentifierPrefix)
         ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: Scan your cards to identify them and add to your collection.
+        NSPhotoLibraryUsageDescription: Attach your own photos of a card to its entry, for insurance records.
         # Permits cleartext HTTP to private/link-local addresses only — used by DEBUG builds to
         # reach a LAN dev catalog-server (APP_ATTEST_ENVIRONMENT=development) via SELFHOST_URL.
         # Inert in release: the production app only ever talks to https://apithetin.reyes.ai.
