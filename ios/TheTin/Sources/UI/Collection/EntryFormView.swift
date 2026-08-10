@@ -15,7 +15,7 @@ struct EntryFormView: View {
     let onSave: (CollectionEntry) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
-    @FocusState private var amountFieldFocused: Bool
+    @FocusState private var fieldFocused: Bool
     @State private var groupId: String = ""
     @State private var newGroupName = ""
     @State private var qty = 1
@@ -54,6 +54,7 @@ struct EntryFormView: View {
                     // First card, no dividers yet: filing is optional — leave blank and it
                     // lands in the tin, same as a scan.
                     TextField("New divider name (optional)", text: $newGroupName)
+                        .focused($fieldFocused)
                 } else if !groups.isEmpty {
                     Picker("Divider", selection: $groupId) {
                         Text("No divider").tag("")
@@ -90,17 +91,20 @@ struct EntryFormView: View {
                 }
                 TextField("Price paid — total (USD)", text: $pricePaidText)
                     .keyboardType(.decimalPad)
-                    .focused($amountFieldFocused)
+                    .focused($fieldFocused)
                 if grade != nil {
                     TextField("Grading fee paid", text: $gradingFeeText)
                         .keyboardType(.decimalPad)
-                        .focused($amountFieldFocused)
+                        .focused($fieldFocused)
                 }
                 Toggle("Acquired on", isOn: $hasAcquiredDate)
                 if hasAcquiredDate {
                     DatePicker("Date", selection: $acquiredAt, displayedComponents: .date)
                 }
+                // Every text field joins the same focus, or the keyboard toolbar's Done has
+                // nothing to clear and the keyboard stays up (a Form gives no tap-outside).
                 TextField("Acquired from (shop, show, trade…)", text: $acquiredFrom)
+                    .focused($fieldFocused)
             }
             Section {
                 Toggle("Available to trade", isOn: $forTrade)
@@ -121,7 +125,7 @@ struct EntryFormView: View {
             }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
-                Button("Done") { amountFieldFocused = false }
+                Button("Done") { fieldFocused = false }
             }
         }
         .interactiveDismissDisabled(isDirty)

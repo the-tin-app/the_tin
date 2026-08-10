@@ -451,8 +451,10 @@ struct GroupDetailView: View {
         }
     }
 
-    // Tap shows the card — the app-wide "open a card" verb (the cards are the hero);
-    // editing is the deliberate second gesture, on leading swipe + long-press.
+    // Tap still shows the card — the app-wide "open a card" verb — but editing was only ever a
+    // long-press or a leading swipe, i.e. invisible. The pencil is the visible affordance; the
+    // chevron beside it is the one for details. Buttons must be SIBLINGS of the NavigationLink,
+    // not inside its label, or the link swallows their taps.
     @ViewBuilder
     private func row(_ entry: CollectionEntry, showDivider: Bool) -> some View {
         let content = CollectionEntryRow(
@@ -469,7 +471,18 @@ struct GroupDetailView: View {
             if isSelecting {
                 content
             } else {
-                NavigationLink(value: CardID(raw: entry.cardId)) { content }
+                HStack(spacing: 8) {
+                    NavigationLink(value: CardID(raw: entry.cardId)) { content }
+                    Button { editingEntry = entry } label: {
+                        Image(systemName: "pencil")
+                            .imageScale(.medium)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .tint(.accentColor)
+                    .accessibilityLabel("Edit entry")
+                }
             }
         }
         .tag(entry.id)

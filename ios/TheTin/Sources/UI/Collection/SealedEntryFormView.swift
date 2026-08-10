@@ -14,7 +14,7 @@ struct SealedEntryFormView: View {
     let onSave: (SealedEntry) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
-    @FocusState private var amountFieldFocused: Bool
+    @FocusState private var fieldFocused: Bool
     @State private var qty = 1
     @State private var pricePaidText = ""
     @State private var acquiredVia: AcquiredVia? = nil
@@ -56,12 +56,13 @@ struct SealedEntryFormView: View {
                 }
                 TextField("Price paid — total (USD)", text: $pricePaidText)
                     .keyboardType(.decimalPad)
-                    .focused($amountFieldFocused)
+                    .focused($fieldFocused)
                 Toggle("Acquired on", isOn: $hasAcquiredDate)
                 if hasAcquiredDate {
                     DatePicker("Date", selection: $acquiredAt, displayedComponents: .date)
                 }
                 TextField("Acquired from (shop, show, trade…)", text: $acquiredFrom)
+                    .focused($fieldFocused)
             }
         }
         .navigationTitle(existing == nil ? "Save to tin" : "Edit sealed product")
@@ -73,7 +74,7 @@ struct SealedEntryFormView: View {
             }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
-                Button("Done") { amountFieldFocused = false }
+                Button("Done") { fieldFocused = false }
             }
         }
         .interactiveDismissDisabled(isDirty)
