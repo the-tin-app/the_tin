@@ -30,7 +30,7 @@ import { PptClient, CreditBudget, parseCreditBudget } from "../src/upstream/ppt"
 import type { PptPrice } from "../src/upstream/ppt";
 import { resolvePptSetName } from "../src/pipeline/ppt-setmap";
 import { computeFills } from "../src/pipeline/ppt-enrich";
-import { synthesizeMissingCards, numberKeys, type TcgcsvProduct } from "../src/pipeline/tcgcsv-cards";
+import { synthesizeMissingCards, numberKeys, nameNumberKey, type CardRef, type TcgcsvProduct } from "../src/pipeline/tcgcsv-cards";
 import type { FlatCard, FlatSet } from "./flatten-cards-db";
 import { pptPrintingName } from "./flatten-cards-db";
 import Database from "better-sqlite3";
@@ -148,7 +148,7 @@ async function loadEurMap(): Promise<Map<number, number>> {
 // Same cache discipline as the price sweep, but a separate marker: product lists change far
 // less often than prices, and the two sweeps must not invalidate each other. Runs in BOTH
 // modes — export mode skips the PRICE sweep, but a missing card is missing either way.
-async function loadProductsByGroup(): Promise<{ groupId: number; products: TcgcsvProduct[] }[]> {
+async function loadProductsByGroup(): Promise<{ groupId: number; name: string; products: TcgcsvProduct[] }[]> {
   mkdirSync(tcgcsvDir, { recursive: true });
   const markerFile = join(tcgcsvDir, "products-last-updated.txt");
   const groupsFile = join(tcgcsvDir, "groups.json");
@@ -167,7 +167,9 @@ async function loadProductsByGroup(): Promise<{ groupId: number; products: Tcgcs
     await sleep(120);
   }
 
-  const out: { groupId: number; products: TcgcsvProduct[] }[] = [];
+  // `name` is carried only so the "groups we cannot place" diagnostic is legible — a bare
+  // groupId list is exactly the kind of output nobody reads. It is not used for matching.
+  const out: { groupId: number; name: string; products: TcgcsvProduct[] }[] = [];
   let fetched = 0, failed = 0;
   for (const grp of groups) {
     const gid = grp.groupId;
@@ -189,7 +191,7 @@ async function loadProductsByGroup(): Promise<{ groupId: number; products: Tcgcs
       }
       await sleep(120); // politeness, same as the price sweep
     }
-    out.push({ groupId: gid, products: results });
+    out.push({ groupId: gid, name: String(grp.name ?? ""), products: results });
   }
   // Only mark the cache good when EVERY group came back. Writing the marker after a partial
   // sweep would freeze a transient 5xx in as an empty group until tcgcsv's last-updated moves —
@@ -246,12 +248,29 @@ async function main() {
     const setTotals = new Map(meta.sets.map((s) => [s.id, { total: s.official, printedTotal: s.printedTotal }]));
     const dexByName = new Map<string, number>();
     for (const [id, name] of pokemonNames) if (!dexByName.has(name.toLowerCase())) dexByName.set(name.toLowerCase(), id);
+    // The weak key. A set whose cards carry NO tcgplayer id (sma, bwp) is invisible to the vote
+    // above and gets no price from any feed; name+number is the only way back in. See the header.
+    const cardsByNameNumber = new Map<string, CardRef[]>();
+    for (const c of meta.cards) {
+      const ref: CardRef = { id: c.id, setId: c.setId, linked: c.tcgplayerIds.length > 0 };
+      for (const k of numberKeys(c.localId)) {
+        const key = nameNumberKey(c.name, k);
+        const refs = cardsByNameNumber.get(key);
+        if (refs) refs.push(ref); else cardsByNameNumber.set(key, [ref]);
+      }
+    }
 
+    const productGroups = await loadProductsByGroup();
+    const groupName = new Map(productGroups.map((g) => [g.groupId, g.name]));
     const result = synthesizeMissingCards({
-      groups: await loadProductsByGroup(), setByTcgplayerId, numbersBySet, setTotals, dexByName,
+      groups: productGroups, setByTcgplayerId, numbersBySet, setTotals, dexByName, cardsByNameNumber,
     });
-    const { cards: added, addedBySet, skippedForeignDenominator } = result;
+    const { cards: added, addedBySet, skippedForeignDenominator, links } = result;
     meta.cards.push(...added);
+    // Give the cards we just identified the id every price feed joins on. Additive: a card that
+    // already had one was never a candidate, so nothing that works today can change.
+    const cardById = new Map(meta.cards.map((c) => [c.id, c]));
+    for (const { cardId, productId } of links) cardById.get(cardId)?.tcgplayerIds.push(productId);
     // The set's own total came from the same stale TCGdex record, so it can now under-count
     // what the set holds — the app would render "63 / 60". Raise it to what we actually have.
     const countBySet = new Map<string, number>();
@@ -268,6 +287,14 @@ async function main() {
     // .cache IS a persistent docker volume (catalog-pipeline-cache), so it survives.
     mkdirSync(cacheDir, { recursive: true });
     const sidecar = join(cacheDir, `tcgcsv-fill-v${version}.json`);
+    const linkedBySet = new Map<string, number>();
+    for (const l of links) linkedBySet.set(l.setId, (linkedBySet.get(l.setId) ?? 0) + 1);
+    // Groups we can see upstream and cannot place. `lost-to-better-group` is benign — another
+    // group already covers that set — so it is the only rejection excluded. ⚠️ Do NOT narrow this
+    // to `no-matches`: Trading Card Game Classic (the missing Suicune ex CLB 010/034) now scores a
+    // handful of scattered name votes and lands in `ambiguous` instead, which is the same blindness
+    // wearing a different label.
+    const unseen = result.decisions.filter((d) => d.rejected && d.rejected !== "lost-to-better-group" && d.products > 0);
     writeFileSync(sidecar, JSON.stringify({
       generatedAt: new Date().toISOString(),
       version,
@@ -277,6 +304,15 @@ async function main() {
         skippedForeignDenominator,
         groupsAccepted: result.decisions.filter((d) => !d.rejected).length,
         groupsRejected: result.decisions.filter((d) => d.rejected).length,
+        linkedCards: links.length,
+        linkedBySet: Object.fromEntries([...linkedBySet].sort((a, b) => b[1] - a[1])),
+        // The only number that can see a set shipping upstream that we do not have at all —
+        // `set_info.total` comes from the same stale record, so a set can't under-report itself
+        // and a set that doesn't exist reports nothing. A NEW entry here is the thing to act on.
+        unseenGroups: unseen.length,
+        unseenProducts: unseen.reduce((n, d) => n + d.products, 0),
+        unseen: unseen.sort((a, b) => b.products - a.products)
+          .map((d) => ({ groupId: d.groupId, name: groupName.get(d.groupId), products: d.products, why: d.rejected })),
       },
       cards: added.map((c) => ({
         id: c.id, name: c.name, localId: c.localId, setId: c.setId,
@@ -285,6 +321,7 @@ async function main() {
       })),
       groupDecisions: result.decisions.sort((a, b) => b.matched - a.matched),
       foreignDenominatorRejects: result.rejects,
+      links,
     }, null, 1));
 
     console.log(`[tcgcsv-fill] +${added.length} cards across ${addedBySet.size} sets`);
@@ -295,6 +332,13 @@ async function main() {
       + `(${result.decisions.filter((d) => d.rejected === "too-few-matches").length} too-few-matches, `
       + `${result.decisions.filter((d) => d.rejected === "ambiguous").length} ambiguous)`);
     console.log(`[tcgcsv-fill] ${skippedForeignDenominator} products skipped: printed denominator belongs to another set`);
+    console.log(`[tcgcsv-fill] linked ${links.length} existing cards to a tcgplayer id they lacked`);
+    for (const [setId, n] of [...linkedBySet].sort((a, b) => b[1] - a[1]).slice(0, 15)) console.log(`[tcgcsv-fill]   link ${setId}: +${n}`);
+    // Cards exist upstream that we cannot see at all. Never zero (deck kits, JP exclusives), so
+    // the signal is the DELTA, not the level — a new line here is a set that just shipped.
+    console.log(`[tcgcsv-fill] ⚠️ ${unseen.length} groups unplaced `
+      + `(${unseen.reduce((n, d) => n + d.products, 0)} products invisible): `
+      + `${unseen.slice(0, 8).map((d) => `${groupName.get(d.groupId) || d.groupId}(${d.products},${d.rejected})`).join("; ")}`);
     console.log(`[tcgcsv-fill] full decision log: ${sidecar}`);
     // A sudden jump means an upstream shape change, not 400 new Pokémon cards. Loud, not fatal:
     // the guards are conservative and a wrong SKIP is cheaper than a wrong PUBLISH.
