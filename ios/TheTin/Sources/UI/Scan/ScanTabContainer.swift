@@ -15,6 +15,10 @@ struct ScanTabContainer: View {
     /// transfer is running lives in `ScannerPackModel`, which polls the monitor directly —
     /// driving it from a SwiftUI `onChange` here never fired on device.
     let network: NetworkMonitor
+    /// Where a scanned label goes. Routed through the host (and so through `AppModel.openCard`)
+    /// rather than pushed from here, so a label read in this tab, one read from the Tin's toolbar
+    /// and one read by the system Camera all land in the same place.
+    var onOpenLabel: ((String, CardHighlight?) -> Void)? = nil
     @State private var source = AVCaptureFrameSource()
     /// Owned by `MainTabView`, not here: a trade's incoming cards land in the same tray, and two
     /// `persisted()` instances over one file would each erase the other's cards.
@@ -33,14 +37,24 @@ struct ScanTabContainer: View {
     @State private var model: ScanModel?
     @State private var reviewingStaged = false
     @State private var confirmingUpdateOverCellular = false
-    /// Which of the two camera modes the ready slot is showing.
-    @State private var lensMode = false
+    /// Which camera mode the ready slot is showing.
+    ///
+    /// ⚠️ Exactly one `AVCaptureSession` may be live, so swapping modes must TEAR THE OTHER DOWN
+    /// — which is why this drives a `switch` whose branches render genuinely different views. That
+    /// is the one place in this file where distinct view identities are the point rather than the
+    /// bug. Label was originally kept out of the Scan tab entirely for fear of stacking a third
+    /// session; that reasoning applied to presenting a SHEET over a live scanner, not to a mode
+    /// swap, which has always torn down correctly.
+    enum CameraMode: Hashable { case scanner, binder, label }
+    @State private var cameraMode: CameraMode = .scanner
     /// Built on first use, never at container init: constructing it acquires the capture device
     /// and configures a whole second `AVCaptureSession`, which a user who never opens the lens
     /// must not pay for. Held across mode switches so flipping back and forth doesn't rebuild it.
     @State private var lensSource: LensPhotoSource?
     /// Same rule as `model` — never constructed in `body`, and dropped when the pack changes.
     @State private var binder: BinderModel?
+    /// Shown over the label viewfinder when a QR isn't one of ours; clears itself after 5 s.
+    @State private var labelScanError: String?
 
     var body: some View {
         content
@@ -58,8 +72,8 @@ struct ScanTabContainer: View {
             // that model can outlive a lot of hearting elsewhere in the app. Refreshing it on entry
             // is free while there is nothing on screen to lose; a scan in progress is left alone
             // rather than silently emptied.
-            .onChange(of: lensMode) {
-                if lensMode, binder?.phase == .setup { binder = nil }
+            .onChange(of: cameraMode) {
+                if cameraMode == .binder, binder?.phase == .setup { binder = nil }
             }
             .sheet(isPresented: $reviewingStaged) {
                 NavigationStack {
@@ -180,18 +194,70 @@ struct ScanTabContainer: View {
     /// for it, and the picker itself never leaves the hierarchy.
     private var readySlot: some View {
         VStack(spacing: 0) {
-            Picker("Camera mode", selection: $lensMode) {
-                Text("Scanner").tag(false)
-                Text("Binder").tag(true)
+            Picker("Camera mode", selection: $cameraMode) {
+                Text("Scanner").tag(CameraMode.scanner)
+                Text("Binder").tag(CameraMode.binder)
+                Text("Label").tag(CameraMode.label)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal).padding(.vertical, 6)
-            .accessibilityHint(lensMode
-                               ? "Photograph a binder page by page and get prices and wishlist hits"
-                               : "Identify one card at a time")
+            .accessibilityHint(modeHint)
 
-            if lensMode { lens } else { liveScanner }
+            switch cameraMode {
+            case .scanner: liveScanner
+            case .binder:  lens
+            case .label:   labelScanner
+            }
         }
+    }
+
+    private var modeHint: String {
+        switch cameraMode {
+        case .scanner: return "Identify one card at a time"
+        case .binder:  return "Photograph a binder page by page and get prices and wishlist hits"
+        case .label:   return "Read a printed label's QR code and open that exact copy"
+        }
+    }
+
+    /// Reads a printed label. Needs no fingerprint pack — a QR is decoded by the hardware, not by
+    /// our matcher — but it lives inside `readySlot`, which the pack gates. That is deliberate
+    /// rather than ideal: the Tin's toolbar keeps an entry point that works with no pack at all,
+    /// so nobody is locked out, and putting the picker above the gate would mean rebuilding the
+    /// pack state machine around a mode that doesn't use it.
+    @ViewBuilder private var labelScanner: some View {
+        QRScannerView(onCode: handleScannedLabel)
+            .overlay { labelScanErrorBanner }
+            .task(id: labelScanError) {
+                guard labelScanError != nil else { return }
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                withAnimation { labelScanError = nil }
+            }
+    }
+
+    @ViewBuilder private var labelScanErrorBanner: some View {
+        if let labelScanError {
+            Text(labelScanError)
+                .font(.callout.weight(.medium))
+                .multilineTextAlignment(.center)
+                .padding(.vertical, 14)
+                .padding(.horizontal, 22)
+                .background(.thinMaterial, in: Capsule())
+                .shadow(radius: 8)
+                .transition(.opacity)
+        }
+    }
+
+    /// True stops the reader. A QR that isn't one of ours returns FALSE so the viewfinder keeps
+    /// running — pointing at a packing slip must not dead-end the camera.
+    private func handleScannedLabel(_ code: String) -> Bool {
+        guard let url = URL(string: code), let payload = LabelPayload.parse(url) else {
+            withAnimation { labelScanError = "That isn't a Tin label." }
+            return false
+        }
+        onOpenLabel?(payload.cardId,
+                     CardHighlight(printing: payload.printing, condition: payload.condition))
+        return true
     }
 
     @ViewBuilder private var lens: some View {

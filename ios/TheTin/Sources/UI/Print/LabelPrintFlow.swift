@@ -102,7 +102,10 @@ private struct LabelPrintFlow: ViewModifier {
                     labelCount: req.entries.reduce(0) { $0 + ($1.isSold ? 0 : max($1.qty, 1)) },
                     startPosition: $startPosition,
                     onPrint: { start(req) })
-                    .presentationDetents([.medium, .large])
+                    // Full height, not `[.medium, .large]`. The picker IS a 4 × 10 sheet: at the
+                    // medium detent the bottom rows and the count are below the fold, so the
+                    // control you came to use is the part you can't see (device test, step 3).
+                    .presentationDetents([.large])
             }
             .overlay {
                 if rendering {

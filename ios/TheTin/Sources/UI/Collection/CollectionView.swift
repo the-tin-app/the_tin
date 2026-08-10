@@ -1092,7 +1092,19 @@ struct CollectionView: View {
         NavigationStack {
             QRScannerView(onCode: handleScannedCode)
                 .ignoresSafeArea()
-                .overlay(alignment: .bottom) { labelScanErrorBanner }
+                // CENTRED, not bottom-aligned. Against a live camera feed a small capsule at the
+                // bottom edge reads as chrome and is easy to miss entirely — on the iPad it was
+                // never noticed at all (device test, step 8). The middle of the viewfinder is
+                // where the user is already looking, because that is where they are aiming.
+                .overlay { labelScanErrorBanner }
+                // Clears itself, so a stale "that isn't a Tin label" can't sit over a later
+                // successful aim. Keyed on the message: a second failure restarts the countdown.
+                .task(id: labelScanError) {
+                    guard labelScanError != nil else { return }
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled else { return }
+                    withAnimation { labelScanError = nil }
+                }
                 .navigationTitle("Scan a label")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -1106,10 +1118,13 @@ struct CollectionView: View {
     @ViewBuilder private var labelScanErrorBanner: some View {
         if let labelScanError {
             Text(labelScanError)
-                .font(.footnote)
-                .padding(10)
+                .font(.callout.weight(.medium))
+                .multilineTextAlignment(.center)
+                .padding(.vertical, 14)
+                .padding(.horizontal, 22)
                 .background(.thinMaterial, in: Capsule())
-                .padding(.bottom, 40)
+                .shadow(radius: 8)
+                .transition(.opacity)
         }
     }
 
@@ -1117,7 +1132,7 @@ struct CollectionView: View {
     /// viewfinder keeps running — pointing at a random sticker must not dead-end the camera.
     private func handleScannedCode(_ code: String) -> Bool {
         guard let url = URL(string: code), let payload = LabelPayload.parse(url) else {
-            labelScanError = "That isn't a Tin label."
+            withAnimation { labelScanError = "That isn't a Tin label." }
             return false
         }
         showingLabelScanner = false
