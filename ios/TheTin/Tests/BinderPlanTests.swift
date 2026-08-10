@@ -206,6 +206,40 @@ final class BinderPlanTests: XCTestCase {
         XCTAssertLessThanOrEqual(BinderPlan.assign(obs, shape: shape).count, shape.pocketsPerPage)
     }
 
+    // MARK: - A synthesised cell has to earn its pocket
+
+    /// ⚠️ Device data, 2026-08-09. Two EMPTY pockets produced synthesised quads that fingerprinted at
+    /// **442 and 595** keypoints — far above `minFpCount` — because woven binder fabric and
+    /// dot-textured sleeve plastic are real texture. Both came back `noMatch`, so no card was invented,
+    /// but both pockets rendered as "there is a card here I could not read" over nothing at all. The
+    /// keypoint floor cannot tell an empty pocket from a card; only the verdict can.
+    func testASynthesizedCellThatNeverIdentifiedIsDropped() {
+        let tile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+        let q = quad(cx: 300, cy: 300, w: 260, h: 340)
+        for state in [LensCellState.noMatch, .ambiguous(["a", "b", "c", "d"]), .pending] {
+            let cell = LensCell(quad: q, fpCount: 595, synthesized: true, state: state)
+            XCTAssertTrue(BinderPlan.place(cells: [cell], tile: tile, extent: frame).isEmpty,
+                          "a synthesised cell in state \(state) must not take a pocket")
+        }
+    }
+
+    /// The other half: one that DID identify is exactly what the extrapolation is for, and survives.
+    func testASynthesizedCellThatIdentifiedIsKept() {
+        let tile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+        let cell = LensCell(quad: quad(cx: 300, cy: 300, w: 260, h: 340), fpCount: 595,
+                            synthesized: true, state: .identified(cardId: "sv10-209", inliers: 59))
+        XCTAssertEqual(BinderPlan.place(cells: [cell], tile: tile, extent: frame).count, 1)
+    }
+
+    /// A DETECTED cell is unaffected — it still only needs keypoints, so a card the matcher could not
+    /// name still reports "couldn't read this" rather than vanishing into an empty pocket.
+    func testADetectedCellStillSurvivesWithoutIdentifying() {
+        let tile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+        let cell = LensCell(quad: quad(cx: 300, cy: 300, w: 260, h: 340), fpCount: 650,
+                            state: .noMatch)
+        XCTAssertEqual(BinderPlan.place(cells: [cell], tile: tile, extent: frame).count, 1)
+    }
+
     // MARK: - Extrapolating a pocket nothing was detected in
 
     /// Pixel space, bottom-left origin — the space quads arrive in from Vision.

@@ -161,9 +161,11 @@ struct LiveLensWork: LensWork {
         // tile to recover it — see `BinderPlan.missingPocketQuads`. Extrapolate one from the cards that
         // were found and give it the same chance as any other cell.
         //
-        // ⚠️ The keypoint floor below is what makes this safe, and it is not belt-and-braces: a quad
-        // over a genuinely empty pocket fingerprints at ~15 keypoints against a real card's 650, so an
-        // empty pocket stays empty. Without it this would invent a card wherever it looked.
+        // ⚠️ The keypoint floor below does NOT make this safe, and an earlier version of this comment
+        // wrongly claimed it did ("a quad over a genuinely empty pocket fingerprints at ~15 keypoints").
+        // Measured on device 2026-08-09: two EMPTY pockets fingerprinted at 442 and 595. The floor only
+        // rejects slivers and glare bands. What keeps an empty pocket empty is `BinderPlan.place`,
+        // which discards a synthesised cell that never identified — hence the flag below.
         //
         // Only cells that fingerprinted are used to read the grid. An `.unreadable` cell may be a glare
         // band rather than a card, and letting one set the median size or the row/column line would
@@ -180,7 +182,8 @@ struct LiveLensWork: LensWork {
                                                       degrees: degrees),
                   let fp = LensMatcher.fingerprint(plate),
                   fp.count >= BinderPlan.minFpCount else { continue }
-            let cell = LensCell(quad: quad, degrees: degrees, fpCount: fp.count, state: .pending)
+            let cell = LensCell(quad: quad, degrees: degrees, fpCount: fp.count,
+                                synthesized: true, state: .pending)
             fingerprints[cell.id] = fp
             cells.append(cell)
         }

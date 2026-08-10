@@ -217,10 +217,14 @@ enum BinderPlan {
     ///     placed when some detected card shares its row (giving y) and some detected card shares its
     ///     column (giving x). Two cards in a single row therefore synthesise nothing, because the
     ///     other row's position is genuinely unknown rather than guessable.
-    ///   • **The caller drops it on keypoints.** A quad over a genuinely empty pocket fingerprints at
-    ///     ~15 keypoints against a real card's saturated 650, so `minFpCount` throws it away and no
-    ///     card is ever invented in an empty pocket. That check is the load-bearing half of this and
-    ///     lives in `LiveLensWork.detect`.
+    ///   • **It must identify to survive.** See `place` — a synthesised cell that does not resolve to a
+    ///     card is discarded and its pocket reads empty.
+    ///     ⚠️ **CORRECTED 2026-08-09.** This bullet used to claim the keypoint floor was the safeguard,
+    ///     "a quad over a genuinely empty pocket fingerprints at ~15 keypoints against a real card's
+    ///     saturated 650, so `minFpCount` throws it away". **That is false on real binders**: two empty
+    ///     pockets measured 442 and 595 keypoints, because woven fabric and dot-textured sleeve plastic
+    ///     are real texture. The ~15 figure came from glare bands, not from a framed empty pocket.
+    ///     `minFpCount` cannot tell an empty pocket from a card; only the verdict can.
     ///
     /// Purely additive: nothing detected is dropped, so this cannot turn a read pocket into an unread
     /// one, and `assign` already ranks observations by inlier count — a weak synthetic loses to any
@@ -280,6 +284,21 @@ enum BinderPlan {
         let rects = cells.map { $0.quad.normalizedRect(in: extent) }
         let short = min(extent.width, extent.height)
         let keep = zip(cells, rects).filter { cell, rect in
+            // ⚠️ A synthesised quad is a GUESS that a pocket is occupied, so it must earn its place by
+            // actually identifying. Anything less is discarded and the pocket reads empty, which is the
+            // truth.
+            //
+            // The keypoint floor cannot do this job, and device data on 2026-08-09 is why: two EMPTY
+            // pockets on page 4 produced synthesised quads fingerprinting at **442 and 595** keypoints,
+            // against the ~15 this file's own comment attributes to a phantom. That figure came from
+            // glare bands and page edges; a well-framed empty sleeve is woven fabric and dot-textured
+            // plastic, which is real texture. Both came back `noMatch` — so no card was invented — but
+            // both pockets rendered as "there is a card here I could not read", which is precisely the
+            // dishonest answer the phantom filter exists to prevent.
+            //
+            // Deliberately requires `.identified` and not merely "not noMatch": offering a four-way
+            // chooser for a pocket that may be empty is the same lie with extra steps.
+            if cell.synthesized { return cell.resolvedCardId != nil }
             if cell.fpCount >= minFpCount { return true }
             guard cell.isUnreadable else { return false }
             // No fingerprint to judge by, so judge by size — and because capture is ALWAYS 2×2, a card

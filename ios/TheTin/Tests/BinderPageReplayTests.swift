@@ -145,7 +145,7 @@ final class BinderPageReplayTests: XCTestCase {
                         let fields = TextGate.extract(plate: plate)
                         let pool = index.pool(fields: fields)
                         var cell = LensCell(quad: quad, degrees: degrees, fpCount: fp.count,
-                                            state: .noMatch)
+                                            synthesized: true, state: .noMatch)
                         var obs = Obs(tile: tile.id, poolSize: pool.count, fpCount: fp.count,
                                       shortSide: 0, longSide: 0, aspect: 0,
                                       numerators: fields.numerators,
