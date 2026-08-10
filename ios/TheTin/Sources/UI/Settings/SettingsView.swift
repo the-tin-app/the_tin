@@ -28,6 +28,10 @@ struct SettingsView: View {
     @State private var importInFlight = false
     @State private var showingReport = false
     @AppStorage(SheetPDF.contactLineKey) private var contactLine = ""
+    @AppStorage(LabelSheet.offsetXKey) private var labelOffsetX = 0.0
+    @AppStorage(LabelSheet.offsetYKey) private var labelOffsetY = 0.0
+    @FocusState private var labelOffsetFocused: Bool
+    @State private var printingAlignment = false
     @Environment(\.dismiss) private var dismiss
 
     private var funding: FundingDisplay { app.funding }
@@ -44,6 +48,7 @@ struct SettingsView: View {
         supportSection
         dataSection
         printoutSection
+        labelsSection
         storageSection
         #if DEBUG
         debugSection
@@ -56,9 +61,17 @@ struct SettingsView: View {
                 sections
             }
             .navigationTitle("Settings")
+            .labelCalibrationFlow(isActive: $printingAlignment)
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                }
+                // A number-pad field has no return key, so inside a List there is otherwise NO
+                // way to dismiss the keyboard — no tap-outside, no return.
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { labelOffsetFocused = false }
                 }
             }
             .task {
@@ -641,6 +654,55 @@ struct SettingsView: View {
             Text("Printout contact line")
         } footer: {
             Text("Shown in the header of printed trade sheets, want lists, and collection reports. Leave empty to omit.")
+        }
+    }
+
+    /// The calibration knob for a physical process. The stock's margins are derived arithmetic,
+    /// not measured, and printers differ in unprintable margin and feed alignment — so a layout
+    /// that is arithmetically perfect still lands 1–2 mm off and no amount of care in the code
+    /// fixes it. Print the alignment page, measure the error, type it here.
+    /// ⚠️ Its own `struct`, not another computed property on this view. `sections` above already
+    /// had to be split out of `body` because ten sections tipped the type checker into "unable to
+    /// type-check this expression in reasonable time"; an eleventh built from generic
+    /// `LabeledContent` + `TextField(value:format:)` sent it away for seven minutes with no error
+    /// and no output. A child View is a fresh, small inference context and costs nothing.
+    private var labelsSection: some View {
+        LabelsSettingsSection(offsetX: $labelOffsetX, offsetY: $labelOffsetY,
+                              focused: $labelOffsetFocused,
+                              onPrintAlignment: { printingAlignment = true })
+    }
+
+    fileprivate struct LabelsSettingsSection: View {
+        @Binding var offsetX: Double
+        @Binding var offsetY: Double
+        var focused: FocusState<Bool>.Binding
+        let onPrintAlignment: () -> Void
+
+        var body: some View {
+            Section {
+                row("Shift right", value: $offsetX)
+                row("Shift down", value: $offsetY)
+                Button("Print alignment page", action: onPrintAlignment)
+            } header: {
+                Text("Card labels")
+            } footer: {
+                Text("Millimetres; negative values shift the other way. Print the alignment page on plain paper at 100% (not \"scale to fit\"), hold it against a label sheet, and enter the error you measure.")
+            }
+        }
+
+        private func row(_ title: String, value: Binding<Double>) -> some View {
+            HStack {
+                Text(title)
+                Spacer()
+                // `.numbersAndPunctuation`, not `.decimalPad`: the offset can be negative and the
+                // decimal pad has no minus sign. Either way there is no return key, which is why
+                // SettingsView carries a keyboard-toolbar Done bound to `focused`.
+                TextField("0", value: value, format: .number)
+                    .keyboardType(.numbersAndPunctuation)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+                    .focused(focused)
+            }
         }
     }
 
