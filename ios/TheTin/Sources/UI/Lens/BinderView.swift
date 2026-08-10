@@ -180,8 +180,10 @@ struct BinderCaptureView: View {
                     .font(.headline).multilineTextAlignment(.center)
                 Text(model.progressText).font(.caption).monospacedDigit()
             }
-            // Fires only when a capture really came back small. See `deliveredSmallPhoto` — this is
-            // the sole visible symptom of a silent macro handoff, which costs a third of the locks.
+            // Fires only when this camera had more to give and didn't — the silent macro handoff. It is
+            // deliberately NOT shown on a device whose camera simply tops out low (an 8 MP iPad fired
+            // this on every shot, permanently, for something no one could act on). See
+            // `deliveredSmallPhoto`.
             if source.deliveredSmallPhoto {
                 Text("Low-resolution photo (\(source.megapixelsText)) — move back a little and don't let the lens get too close.")
                     .font(.caption2).multilineTextAlignment(.center)
@@ -212,9 +214,18 @@ struct BinderCaptureView: View {
 
     @ViewBuilder private var controls: some View {
         VStack(spacing: 12) {
-            if model.isWorking {
-                Text("Reading…").font(.caption).foregroundStyle(.white.opacity(0.85))
-            }
+            // ⚠️ The backlog and a measured estimate, not a bare "Reading…". Pass A completes for every
+            // queued photograph long before pass B finishes any, so a slow device sat on an unchanging
+            // screen for minutes with a backlog it never mentioned — which reads as a hang, not as work.
+            // An A10 needs ~25 s a photograph, so a three-page scan really is a five-minute job.
+            //
+            // The slot is always present and empty when idle, never conditionally inserted: adding or
+            // removing a child of this VStack re-identifies its siblings and would shove the shutter as
+            // reading starts and stops.
+            Text(model.readingStatus ?? " ")
+                .font(.caption).monospacedDigit()
+                .foregroundStyle(.white.opacity(model.readingStatus == nil ? 0 : 0.85))
+                .animation(.default, value: model.readingStatus)
             if model.isPageComplete {
                 // ⚠️ NOT `.tint(.white)` on the group. That painted a `.borderedProminent` button white
                 // AND left its label white — an invisible "Next page", reported from the device. The

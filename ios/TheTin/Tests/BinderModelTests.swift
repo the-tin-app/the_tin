@@ -397,4 +397,31 @@ final class BinderModelTests: XCTestCase {
         cache.clear()
         XCTAssertEqual(BinderModel(cache: cache).shape, BinderShape(rows: 5, cols: 5))
     }
+
+    // MARK: - How long the reading has left
+
+    /// ⚠️ Coarse on purpose. A per-second countdown off a five-sample median is false precision and
+    /// visibly jitters every time a photograph lands.
+    func testTheEstimateIsRoundedToSomethingHonest() {
+        XCTAssertEqual(BinderModel.roughly(3), "under a minute")
+        XCTAssertEqual(BinderModel.roughly(44), "under a minute")
+        XCTAssertEqual(BinderModel.roughly(60), "about 1 min")
+        XCTAssertEqual(BinderModel.roughly(25 * 12), "about 5 min")   // the measured A10 3-page scan
+    }
+
+    /// Nothing queued, nothing said — the slot is empty rather than claiming work that isn't happening.
+    func testNoStatusWhenThereIsNoBacklog() {
+        XCTAssertNil(model().readingStatus)
+    }
+
+    /// A photograph in flight is reported even before any has finished, because that is exactly when
+    /// the screen would otherwise sit unchanged and look hung. No estimate is offered yet — one has
+    /// not been measured, and inventing one would be a guess.
+    func testTheBacklogIsReportedBeforeAnyEstimateExists() throws {
+        let m = model()
+        let tile = try XCTUnwrap(m.currentTile)
+        m.accept(photo(), for: tile)
+        XCTAssertNil(m.secondsPerPhoto)
+        XCTAssertEqual(m.readingStatus, "Reading 1 of 1…")
+    }
 }
