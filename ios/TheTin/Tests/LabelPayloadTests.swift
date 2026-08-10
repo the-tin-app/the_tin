@@ -53,12 +53,37 @@ final class LabelPayloadTests: XCTestCase {
         XCTAssertNil(parsed.condition)
     }
 
-    /// An unreadable enum value is "not recorded", never a crash and never a wrong guess.
-    func testGarbageEnumValuesParseAsAbsent() throws {
+    /// An unreadable CONDITION is "not recorded" — `CardCondition` is a closed enum and always
+    /// will be, so a value outside it is meaningless rather than new.
+    ///
+    /// ⚠️ A printing is the opposite case and this test used to get it wrong. `CardVariant` stopped
+    /// being an enum: an unrecognised string IS a print run ("Cosmos Holo"), which is exactly what
+    /// that change was for. So `p` is preserved, never discarded — see the round-trip test below.
+    func testAnUnreadableConditionIsAbsentButAPrintingIsAPrintRun() throws {
         let url = URL(string: "https://thetinapp.com/c/base1-4?v=1&p=sparkly&c=PERFECT")!
         let parsed = try XCTUnwrap(LabelPayload.parse(url))
-        XCTAssertNil(parsed.printing)
-        XCTAssertNil(parsed.condition)
+        XCTAssertNil(parsed.condition, "PERFECT is not a CardCondition and never will be")
+        XCTAssertEqual(parsed.printing?.rawValue, "sparkly",
+                       "an unrecognised printing is a print run, not garbage")
+    }
+
+    /// A print-run copy has to get a correct label — that is the whole point of `CardVariant`
+    /// being open. Dropping it would print a sticker claiming the base card, which is worse than
+    /// printing nothing, because the sticker is permanent and looks authoritative.
+    func testAPrintRunSurvivesTheRoundTrip() throws {
+        let run = try XCTUnwrap(CardVariant(rawValue: "World Championship Decks 2004"))
+        let url = LabelPayload.url(cardId: "base1-4", printing: run, condition: .nm, entryId: "e1")
+        let parsed = try XCTUnwrap(LabelPayload.parse(url))
+        XCTAssertEqual(parsed.printing, run)
+        XCTAssertEqual(parsed.condition, .nm)
+    }
+
+    /// The four finishes still canonicalise, so a label written from a PPT key and one written
+    /// from the rawValue are the same sticker.
+    func testTheKnownFinishesStillCanonicalise() throws {
+        let url = LabelPayload.url(cardId: "base1-4", printing: .reverseHolo,
+                                   condition: nil, entryId: nil)
+        XCTAssertEqual(try XCTUnwrap(LabelPayload.parse(url)).printing, .reverseHolo)
     }
 
     func testNonCardURLsAreRefused() {

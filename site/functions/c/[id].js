@@ -11,10 +11,17 @@ function esc(s) {
     .replaceAll("'", "&#39;");
 }
 
-// A printed label's `p` and `c` (see LabelPayload.swift). These maps are the SANITISER, not a
-// convenience: both values arrive from a URL anyone can write, so a value that isn't a key is
-// DROPPED rather than escaped-and-shown — the page can never display a string someone else chose.
-// Keys are CardVariant / CardCondition rawValues and are a public contract; only ever add.
+// A printed label's `p` and `c` (see LabelPayload.swift).
+//
+// CONDITIONS is a strict allowlist and is the sanitiser for `c`: CardCondition is a closed enum,
+// so a value outside it is meaningless and gets DROPPED rather than shown.
+//
+// PRINTINGS is only a DISPLAY map, and deliberately not a gate. CardVariant stopped being an enum
+// — an unrecognised printing is a print run ("Cosmos Holo", "World Championship Decks 2004") and
+// is real information the sticker carries, so dropping it would strip the one fact that
+// distinguishes that copy. Unmapped values pass through `esc()`, which is the same treatment the
+// name and set on this page have always had, so it is no new exposure — but it IS why the length
+// cap below exists: escaped text can't inject, it can still be used to shout.
 const PRINTINGS = {
   regular: "Regular",
   holo: "Holo",
@@ -22,6 +29,13 @@ const PRINTINGS = {
   firstEdition: "1st Edition",
 };
 const CONDITIONS = { NM: "NM", LP: "LP", MP: "MP", HP: "HP", DMG: "DMG" };
+const MAX_PRINTING = 40;   // the longest real print-run name is well under this
+
+function printingLabel(p) {
+  if (!p) return "";
+  if (PRINTINGS[p]) return PRINTINGS[p];
+  return p.length <= MAX_PRINTING ? p : "";
+}
 
 export function renderCardHTML({ id, name, set, img, origin, printing, condition }) {
   const title = [name, set].filter(Boolean).join(" · ") || "The Tin";
@@ -30,7 +44,7 @@ export function renderCardHTML({ id, name, set, img, origin, printing, condition
   const cardArt = img ? `<img class="art" src="${esc(img)}" alt="${esc(name)}">` : "";
   // What the sticker says about this particular copy. Absent for a plain share link, and absent
   // for a label whose values we don't recognise — the card itself still renders either way.
-  const copy = [PRINTINGS[printing], CONDITIONS[condition]].filter(Boolean).join(" · ");
+  const copy = [printingLabel(printing), CONDITIONS[condition]].filter(Boolean).join(" · ");
   const copyLine = copy ? `<p class="copy">${esc(copy)}</p>` : "";
   return `<!doctype html>
 <html lang="en">

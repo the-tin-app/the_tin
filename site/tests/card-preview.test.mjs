@@ -36,26 +36,43 @@ assert.ok(labelled.includes('class="copy"'), "copy line present");
 // A plain share link carries neither — no empty line, no stray separator.
 assert.ok(!html.includes('class="copy"'), "no copy line without p/c");
 
-// An unrecognised value is DROPPED, not escaped-and-shown: the map is the sanitiser, so nothing
-// an attacker put in the URL can reach the page as text.
+// A PRINT RUN is not garbage — CardVariant is open, so an unrecognised printing is real
+// information the sticker carries and must reach the page.
+const printRun = renderCardHTML({
+  id: "base1-4", name: "Charizard", set: "", img: "",
+  printing: "World Championship Decks 2004", condition: "LP",
+  origin: "https://thetinapp.com",
+});
+assert.ok(printRun.includes("World Championship Decks 2004"), "print run rendered, not dropped");
+assert.ok(printRun.includes("LP"), "condition still rendered alongside it");
+
+// Escaped, never raw. `p` is attacker-controlled, and the page's defence is the same `esc()` the
+// name and set have always used — markup must not survive it.
 const hostile = renderCardHTML({
   id: "base1-4", name: "Charizard", set: "", img: "",
   printing: "<script>alert(1)</script>", condition: "'; DROP--",
   origin: "https://thetinapp.com",
 });
-assert.ok(!hostile.includes("<script>"), "unknown printing never emitted raw");
-assert.ok(!hostile.includes("alert(1)"), "unknown printing dropped, not merely escaped");
-assert.ok(!hostile.includes("DROP--"), "unknown condition dropped, not merely escaped");
-assert.ok(!hostile.includes('class="copy"'), "nothing recognised means no copy line at all");
+assert.ok(!hostile.includes("<script>"), "markup in a printing never emitted raw");
+assert.ok(!hostile.includes("<script>alert(1)</script>"), "no executable script survives");
+assert.ok(hostile.includes("&lt;script&gt;"), "it is escaped, which is how it is rendered safely");
+assert.ok(!hostile.includes("DROP--"), "an unknown CONDITION is still dropped outright");
 
-// One half recognised is still worth showing — a label whose printing we know but condition we
-// don't should not lose the printing too.
+// Length cap: escaped text can't inject but can still be used to shout.
+const shouty = renderCardHTML({
+  id: "base1-4", name: "Charizard", set: "", img: "", printing: "A".repeat(500),
+  origin: "https://thetinapp.com",
+});
+assert.ok(!shouty.includes("AAAAAAAAAA"), "an over-long printing is dropped");
+assert.ok(!shouty.includes('class="copy"'), "and with nothing else recognised, no copy line");
+
+// A known finish still canonicalises to its display name rather than its rawValue.
 const halfKnown = renderCardHTML({
   id: "base1-4", name: "Charizard", set: "", img: "", printing: "holo", condition: "MINT+",
   origin: "https://thetinapp.com",
 });
-assert.ok(halfKnown.includes("Holo"), "known half survives");
-assert.ok(!halfKnown.includes("MINT+"), "unknown half dropped");
+assert.ok(halfKnown.includes("Holo"), "known finish shown by display name");
+assert.ok(!halfKnown.includes("MINT+"), "unknown condition dropped");
 
 // `v` and `e` are ignored by construction — renderCardHTML is never given them (rules 4 and 5).
 assert.doesNotThrow(() => renderCardHTML({
