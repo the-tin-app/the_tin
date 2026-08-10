@@ -8,6 +8,11 @@ import UIKit
 struct CardImageView: View {
     let card: CardRecord?
     let quality: String // "low" for grids, "high" for detail
+    /// Handed to `CardFactSheet` so the no-art fallback can print "Darkness Ablaze #136/189"
+    /// instead of "SWSH3 #136". Optional and defaulted: callers that do not already hold the set
+    /// pass nothing, and NOBODY looks one up for this — see the note on `CardFactSheet.setName`.
+    var setName: String?
+    var setTotal: Int?
     @State private var image: Image?
     /// Downloading right now, as opposed to "there is no art" or "the fetch failed".
     ///
@@ -106,53 +111,20 @@ struct CardImageView: View {
         }
     }
 
+    /// No art: render the card from catalog data instead of a grey box.
+    ///
+    /// ⚠️ Both qualities get a real sheet now. The grid used to fall back to `SVI` / `#223` and
+    /// nothing else, which is the screen you stand in front of a binder with — 36 pockets of grey
+    /// boxes at a convention, "no better off than you were 5 seconds ago". The name was already in
+    /// memory the whole time; this was a rendering choice, never missing data.
     private func placeholder(for card: CardRecord?) -> some View {
-        RoundedRectangle(cornerRadius: 8)
-            .fill(.quaternary)
-            .overlay {
-                if let card {
-                    if quality == "high" {
-                        matchInfo(card)
-                    } else {
-                        VStack(spacing: 2) {
-                            Text(card.setId.uppercased()).font(.caption2.bold())
-                            Text("#\(card.number)").font(.caption2)
-                        }
-                        .foregroundStyle(.secondary)
-                    }
-                }
+        Group {
+            if let card {
+                CardFactSheet(card: card, density: quality == "high" ? .full : .compact,
+                              setName: setName, setTotal: setTotal)
+            } else {
+                RoundedRectangle(cornerRadius: 8).fill(.quaternary)
             }
-    }
-
-    /// Detail-size fallback when no art exists: the card's printed facts (name, HP, types,
-    /// moves + damage, rarity/artist) so the user can match the physical card in hand.
-    private func matchInfo(_ card: CardRecord) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(card.name).font(.subheadline.bold()).lineLimit(2)
-                Spacer(minLength: 4)
-                if let hp = card.hp { Text("HP \(hp)").font(.caption.bold()) }
-            }
-            if !card.types.isEmpty {
-                Text(card.types.joined(separator: " · ")).font(.caption2)
-            }
-            ForEach(Array(card.attacks.enumerated()), id: \.offset) { _, attack in
-                HStack(alignment: .firstTextBaseline) {
-                    Text(attack.name).font(.caption).lineLimit(1)
-                    Spacer(minLength: 4)
-                    if let damage = attack.damage { Text(damage).font(.caption.bold()) }
-                }
-            }
-            Spacer(minLength: 0)
-            let credits = [card.rarity, card.artist].compactMap { $0 }
-            if !credits.isEmpty {
-                Text(credits.joined(separator: " · ")).font(.caption2).lineLimit(1)
-            }
-            Text("\(card.setId.uppercased()) #\(card.number)").font(.caption2.bold())
         }
-        .foregroundStyle(.secondary)
-        .padding(10)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .minimumScaleFactor(0.7)
     }
 }

@@ -1004,13 +1004,17 @@ final class CatalogStore {
         // Missing column (pre-attacks catalogs) or bad JSON reads as no attacks.
         let attacksJSON: String? = r["attacks"]
         let attacks = attacksJSON.flatMap { try? JSONDecoder().decode([Attack].self, from: Data($0.utf8)) } ?? []
+        // Same contract as `attacks`, one column later: a catalog predating `detail` has no column,
+        // which reads as nil here rather than throwing, and the fact sheet omits what it lacks.
+        let detailJSON: String? = r["detail"]
+        let detail = detailJSON.flatMap { try? JSONDecoder().decode(CardDetail.self, from: Data($0.utf8)) }
         return CardRecord(id: r["id"], setId: r["set_id"], number: r["number"], name: r["name"],
                           hp: r["hp"],
                           types: (types ?? "").split(separator: ",").map(String.init),
                           rarity: r["rarity"], artist: r["artist"], imageBase: r["image_base"],
                           imageUrl: r["image_url"],
                           tcgplayerId: r["tcgplayer_id"],
-                          attacks: attacks)
+                          attacks: attacks, detail: detail)
     }
 
     private static func priceRecord(_ r: Row) -> PriceRecord {
