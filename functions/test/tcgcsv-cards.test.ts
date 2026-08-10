@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   numberKeys, denominatorFits, parseAttack, cleanName, mapGroupsToSets, synthesizeMissingCards,
-  nameNumberKey, findPrintRuns, type CardRef, type TcgcsvProduct,
+  nameNumberKey, findPrintRuns, parseTypeValue, pickCsvDetail, extMap,
+  type CardRef, type TcgcsvProduct,
 } from "../src/pipeline/tcgcsv-cards";
 
 const ext = (o: Record<string, string>) => Object.entries(o).map(([name, value]) => ({ name, value }));
@@ -318,5 +319,41 @@ describe("findPrintRuns", () => {
     const groups = [{ groupId: 9, name: "Promos", products: [wc(1, "Torchic", "74/109")] }];
     expect(findPrintRuns(groups, new Map([[9, "ex1"]]), new Map(), idx, totals)).toEqual([]);
     expect(findPrintRuns(groups, new Map(), new Map([[1, "ex1"]]), idx, totals)).toEqual([]);
+  });
+});
+
+describe("parseTypeValue", () => {
+  it("decodes the letter+modifier form tcgcsv packs weakness into", () => {
+    expect(parseTypeValue("Rx2")).toEqual([{ type: "Fire", value: "×2" }]);
+    expect(parseTypeValue("F-30")).toEqual([{ type: "Fighting", value: "-30" }]);
+  });
+
+  it("returns undefined for anything it cannot read, never a guess", () => {
+    // These cards are gap-fill and already thin; a wrong weakness on the offline sheet is worse
+    // than a missing row, because the sheet is what someone checks a physical card against.
+    for (const junk of ["", "x2", "Zx2", "Fighting ×2", undefined]) {
+      expect(parseTypeValue(junk)).toBeUndefined();
+    }
+  });
+});
+
+describe("pickCsvDetail", () => {
+  it("reads the real MEP 046 extendedData", () => {
+    expect(pickCsvDetail(extMap(CHIKORITA), 70)).toEqual({
+      category: "Pokemon", stage: "Basic", retreat: 1,
+      weaknesses: [{ type: "Fire", value: "×2" }],
+    });
+  });
+
+  it("calls a card with no HP a Trainer and promotes CardText to its rules text", () => {
+    const trainer = product(1, "Poké Ball", { CardText: "Flip a coin. If heads, search your deck." });
+    expect(pickCsvDetail(extMap(trainer), null)).toEqual({
+      category: "Trainer", effect: "Flip a coin. If heads, search your deck.",
+    });
+  });
+
+  it("keeps a Pokémon's CardText OUT of effect — on a Pokémon that field is flavour, not rules", () => {
+    const mon = product(2, "Pikachu", { HP: "60", CardText: "It raises its tail to check its surroundings." });
+    expect(pickCsvDetail(extMap(mon), 60).effect).toBeUndefined();
   });
 });
