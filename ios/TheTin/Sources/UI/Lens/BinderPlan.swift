@@ -47,6 +47,16 @@ struct BinderTile: Identifiable, Equatable, Codable {
 }
 
 extension CardQuad {
+    /// Axis-aligned bounding box in the quad's own **pixel, bottom-left-origin** space — Vision's.
+    /// No flip, no normalization: this is the space quads are built and consumed in.
+    var boundingBox: CGRect {
+        let xs = [topLeft.x, topRight.x, bottomLeft.x, bottomRight.x]
+        let ys = [topLeft.y, topRight.y, bottomLeft.y, bottomRight.y]
+        let minX = xs.min() ?? 0, maxX = xs.max() ?? 0
+        let minY = ys.min() ?? 0, maxY = ys.max() ?? 0
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
     /// Bounding box in coordinates normalized to `extent`, **top-left origin**.
     ///
     /// ⚠️ Vision's pixel space is bottom-left origin; SwiftUI's and CoreGraphics' image space are
@@ -55,13 +65,11 @@ extension CardQuad {
     /// bug: it puts the right cards in transposed pockets, which reads as a matching failure.
     func normalizedRect(in extent: CGRect) -> CGRect {
         guard extent.width > 0, extent.height > 0 else { return .zero }
-        let xs = [topLeft.x, topRight.x, bottomLeft.x, bottomRight.x]
-        let ys = [topLeft.y, topRight.y, bottomLeft.y, bottomRight.y]
-        let minX = ((xs.min() ?? 0) - extent.minX) / extent.width
-        let maxX = ((xs.max() ?? 0) - extent.minX) / extent.width
-        let minY = ((ys.min() ?? 0) - extent.minY) / extent.height
-        let maxY = ((ys.max() ?? 0) - extent.minY) / extent.height
-        return CGRect(x: minX, y: 1 - maxY, width: maxX - minX, height: maxY - minY)
+        let b = boundingBox
+        return CGRect(x: (b.minX - extent.minX) / extent.width,
+                      y: 1 - (b.maxY - extent.minY) / extent.height,
+                      width: b.width / extent.width,
+                      height: b.height / extent.height)
     }
 }
 
@@ -182,6 +190,69 @@ enum BinderPlan {
         guard !xs.isEmpty else { return 0 }
         let s = xs.sorted()
         return s.count % 2 == 1 ? s[s.count / 2] : (s[s.count / 2 - 1] + s[s.count / 2]) / 2
+    }
+
+    /// A zero-offset tile, so `slots` can be reused purely for its 0/1 sub-grid classification
+    /// without inventing a second copy of that rule.
+    private static let originTile = BinderTile(page: 0, rowOffset: 0, colOffset: 0)
+
+    /// Quads for the pockets in this photograph that nothing was detected in, extrapolated from the
+    /// cards that WERE detected. Pixel space, bottom-left origin — the space `quads` arrive in.
+    ///
+    /// ⚠️ **This is the only fix available for a corner pocket, and the reason is geometric.** Capture
+    /// is 2×2, so exactly ONE tile window can ever contain a given corner of the page — a corner gets
+    /// one look and there is no second observation to out-vote a detection miss. Measured on device
+    /// 2026-08-09 over three 3×3 pages: coverage came out 4× centre / 2× edge-middles / **1× corners**,
+    /// and all three positioned non-locks were corners. One of them (`p1 r3c1`) was detected by nothing
+    /// at all — the tile that could see it returned three cells, not four — so the pocket rendered
+    /// EMPTY, which is precisely the silent miss this feature exists to prevent.
+    ///
+    /// It is **self-calibrating, with no fitted constant**: the missing pocket's centre is read off the
+    /// cards sharing its row and its column, and its size is the median of the cards actually present.
+    /// So it works at any resolution, any binder shape and any framing — unlike a threshold tuned to
+    /// one page, which the 08-08 handoff warns against by name.
+    ///
+    /// Two properties make it safe to add speculatively:
+    ///   • **Both axes must be readable off cards that are really there.** A missing pocket is only
+    ///     placed when some detected card shares its row (giving y) and some detected card shares its
+    ///     column (giving x). Two cards in a single row therefore synthesise nothing, because the
+    ///     other row's position is genuinely unknown rather than guessable.
+    ///   • **The caller drops it on keypoints.** A quad over a genuinely empty pocket fingerprints at
+    ///     ~15 keypoints against a real card's saturated 650, so `minFpCount` throws it away and no
+    ///     card is ever invented in an empty pocket. That check is the load-bearing half of this and
+    ///     lives in `LiveLensWork.detect`.
+    ///
+    /// Purely additive: nothing detected is dropped, so this cannot turn a read pocket into an unread
+    /// one, and `assign` already ranks observations by inlier count — a weak synthetic loses to any
+    /// real card that lands on the same pocket.
+    static func missingPocketQuads(from quads: [CardQuad], extent: CGRect) -> [CardQuad] {
+        // Two is the floor: one card gives a size but no pitch, so nothing can be placed from it.
+        guard extent.width > 0, extent.height > 0, quads.count >= 2 else { return [] }
+        let boxes = quads.map(\.boundingBox)
+        let placed = slots(rects: quads.map { $0.normalizedRect(in: extent) }, in: originTile)
+        let occupied = Set(placed)
+        let w = median(boxes.map { Double($0.width) })
+        let h = median(boxes.map { Double($0.height) })
+        guard w > 0, h > 0 else { return [] }
+
+        var out: [CardQuad] = []
+        for row in 0..<tileSide {
+            for col in 0..<tileSide {
+                guard !occupied.contains(BinderSlot(page: 0, row: row, col: col)) else { continue }
+                let ys = zip(placed, boxes).filter { $0.0.row == row }.map { Double($0.1.midY) }
+                let xs = zip(placed, boxes).filter { $0.0.col == col }.map { Double($0.1.midX) }
+                guard !ys.isEmpty, !xs.isEmpty else { continue }
+                let rect = CGRect(x: median(xs) - w / 2, y: median(ys) - h / 2, width: w, height: h)
+                // A pocket extrapolated off the edge of the photograph cannot be rectified, and a
+                // card hanging out of frame could not have been read anyway.
+                guard extent.contains(rect) else { continue }
+                out.append(CardQuad(topLeft: CGPoint(x: rect.minX, y: rect.maxY),
+                                    topRight: CGPoint(x: rect.maxX, y: rect.maxY),
+                                    bottomLeft: CGPoint(x: rect.minX, y: rect.minY),
+                                    bottomRight: CGPoint(x: rect.maxX, y: rect.minY)))
+            }
+        }
+        return out
     }
 
     /// One observation of one pocket: which cell, where in the frame, and which pocket it lands in.
