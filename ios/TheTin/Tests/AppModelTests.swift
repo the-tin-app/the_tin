@@ -366,6 +366,11 @@ final class AppModelTests: XCTestCase {
         savedCatalogTierForBackupTests = AppConfig.catalogTier
         savedSimulatePrimaryOutage = AppConfig.simulatePrimaryOutage
         AppConfig.simulatePrimaryOutage = false
+        // Saving/restoring is not enough: a run killed mid-suite (jetsam takes the test host with
+        // no tearDown) leaves `expert` PERSISTED in the simulator's app container, where it
+        // outlives the process and fails every later run of any test that reads the ambient tier.
+        // Pin it forward too, so the tier a test depends on is the tier it states.
+        AppConfig.catalogTier = CatalogTier.average.rawValue
     }
 
     override func tearDownWithError() throws {
