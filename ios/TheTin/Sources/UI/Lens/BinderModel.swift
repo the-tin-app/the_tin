@@ -251,7 +251,7 @@ final class BinderModel {
     /// rectangles with no names and no prices. The feature looks broken at exactly the moment the
     /// cache did its job. Cheap and idempotent: `resolveMetadata` skips anything already cached.
     func hydrate() async {
-        await resolveMetadata(for: scan.entries.compactMap(\.cardId))
+        await resolveMetadata(for: scan.entries.compactMap(\.displayCardId))
     }
 
     func slots(onPage page: Int) -> [BinderSlot] {
@@ -264,6 +264,12 @@ final class BinderModel {
         BinderResults.apply(filter, to: BinderResults.rows(scan, prices: priceCache,
                                                            cards: cardCache, sets: setNameCache,
                                                            owned: ownedIds))
+    }
+
+    /// Wishlist hits the app is only ~sure of. Counted separately so the footer can promise exactly as
+    /// much as it knows.
+    var unconfirmedWishlistCount: Int {
+        scan.entries.filter { $0.cardId == nil && $0.wishlistCandidate != nil }.count
     }
 
     /// Distinct set names present in the scan, for the set filter. Sorted, and only what is actually
@@ -347,7 +353,8 @@ final class BinderModel {
             tileByPhoto[photoId] = nil
             extentByPhoto[photoId] = nil
         }
-        await resolveMetadata(for: cells.compactMap(\.cardId))
+        // Both, because an unconfirmed wishlist candidate still needs its art and price to be shown.
+        await resolveMetadata(for: cells.compactMap(\.resolvedCardId) + cells.compactMap(\.wishlistCardId))
     }
 
     /// One photograph's detections → pockets. Quantize every detection onto the tile's 2×2 sub-grid,
@@ -357,41 +364,49 @@ final class BinderModel {
     /// Internal rather than private so a test can drive the whole capture-to-pocket path with hand-made
     /// cells — no camera, no Vision, no fingerprint pack.
     func assignSlots(cells: [LensCell], tile: BinderTile, extent: CGRect) {
-        // ⚠️ Phantoms are excluded BEFORE the sub-grid is worked out, not after. `BinderPlan.slots`
-        // decides where the dividing line falls from the spread of what it is given, so one glare band
-        // at the edge of the frame would drag that line and mis-row every real card with it.
-        //
-        // ⚠️ And `.unreadable` cells are KEPT, which `fpCount` alone cannot express — a card lost to
-        // glare or too blurred to fingerprint has no keypoints at all, so a keypoint floor drops it and
-        // the pocket renders as EMPTY. "There is nothing in this pocket" and "there is a card here I
-        // could not read" are different answers, and quietly giving the first one is the silent miss this
-        // whole feature exists to avoid.
-        let rects = cells.map { $0.quad.normalizedRect(in: extent) }
-        let short = min(extent.width, extent.height)
-        let keep = zip(cells, rects).filter { cell, rect in
-            if cell.fpCount >= BinderPlan.minFpCount { return true }
-            guard cell.isUnreadable else { return false }
-            // No fingerprint to judge by, so judge by size — and because capture is ALWAYS 2×2, a card
-            // occupies about half the frame whatever the binder's shape, which makes a fraction of the
-            // frame a principled test rather than a fitted one. Measured over 179 real cells: every
-            // card-sized quad was ≥ 0.27 of the frame's short side and every phantom ≤ 0.262, and
-            // nothing above 0.20 failed to fingerprint at all.
-            return min(rect.width * extent.width, rect.height * extent.height)
-                >= short * BinderPlan.minCardShortSideFraction
+        // Phantom filtering and the sub-grid split are `BinderPlan.place` — shared with the replay
+        // harness so a measurement cannot quietly stop describing what the device does.
+        let placed = BinderPlan.place(cells: cells, tile: tile, extent: extent)
+        let observations = placed.map {
+            (slot: $0.slot, score: $0.cell.inliers, fpCount: $0.cell.fpCount,
+             value: ($0.cell, $0.rect))
         }
-        let real = keep.map(\.0), keptRects = keep.map(\.1)
-        let slots = BinderPlan.slots(rects: keptRects, in: tile)
-        let observations = zip(zip(real, keptRects), slots).map { pair, slot in
-            (slot: slot, score: pair.0.inliers, fpCount: pair.0.fpCount, value: (pair.0, pair.1))
-        }
-        BinderDiag.record(cells: real, rects: keptRects, slots: slots, tile: tile)
+        BinderDiag.record(cells: placed.map(\.cell), rects: placed.map(\.rect),
+                          slots: placed.map(\.slot), tile: tile)
         for (slot, found) in BinderPlan.assign(observations, shape: shape) {
             let (cell, rect) = found
-            scan.put(BinderSlotEntry(slot: slot, cardId: cell.cardId, options: cell.chooserOptions,
+            // ⚠️ `resolvedCardId`, NOT `cardId`. `LensCell.cardId` falls back to pass A's wishlist match
+            // when pass B did not lock, and that fallback is what put confident wrong answers in
+            // pockets — every one of them a wishlist card, which is how Tomas spotted it on a device.
+            //
+            // Pass A is a far weaker gate than pass B by design: it matches against ~120 wanted cards on
+            // 20 inliers ALONE, with no separation ratio, no OCR name/number agreement and no twin
+            // check. That was a fair trade when a pass-A hit meant "walk over and look at that case" —
+            // its own comment says a false positive costs a glance. It is not a fair trade when the same
+            // signal is rendered as the pocket's identity with a price beside it.
+            //
+            // So pass A now contributes a MARK and a chooser candidate, never an answer.
+            scan.put(BinderSlotEntry(slot: slot, cardId: cell.resolvedCardId,
+                                     options: Self.chooserOptions(for: cell),
                                      inliers: cell.inliers, onWishlist: cell.onWishlist,
-                                     tile: tile.id, crop: rect, unreadable: cell.unreadableReason))
+                                     tile: tile.id, crop: rect, unreadable: cell.unreadableReason,
+                                     wishlistCandidate: cell.wishlistCardId))
         }
         persist()
+    }
+
+    /// What to offer when the pocket is unresolved: pass B's four, with pass A's wishlist candidate
+    /// promoted to the front when it has one.
+    ///
+    /// ⚠️ Pass A's answer is real evidence — it is a match against a ~120-card set, which has none of the
+    /// open-set confusion that makes pass B hard — it is just not evidence enough to answer with. Putting
+    /// it first in the chooser keeps its value and costs one tap. And a pass-A hit on a cell pass B could
+    /// not match at all now yields a one-option chooser rather than nothing, which is the case that
+    /// matters most: standing in a shop, "is this the card I want?" is the whole question.
+    static func chooserOptions(for cell: LensCell) -> [String] {
+        var out = cell.chooserOptions
+        if let wanted = cell.wishlistCardId, !out.contains(wanted) { out.insert(wanted, at: 0) }
+        return out
     }
 
     private func persist() { cache.save(scan) }

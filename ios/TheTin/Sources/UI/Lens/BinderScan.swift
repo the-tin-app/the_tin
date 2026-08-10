@@ -24,6 +24,12 @@ struct BinderSlotEntry: Codable, Equatable, Identifiable {
     /// key, so every scan written before this field existed would fail to decode. Same convention as
     /// `CollectionEntry.forTrade` and `BackupSnapshot.setGoals`.
     var unreadable: String?
+    /// The card pass A matched against the wishlist, when it did. ⚠️ **Not an answer** — pass A matches
+    /// ~120 cards on inlier count alone, with none of pass B's separation, OCR-agreement or twin checks,
+    /// and letting it stand as the pocket's identity is what produced confident wrong answers that were
+    /// all wishlist cards. It is a candidate and a mark, so "is anything I want here" still gets answered
+    /// without the app claiming more than it knows.
+    var wishlistCandidate: String?
     /// The user picked this, from the chooser or by hand.
     ///
     /// ⚠️ Load-bearing, not bookkeeping: a 3×3 or 5×5 binder photographs one row and one column
@@ -33,6 +39,11 @@ struct BinderSlotEntry: Codable, Equatable, Identifiable {
 
     var id: BinderSlot { slot }
     var isResolved: Bool { cardId != nil }
+    /// A pocket with something to choose between — including the case where the only candidate is pass
+    /// A's wishlist match, which is exactly the question a shop visit is about.
+    var needsAChoice: Bool { cardId == nil && !options.isEmpty }
+    /// The card to show for this pocket, and whether the app is actually sure of it.
+    var displayCardId: String? { cardId ?? wishlistCandidate }
 }
 
 /// A captured binder. **A cache, not a document** — and the distinction is what keeps a one-way door

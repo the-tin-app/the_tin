@@ -22,12 +22,6 @@ struct BinderBrowseView: View {
                     .opacity(showingList ? 1 : 0).allowsHitTesting(showingList)
             }
         }
-        // ⚠️ The capture screen PAUSES the queue in its `onDisappear`, and leaving it for this screen is
-        // exactly that. Without resuming here, every photograph still being read when the user tapped
-        // Done stays paused forever — its pockets frozen on whatever `detect` had put in them, which
-        // reads as a page of unidentifiable cards. Pass B is the slow stage, so the window is the width
-        // of the whole last page.
-        .onAppear { model.resume() }
         .sheet(item: $openSlot) { slot in
             NavigationStack {
                 BinderSlotSheet(model: model, store: store, slot: slot)
@@ -90,6 +84,9 @@ struct BinderBrowseView: View {
                 if model.unresolvedCount > 0 {
                     Text("· \(model.unresolvedCount) need a choice")
                 }
+                if model.unconfirmedWishlistCount > 0 {
+                    Text("· \(model.unconfirmedWishlistCount) to confirm").foregroundStyle(.pink)
+                }
                 if model.unreadCount > 0 {
                     Text("· \(model.unreadCount) unread")
                 }
@@ -119,8 +116,8 @@ private struct BinderPageGrid: View {
                         let entry = model.entry(slot)
                         Button { onTap(slot) } label: {
                             Pocket(entry: entry,
-                                   card: entry?.cardId.flatMap { model.cardCache[$0] },
-                                   price: entry?.cardId.flatMap { model.priceCache[$0] },
+                                   card: entry?.displayCardId.flatMap { model.cardCache[$0] },
+                                   price: entry?.displayCardId.flatMap { model.priceCache[$0] },
                                    isWorking: model.isWorking)
                         }
                         .buttonStyle(.plain)
@@ -149,7 +146,7 @@ private struct Pocket: View {
     let isWorking: Bool
 
     private var isStillReading: Bool {
-        isWorking && entry != nil && !(entry?.isResolved ?? false)
+        isWorking && entry != nil && entry?.displayCardId == nil
             && entry?.options.isEmpty == true && entry?.unreadable == nil
     }
 
@@ -158,8 +155,19 @@ private struct Pocket: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 5)
                     .fill(Color(.secondarySystemBackground))
-                if let entry, entry.isResolved {
+                if let entry, entry.displayCardId != nil {
                     CardImageView(card: card, quality: "low")
+                        // ⚠️ An unconfirmed pass-A candidate must not look like a settled answer. Dimmed
+                        // with a "?" over it: the guess is worth showing — it is a match against ~120
+                        // wanted cards — but it is a guess, and looking identical to a lock is precisely
+                        // the confident wrong answer this rendering exists to stop.
+                        .opacity(entry.isResolved ? 1 : 0.45)
+                        .overlay {
+                            if !entry.isResolved {
+                                Image(systemName: "questionmark.circle.fill")
+                                    .font(.title3).foregroundStyle(.white, .black.opacity(0.55))
+                            }
+                        }
                 } else if isStillReading {
                     ProgressView().controlSize(.small)
                 } else if let entry {
@@ -182,7 +190,9 @@ private struct Pocket: View {
                 }
             }
 
-            if let price {
+            if let entry, !entry.isResolved, entry.wishlistCandidate != nil {
+                Text("probably — tap").font(.system(size: 9)).foregroundStyle(.pink)
+            } else if let price {
                 Text(price, format: .currency(code: "USD"))
                     .font(.system(size: 9)).monospacedDigit().lineLimit(1)
             } else if entry == nil {
@@ -211,6 +221,9 @@ private struct Pocket: View {
     private var label: String {
         guard let entry else { return "Empty pocket" }
         if isStillReading { return "Still reading" }
+        if !entry.isResolved, entry.wishlistCandidate != nil {
+            return "Probably \(card?.name ?? "a card you want") — tap to confirm"
+        }
         guard entry.isResolved else {
             if let why = entry.unreadable { return "Couldn't be read — \(why)" }
             return entry.options.isEmpty ? "Couldn't be read, tap to search" : "Needs a choice"
@@ -482,11 +495,18 @@ private struct BinderRowView: View {
     var body: some View {
         HStack(spacing: 10) {
             CardImageView(card: row.card, quality: "low").frame(width: 34)
+                .opacity(row.confirmed ? 1 : 0.45)
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.name).lineLimit(1)
                 Text(row.setName.map { "\(row.position) · \($0)" } ?? row.position)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                if row.onWishlist {
+                if !row.confirmed {
+                    // Says "probably" out loud. This row is pass A's guess, and the whole reason it is a
+                    // guess is that pass A has no separation, OCR or twin check behind it.
+                    Text(row.onWishlist ? "Probably on your wishlist — tap to confirm"
+                                        : "Not confirmed — tap to confirm")
+                        .font(.caption2).foregroundStyle(.pink)
+                } else if row.onWishlist {
                     Text("On your wishlist").font(.caption2).foregroundStyle(.pink)
                 } else if row.owned {
                     Text("Already in your tin").font(.caption2).foregroundStyle(.secondary)

@@ -16,6 +16,10 @@ struct BinderRow: Identifiable, Equatable {
     let onWishlist: Bool
     let priceUsd: Double?
     let owned: Bool
+    /// False when this row is pass A's wishlist candidate rather than a settled identification. The row
+    /// must say so: pass A matches ~120 cards on inlier count alone, and a row that looks identical to a
+    /// confirmed one is the confident wrong answer this feature keeps having to unlearn.
+    var confirmed: Bool = true
 
     var id: BinderSlot { slot }
     /// The id until the batched read lands — never blank, so a row is never a mystery.
@@ -51,15 +55,22 @@ struct BinderFilter: Equatable {
 
 enum BinderResults {
 
-    /// Every resolved pocket, as rows. Unresolved pockets deliberately have none: a row with no card
-    /// is not information, and the grid is where an unresolved pocket is visible and tappable.
+    /// Every pocket the app can name, as rows.
+    ///
+    /// Resolved pockets, plus pockets where pass A matched the WISHLIST but pass B would not commit —
+    /// those carry `confirmed: false`. ⚠️ They are included because "is anything I want here" is the
+    /// question this feature exists to answer and it must survive pass A being demoted out of the
+    /// answer; they are flagged because a row that looks like a confirmed one is exactly the wrong
+    /// answer that demotion was for. A pocket with nothing to name still gets no row — the grid is
+    /// where that is visible and tappable.
     static func rows(_ scan: BinderScan, prices: [String: Double], cards: [String: CardRecord],
                      sets: [String: String], owned: Set<String>) -> [BinderRow] {
         scan.entries.compactMap { e in
-            guard let cardId = e.cardId else { return nil }
+            guard let cardId = e.displayCardId else { return nil }
             return BinderRow(slot: e.slot, cardId: cardId, card: cards[cardId],
                              setName: sets[cardId], onWishlist: e.onWishlist,
-                             priceUsd: prices[cardId], owned: owned.contains(cardId))
+                             priceUsd: prices[cardId], owned: owned.contains(cardId),
+                             confirmed: e.cardId != nil)
         }
     }
 

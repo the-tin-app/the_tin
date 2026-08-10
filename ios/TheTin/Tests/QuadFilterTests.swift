@@ -82,4 +82,62 @@ final class QuadFilterTests: XCTestCase {
     func testEmptyInputIsEmptyOutput() {
         XCTAssertTrue(QuadFilter.select([]).isEmpty)
     }
+
+    // MARK: - CardSizeWindow: the filter an aspect ratio cannot do
+
+    /// A quad with the given edge lengths in pixels, axis-aligned.
+    private func quad(_ w: Double, _ h: Double) -> ScoredQuad {
+        ScoredQuad(quad: CardQuad(topLeft: CGPoint(x: 0, y: h), topRight: CGPoint(x: w, y: h),
+                                  bottomLeft: .zero, bottomRight: CGPoint(x: w, y: 0)),
+                   confidence: 1)
+    }
+
+    /// ⚠️ **The coincidence.** One card is 63×88 mm → short/long 0.716. TWO side by side are 126×88 →
+    /// short/long 0.698. Both sit inside any aspect window wide enough to accept a real card at an
+    /// angle, so `select`'s aspect filter cannot tell them apart — and measured on a real 3×3 page, 2 of
+    /// 21 detected quads spanned two pockets, each taking one pocket and leaving its neighbour's
+    /// reading empty. That is what "the right cards, in the wrong order" looked like.
+    func testTheAspectFilterCannotSeparateACardFromACardPair() {
+        let one = quad(63, 88), pair = quad(126, 88)
+        XCTAssertEqual(one.aspect, 63.0 / 88.0, accuracy: 0.001)
+        XCTAssertEqual(pair.aspect, 88.0 / 126.0, accuracy: 0.001)
+        // Both inside select()'s default window — this is the bug, asserted so it stays understood.
+        for q in [one, pair] { XCTAssertTrue((0.58...0.86).contains(q.aspect), "\(q.aspect)") }
+    }
+
+    /// …and the size window can, because capture is always 2×2 so a card's size in the frame is known
+    /// within about a factor of two. Numbers measured over one real 3×3 page at 3024×4032.
+    func testTheSizeWindowSeparatesThem() {
+        let frameShort = 3024.0
+        let window = CardSizeWindow.twoByTwoTile
+        // Real cards measured 0.296-0.396 of the frame's short side on the short edge.
+        for shortEdge in [0.296, 0.34, 0.396] {
+            let q = quad(shortEdge * frameShort, shortEdge * frameShort / 0.716)
+            XCTAssertTrue(window.admits(quad: q, frameShortSide: frameShort), "card at \(shortEdge)")
+        }
+        // The two card-pairs measured: long edges of 0.68 and 0.75 of the frame's short side.
+        for longEdge in [0.68, 0.75] {
+            let q = quad(longEdge * frameShort, longEdge * frameShort * 0.698)
+            XCTAssertFalse(window.admits(quad: q, frameShortSide: frameShort), "pair at \(longEdge)")
+        }
+        // Five slivers measured, short edges 0.11-0.20 — three of which cleared the keypoint floor.
+        for shortEdge in [0.106, 0.144, 0.202] {
+            let q = quad(shortEdge * frameShort, shortEdge * frameShort / 0.75)
+            XCTAssertFalse(window.admits(quad: q, frameShortSide: frameShort), "sliver at \(shortEdge)")
+        }
+    }
+
+    /// ⚠️ The floor is permissive on purpose, and the asymmetry is the reason: a phantom that survives
+    /// usually loses its pocket to a real card on inlier count, but a real card dropped here is a
+    /// pocket that reads EMPTY and cannot be recovered.
+    func testTheFloorLeavesHeadroomBelowTheMeasuredCardFloor() {
+        XCTAssertLessThan(CardSizeWindow.twoByTwoTile.minShortSide, 0.296)
+        XCTAssertGreaterThan(CardSizeWindow.twoByTwoTile.minShortSide, 0.202)
+        XCTAssertGreaterThan(CardSizeWindow.twoByTwoTile.maxLongSide, 0.51)   // widest real card
+        XCTAssertLessThan(CardSizeWindow.twoByTwoTile.maxLongSide, 0.68)      // narrowest card pair
+    }
+
+    func testAZeroFrameAdmitsRatherThanDropsEverything() {
+        XCTAssertTrue(CardSizeWindow.twoByTwoTile.admits(quad: quad(100, 140), frameShortSide: 0))
+    }
 }

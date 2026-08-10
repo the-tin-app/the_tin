@@ -89,7 +89,9 @@ final class LensProposerReplayTests: XCTestCase {
                     .first, "no image for \(name)")
                 let context = CIContext()
                 var i = 0
-                MultiCardDetector.forEachCell(in: ci, context: context) { detected in
+                // The fixtures ARE 2×2 quadrant photographs, so the production window applies.
+                MultiCardDetector.forEachCell(in: ci, context: context,
+                                              sizeWindow: .twoByTwoTile) { detected in
                     defer { i += 1 }
                     let plate = detected.plate
                     let q = detected.quad

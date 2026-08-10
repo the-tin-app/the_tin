@@ -184,6 +184,47 @@ enum BinderPlan {
         return s.count % 2 == 1 ? s[s.count / 2] : (s[s.count / 2 - 1] + s[s.count / 2]) / 2
     }
 
+    /// One observation of one pocket: which cell, where in the frame, and which pocket it lands in.
+    struct Placed {
+        let cell: LensCell
+        /// Normalized to the photograph, top-left origin — what the verification crop is cut from.
+        let rect: CGRect
+        let slot: BinderSlot
+    }
+
+    /// Every photograph's detections → pockets, phantoms dropped. The shared step between what the
+    /// device does (`BinderModel.assignSlots`) and what the replay harness measures, so a
+    /// measurement cannot drift from the shipped behaviour by re-implementing this.
+    ///
+    /// ⚠️ Phantoms are excluded BEFORE the sub-grid is worked out, not after. `slots` decides where the
+    /// dividing line falls from the spread of what it is given, so one glare band at the edge of the
+    /// frame would drag that line and mis-row every real card with it.
+    ///
+    /// ⚠️ And `.unreadable` cells are KEPT, which `fpCount` alone cannot express — a card lost to
+    /// glare or too blurred to fingerprint has no keypoints at all, so a keypoint floor drops it and
+    /// the pocket renders as EMPTY. "There is nothing in this pocket" and "there is a card here I
+    /// could not read" are different answers, and quietly giving the first one is the silent miss this
+    /// whole feature exists to avoid.
+    static func place(cells: [LensCell], tile: BinderTile, extent: CGRect) -> [Placed] {
+        let rects = cells.map { $0.quad.normalizedRect(in: extent) }
+        let short = min(extent.width, extent.height)
+        let keep = zip(cells, rects).filter { cell, rect in
+            if cell.fpCount >= minFpCount { return true }
+            guard cell.isUnreadable else { return false }
+            // No fingerprint to judge by, so judge by size — and because capture is ALWAYS 2×2, a card
+            // occupies about half the frame whatever the binder's shape, which makes a fraction of the
+            // frame a principled test rather than a fitted one. Measured over 179 real cells: every
+            // card-sized quad was ≥ 0.27 of the frame's short side and every phantom ≤ 0.262, and
+            // nothing above 0.20 failed to fingerprint at all.
+            return min(rect.width * extent.width, rect.height * extent.height)
+                >= short * minCardShortSideFraction
+        }
+        let keptRects = keep.map(\.1)
+        return zip(keep, slots(rects: keptRects, in: tile)).map {
+            Placed(cell: $0.0.0, rect: $0.0.1, slot: $0.1)
+        }
+    }
+
     /// Resolves competing observations down to at most one card per pocket.
     ///
     /// At most one is free: the user told us there are exactly `rows × cols` pockets, so a
