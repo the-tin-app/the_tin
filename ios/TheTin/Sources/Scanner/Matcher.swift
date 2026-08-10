@@ -24,15 +24,36 @@ final class Matcher {
 
     /// RANSAC-verify a candidate id pool directly (no global-NN).
     /// Unknown / null-imageBase ids (no fingerprint row) are omitted.
+    /// ⚠️ **Batched read, then RANSAC across all cores.** Measured 2026-08-09 on the binder's own
+    /// replay: this stage was **33.9% of the wall clock** at ~998 ms per cell, and it was doing three
+    /// avoidable things — one SQLite transaction per candidate, rebuilding the query's keypoint buffer
+    /// per candidate, and running up to 160 independent RANSACs on a single core.
+    ///
+    /// The result is unchanged: candidates keep `candidateIds` order going in, ids with no pack row are
+    /// still skipped, and the sort is over identical input, so it is deterministic.
+    ///
+    /// Only the binder calls this. The live scanner uses `matchRanked`, whose early exit depends on
+    /// evaluating in rank order and which is therefore deliberately left serial — its gate
+    /// (`LabeledPhotoAccuracyTests`, 0 wrong-locks) is not put at risk by any of this.
     func match(query: CardFingerprint, candidateIds: [String]) throws -> [MatchCandidate] {
-        var out: [MatchCandidate] = []
-        for id in candidateIds {
-            guard let ref = try store.cardFP(id: id) else { continue }
-            let inliers = DescriptorMatch.ransacInliers(
-                query, ReferenceFingerprint(keypointsXY: ref.keypointsXY, descriptors: ref.descriptors, count: ref.count))
-            out.append(MatchCandidate(cardId: id, cosine: 0, inliers: inliers))
+        let fps = try store.cardFPs(ids: candidateIds)
+        let refs = candidateIds.compactMap { fps[$0] }
+        guard !refs.isEmpty else { return [] }
+        let queryXY = DescriptorMatch.queryKeypoints(query)
+        var inliers = [Int](repeating: 0, count: refs.count)
+        inliers.withUnsafeMutableBufferPointer { buf in
+            let out = buf
+            DispatchQueue.concurrentPerform(iterations: refs.count) { i in
+                let r = refs[i]
+                out[i] = DescriptorMatch.ransacInliers(
+                    query, queryXY: queryXY,
+                    ReferenceFingerprint(keypointsXY: r.keypointsXY, descriptors: r.descriptors,
+                                         count: r.count))
+            }
         }
-        return out.sorted { $0.inliers > $1.inliers }
+        return zip(refs, inliers)
+            .map { MatchCandidate(cardId: $0.cardId, cosine: 0, inliers: $1) }
+            .sorted { $0.inliers > $1.inliers }
     }
 
     /// Early-exit variant of `match` for the live path. `rankedIds` MUST be in narrowing-

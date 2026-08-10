@@ -66,32 +66,44 @@ struct BinderBrowseView: View {
     /// can see and tap is a task; an unlabelled pocket nobody mentions is the app looking broken.
     private var summary: some View {
         VStack(spacing: 3) {
-            HStack(spacing: 10) {
-                // Says so while pass B is still running, rather than presenting a partial binder as a
-                // finished one — the counts below are honest but incomplete until this clears.
+            // ⚠️ TWO lines, and which line something lands on is the whole simplification. This used to
+            // be one row of up to six chips — spinner, wishlist hits, cards found, need a choice, to
+            // confirm, unread — which wrapped on a phone and read as a wall. The state you are IN goes
+            // on top; the tallies that only matter once it has settled go underneath, muted.
+            //
+            // While pass B runs, the top line is the measured backlog rather than "Still reading…". On
+            // an A10 that wait is minutes, and an unquantified spinner over a half-filled binder is
+            // indistinguishable from a hang.
+            HStack(spacing: 5) {
                 if model.isWorking {
-                    HStack(spacing: 4) {
-                        ProgressView().controlSize(.mini)
-                        Text("Still reading…")
+                    ProgressView().controlSize(.mini)
+                    Text(model.readingStatus ?? "Still reading…").monospacedDigit()
+                } else {
+                    Text("^[\(model.resolvedCount) card](inflect: true) found")
+                    if model.wishlistHitCount > 0 {
+                        Label("^[\(model.wishlistHitCount) wishlist hit](inflect: true)",
+                              systemImage: "heart.fill")
+                            .foregroundStyle(.pink)
                     }
-                }
-                if model.wishlistHitCount > 0 {
-                    Label("^[\(model.wishlistHitCount) wishlist hit](inflect: true)",
-                          systemImage: "heart.fill")
-                        .foregroundStyle(.pink)
-                }
-                Text("^[\(model.resolvedCount) card](inflect: true) found")
-                if model.unresolvedCount > 0 {
-                    Text("· \(model.unresolvedCount) need a choice")
-                }
-                if model.unconfirmedWishlistCount > 0 {
-                    Text("· \(model.unconfirmedWishlistCount) to confirm").foregroundStyle(.pink)
-                }
-                if model.unreadCount > 0 {
-                    Text("· \(model.unreadCount) unread")
                 }
             }
             .font(.caption)
+
+            // The tallies. Still stated rather than hidden — an unlabelled pocket the user can see and
+            // tap is a task, one nobody mentions is the app looking broken — just no longer competing
+            // with the headline for the same row.
+            HStack(spacing: 6) {
+                if model.isWorking {
+                    Text("^[\(model.resolvedCount) card](inflect: true) so far")
+                }
+                if model.unresolvedCount > 0 { Text("\(model.unresolvedCount) need a choice") }
+                if model.unconfirmedWishlistCount > 0 {
+                    Text("\(model.unconfirmedWishlistCount) to confirm").foregroundStyle(.pink)
+                }
+                if model.unreadCount > 0 { Text("\(model.unreadCount) unread") }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
             // ⚠️ Not optional politeness. A photograph cannot tell one printing of a card from
             // another, so a bare price beside it claims a precision the app does not have.
             Text("Prices are a guide — a photo can't tell which printing a card is.")

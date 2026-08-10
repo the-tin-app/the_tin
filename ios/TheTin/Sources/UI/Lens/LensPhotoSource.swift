@@ -55,22 +55,6 @@ final class LensPhotoSource: NSObject {
         super.init()
     }
 
-    /// What we asked for and what arrived, for a device runsheet to quote verbatim.
-    ///
-    /// ⚠️ DEBUG only. It exists because "the photo came back small" has several possible causes — the
-    /// wrong format queried, an unsorted dimensions list, a macro handoff — and one device session was
-    /// already spent narrowing them by inference. A line on screen answers it in one look.
-    var diagnostic: String? {
-        #if DEBUG
-        let shot = capturedMegapixels.map { String(format: "%.1f", $0) } ?? "—"
-        let used = megapixels.map { String(format: "%.1f", $0) } ?? "—"
-        let offers = offeredDimensions.isEmpty ? "(not asked yet)" : offeredDimensions.joined(separator: ", ")
-        return "shot \(shot) MP → processed \(used) MP · offers \(offers)"
-        #else
-        return nil
-        #endif
-    }
-
     /// Acquires the camera and configures the session.
     ///
     /// ⚠️ `nonisolated`, and it MUST be called off the MainActor — that is the only reason this is
@@ -209,6 +193,13 @@ final class LensPhotoSource: NSObject {
         capturedMegapixels = Double(image.extent.width * image.extent.height) / 1_000_000
         megapixels = Double(processed.extent.width * processed.extent.height) / 1_000_000
         captureFailure = nil
+        // What we asked for and what arrived. Used to be a monospaced line on the camera screen; it is
+        // the same information, written where a runsheet can quote it verbatim without a tester having
+        // to read debug text off a viewfinder.
+        BinderDiag.note(String(format: "CAPTURE                shot %.1f MP -> processed %.1f MP  offers %@",
+                               capturedMegapixels ?? 0, megapixels ?? 0,
+                               (offeredDimensions.isEmpty ? "(not asked)"
+                                : offeredDimensions.joined(separator: ", ")) as NSString))
         return processed
     }
 
@@ -244,6 +235,9 @@ final class LensPhotoSource: NSObject {
         guard let best = live.max(by: {
             Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height)
         }) else { return nil }
+        // What this camera could give us, for `deliveredSmallPhoto` to judge the result against. An
+        // 8 MP iPad offering 8 MP is not a problem; a phone offering 48 and handing back 12 is.
+        bestOfferedMegapixels = Double(Int(best.width) * Int(best.height)) / 1_000_000
 
         // Raise (or lower) the output to something this format actually supports. ⚠️ Inside a
         // configuration block, without which the assignment silently does not take — that was its own
@@ -298,11 +292,32 @@ final class LensPhotoSource: NSObject {
     /// handoff a person can actually see.
     private(set) var megapixels: Double?
 
-    /// ~20 MP: comfortably under the 24.5 MP a 4:3 main-camera still delivers on a 17 Pro Max, and
-    /// comfortably over the 12.2 MP an ultra-wide macro crop delivers. Older phones with a genuine
-    /// 12 MP main camera will trip it — which is honest, because they really do have less to work
-    /// with, and the line says what to do about it rather than blaming the phone.
-    var deliveredSmallPhoto: Bool { (megapixels ?? .infinity) < 20 }
+    /// Whether this capture came back materially smaller than **this camera can actually produce**.
+    ///
+    /// ⚠️ **CORRECTED 2026-08-10.** This used to be a flat `megapixels < 20`, on the reasoning that
+    /// "older phones with a genuine 12 MP main camera will trip it — which is honest, because they
+    /// really do have less to work with". Measured on an iPad 7th gen, that reasoning fails: the device
+    /// has an **8 MP** rear camera, so the warning fired on every single shot, permanently, for a
+    /// condition the user cannot do anything about. A warning nobody can act on is noise, and noise
+    /// next to a real warning is how the real one gets ignored.
+    ///
+    /// The symptom worth shouting about was never "small photo" — it was **a camera that had more to
+    /// give and didn't**, i.e. the silent ultra-wide macro handoff that costs about a third of the
+    /// auto-locks while looking perfectly normal on screen. So the comparison is against what the live
+    /// format offered at the last capture, which `photoDimensions()` already had to compute.
+    ///
+    /// 8 MP delivered from an 8 MP camera: silent. 12 MP delivered from a camera offering 48: loud.
+    var deliveredSmallPhoto: Bool {
+        guard let captured = capturedMegapixels else { return false }
+        // No offer recorded (pre-iOS 16, or the format refused to say) — fall back to the old absolute
+        // test rather than going silent, since a genuinely tiny capture is still worth flagging.
+        guard let best = bestOfferedMegapixels else { return captured < 20 }
+        return captured < best * 0.75
+    }
+
+    /// Megapixels of the largest size the LIVE active format offered at the last capture. Set by
+    /// `photoDimensions()`, which already has to ask.
+    private(set) var bestOfferedMegapixels: Double?
 
     var megapixelsText: String {
         megapixels.map { String(format: "%.1f MP", $0) } ?? "unknown size"

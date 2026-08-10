@@ -49,6 +49,57 @@ enum BinderDiag {
         #endif
     }
 
+    /// Where the wall clock went, per stage, on the machine that actually ran it.
+    ///
+    /// ⚠️ This exists because the binder's performance has only ever been measured on a Mac. `ScanDiag`
+    /// instruments the live scanner and nothing instrumented this path, so "the iPad is slow" had no
+    /// numbers behind it and neither did any proposed fix. The A10 is the machine that decides whether
+    /// this feature is viable on old hardware, and it is the one we had no data from.
+    ///
+    /// Appends rather than overwrites: one line per stage per photograph, so a whole page reads as a
+    /// budget. DEBUG only — compiled out of Release entirely, like the rest of this file.
+    static func timing(_ stage: String, _ seconds: Double, detail: String = "") {
+        #if DEBUG
+        note(String(format: "%-22@ %8.0f ms  %@", stage as NSString, seconds * 1000,
+                    detail as NSString))
+        #endif
+    }
+
+    /// A free-text line in the same log. What the camera was asked for and what it delivered goes here
+    /// rather than on screen — see `BinderView`, where it used to be rendered.
+    static func note(_ line: String) {
+        #if DEBUG
+        let dir = directory
+        timingQueue.async {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent("timings.txt")
+            guard let data = (line + "\n").data(using: .utf8) else { return }
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: url)
+            }
+        }
+        #endif
+    }
+
+    /// Times `body` and records it. Returns whatever `body` returns, so it wraps a call in place.
+    static func timed<T>(_ stage: String, detail: String = "", _ body: () -> T) -> T {
+        #if DEBUG
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let out = body()
+        timing(stage, CFAbsoluteTimeGetCurrent() - t0, detail: detail)
+        return out
+        #else
+        return body()
+        #endif
+    }
+
+    #if DEBUG
+    /// Serial, so concurrent stages can't interleave a half-written line into the file.
+    private static let timingQueue = DispatchQueue(label: "binder.diag.timing")
+    #endif
+
     /// Every decision the device made about one photograph.
     ///
     /// ⚠️ Recorded rather than re-derived, because it cannot be re-derived:
