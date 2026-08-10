@@ -67,6 +67,20 @@ final class BinderPageReplayTests: XCTestCase {
         var observations: [Obs] = []
         var assigned: [BinderSlot: Obs] = [:]
 
+        // Where the wall clock actually goes. ⚠️ Read the OpenCV (`match`) and Vision (`ocr`) lines as
+        // real; our own Swift is `-Onone` here, so `fingerprint` and the detect remainder are inflated
+        // the same way a Debug device build inflates them. Proportions between the framework stages are
+        // the trustworthy part.
+        var clockTotals: [String: Double] = [:]
+        var clockCounts: [String: Int] = [:]
+        func clock<T>(_ key: String, _ body: () -> T) -> T {
+            let t0 = CFAbsoluteTimeGetCurrent()
+            let out = body()
+            clockTotals[key, default: 0] += CFAbsoluteTimeGetCurrent() - t0
+            clockCounts[key, default: 0] += 1
+            return out
+        }
+
         for page in pages {
             var pageObs: [(slot: BinderSlot, score: Int, fpCount: Int, value: Obs)] = []
             for tile in BinderPlan.tiles(shape: shape, page: page) {
@@ -80,18 +94,20 @@ final class BinderPageReplayTests: XCTestCase {
                     let context = CIContext()
                     // Byte-for-byte `LiveLensWork.detect`'s pipeline: the same size window, the same
                     // glare ceiling, the same keypoint floor, in the same order.
+                    clock("TILE total") {
                     MultiCardDetector.forEachCell(in: ci, context: context,
                                                   sizeWindow: .twoByTwoTile) { detected in
                         let plate = detected.plate
                         guard plate.glareCoverage <= 0.5,
-                              let fp = LensMatcher.fingerprint(plate), fp.count > 0 else {
+                              let fp = clock("  fingerprint (ORB)", { LensMatcher.fingerprint(plate) }),
+                              fp.count > 0 else {
                             cells.append(LensCell(quad: detected.quad, degrees: detected.degrees,
                                                   state: .unreadable("reflection")))
                             return
                         }
                         guard fp.count >= BinderPlan.minFpCount else { return }
-                        let fields = TextGate.extract(plate: plate)
-                        let pool = index.pool(fields: fields)
+                        let fields = clock("  ocr (Vision .accurate)", { TextGate.extract(plate: plate) })
+                        let pool = clock("  pool (FTS + 23k scan)", { index.pool(fields: fields) })
                         var cell = LensCell(quad: detected.quad, degrees: detected.degrees,
                                             fpCount: fp.count, state: .noMatch)
                         let scored = ScoredQuad(quad: detected.quad, confidence: 1)
@@ -105,11 +121,12 @@ final class BinderPageReplayTests: XCTestCase {
                                       numerators: fields.numerators,
                                       denominator: fields.denominator, ocrText: fields.rawText)
                         if !pool.isEmpty,
-                           let results = try? matcher.match(query: fp, candidateIds: pool),
+                           let results = clock("  match (SQLite + RANSAC)",
+                                               { try? matcher.match(query: fp, candidateIds: pool) }),
                            let top = results.first {
                             let second = results.dropFirst().first?.inliers ?? 0
-                            let cons = index.consistency(cardId: top.cardId, fields: fields,
-                                                         pool: Set(pool))
+                            let cons = clock("  consistency", { index.consistency(cardId: top.cardId,
+                                                        fields: fields, pool: Set(pool)) })
                             cell.state = LensMatcher.verdict(results: results, consistency: cons)
                             obs.top1 = top.cardId
                             obs.top1Inliers = top.inliers
@@ -124,6 +141,7 @@ final class BinderPageReplayTests: XCTestCase {
                         obs.verdict = describe(cell.state)
                         cells.append(cell)
                         byCell[cell.id] = obs
+                    }
                     }
                 }
                 // Pockets nothing was detected in, extrapolated from the cards that were — mirroring
@@ -221,6 +239,18 @@ final class BinderPageReplayTests: XCTestCase {
         let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try enc.encode(rows).write(to: out)
         print("[pocket] wrote \(outPath)")
+
+        let tile = clockTotals["TILE total"] ?? 0
+        let inner = clockTotals.filter { $0.key.hasPrefix("  ") }.values.reduce(0, +)
+        var lines = clockTotals.filter { $0.key.hasPrefix("  ") }
+            .map { ($0.key, $0.value, clockCounts[$0.key] ?? 0) }
+        lines.append(("  detect+plate (remainder)", tile - inner, clockCounts["TILE total"] ?? 0))
+        print("[timing] --- \(clockCounts["TILE total"] ?? 0) photographs, \(String(format: "%.2f", tile))s total")
+        for (k, v, n) in lines.sorted(by: { $0.1 > $1.1 }) {
+            let pct = tile > 0 ? 100 * v / tile : 0
+            print(String(format: "[timing] %-26@ %6.2fs  %5.1f%%  n=%3d  %6.0f ms each",
+                         k as NSString, v, pct, n, n > 0 ? 1000 * v / Double(n) : 0))
+        }
     }
 
     /// `diag/` first — those are the full-resolution photographs. `tiles/` holds the downscaled

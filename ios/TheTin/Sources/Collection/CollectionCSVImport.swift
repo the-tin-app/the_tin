@@ -318,8 +318,10 @@ enum CSVField {
     /// substring rules the app uses for PPT printing keys. Unmapped → nil (spec: left nil).
     static func variant(_ s: String?) -> String? {
         guard let s else { return nil }
-        if let v = CardVariant(rawValue: s) { return v.rawValue }   // Tin round-trip
-        return CardVariant.allCases.first { $0.matches(printing: s) }?.rawValue
+        // Closed to the four finishes on purpose. `CardVariant.init(rawValue:)` never fails now
+        // (any string is a possible print run), so asking it first would turn arbitrary CSV text
+        // into a printing nothing in the catalog names.
+        return CardVariant.allCases.first { $0.rawValue == s || $0.matches(printing: s) }?.rawValue
     }
 
     /// "Ungraded" → (nil, nil). "PSA 10" → ("psa10", nil) when the value exists in our Grade

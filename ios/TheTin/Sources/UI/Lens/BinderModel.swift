@@ -153,6 +153,8 @@ final class BinderModel {
         images[photoId] = image
         tileByPhoto[photoId] = tile
         extentByPhoto[photoId] = image.extent
+        photosQueued += 1
+        if readingStartedAt == nil { readingStartedAt = Date() }
         persistImages(image, tile: tile)
         if tile == currentTile { tileIndex += 1 }
         shotsTaken += 1
@@ -163,6 +165,55 @@ final class BinderModel {
     /// How many photographs this session has taken. Drives the shutter flash and the haptic — a
     /// capture where only a caption changes doesn't read as a capture at all.
     private(set) var shotsTaken = 0
+
+    // MARK: - How long the reading has left
+
+    /// Photographs handed to the queue, and photographs the queue has finished reading.
+    private(set) var photosQueued = 0
+    private(set) var photosRead = 0
+    /// Wall clock between consecutive completions. A MEDIAN of these is the per-photo cost.
+    private var photoDurations: [TimeInterval] = []
+    private var lastCompletionAt: Date?
+    private var readingStartedAt: Date?
+
+    /// Seconds per photograph, **measured on this device**, or nil until one has finished.
+    ///
+    /// ⚠️ Measured rather than predicted from the hardware, and that is the point. An A10 iPad reads a
+    /// photograph in ~25 s against a 17 Pro Max's small fraction of that, and the honest way to know
+    /// which machine you are on is to time it — not to keep a table of device models and core counts
+    /// that goes stale with every release. Same principle as extrapolating a pocket from the cards
+    /// actually present: self-calibrating beats a constant fitted to the devices we happen to own.
+    ///
+    /// Median, not mean, so leaving the screen mid-read (which stretches exactly one interval) does not
+    /// poison the estimate.
+    var secondsPerPhoto: TimeInterval? {
+        let recent = Array(photoDurations.suffix(5)).sorted()
+        guard !recent.isEmpty else { return nil }
+        return recent.count % 2 == 1 ? recent[recent.count / 2]
+            : (recent[recent.count / 2 - 1] + recent[recent.count / 2]) / 2
+    }
+
+    /// One line for the capture screen: how much is left, and roughly how long.
+    ///
+    /// ⚠️ This replaced a bare "Reading…", and the difference is not decoration. Pass A completes for
+    /// every queued photograph long before pass B finishes any, so on a slow device the screen sat
+    /// unchanged for minutes with a backlog it never mentioned — indistinguishable from a hang. A
+    /// measured 25 s per photograph on an A10 means a three-page scan is a five-minute job, and the
+    /// user is entitled to know that rather than infer it.
+    var readingStatus: String? {
+        let remaining = photosQueued - photosRead
+        guard remaining > 0 else { return nil }
+        let position = "Reading \(min(photosRead + 1, photosQueued)) of \(photosQueued)"
+        guard let per = secondsPerPhoto else { return position + "…" }
+        return "\(position) · \(Self.roughly(Double(remaining) * per)) left"
+    }
+
+    /// Deliberately coarse. A per-second countdown off a five-sample median would be false precision,
+    /// and it would visibly jitter every time a photograph finished.
+    static func roughly(_ seconds: TimeInterval) -> String {
+        guard seconds >= 45 else { return "under a minute" }
+        return "about \(max(1, Int((seconds / 60).rounded()))) min"
+    }
 
     /// Back one photograph, to re-frame a shot the user didn't like. Only ever within the page being
     /// captured — a finished page is re-entered through the grid, not by walking backwards.
@@ -206,6 +257,11 @@ final class BinderModel {
         priceCache.removeAll()
         cardCache.removeAll()
         setNameCache.removeAll()
+        photosQueued = 0
+        photosRead = 0
+        photoDurations.removeAll()
+        lastCompletionAt = nil
+        readingStartedAt = nil
         filter = BinderFilter()
         cache.clear()
         scan = BinderScan(shape: scan.shape, createdAt: Date())
@@ -352,6 +408,16 @@ final class BinderModel {
             images[photoId] = nil
             tileByPhoto[photoId] = nil
             extentByPhoto[photoId] = nil
+            // Pass B is the terminal stage, so this is exactly "one more photograph is fully read" —
+            // the same condition the eviction uses, and the only place that knows it.
+            if photosRead < photosQueued {
+                photosRead += 1
+                let now = Date()
+                if let since = lastCompletionAt ?? readingStartedAt {
+                    photoDurations.append(now.timeIntervalSince(since))
+                }
+                lastCompletionAt = now
+            }
         }
         // Both, because an unconfirmed wishlist candidate still needs its art and price to be shown.
         await resolveMetadata(for: cells.compactMap(\.resolvedCardId) + cells.compactMap(\.wishlistCardId))
