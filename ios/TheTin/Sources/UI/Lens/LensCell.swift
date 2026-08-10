@@ -27,6 +27,15 @@ struct LensCell: Identifiable, Equatable {
     /// ORB keypoints found. The best single predictor of "is this a card at all": phantom quads sit
     /// at a median of 15 against a real card's saturated 650.
     var fpCount: Int = 0
+    /// Extrapolated into a pocket Vision returned no quad for, rather than detected.
+    ///
+    /// ⚠️ Load-bearing, not bookkeeping. A synthesised quad is a GUESS that a pocket is occupied, so it
+    /// is kept only once it has actually identified — see `BinderPlan.place`. Measured on device
+    /// 2026-08-09: an empty sleeve fingerprints at **442 and 595 keypoints**, nowhere near the ~15 a
+    /// glare-band phantom gives, because the binder's woven fabric and the dot-textured plastic are
+    /// real texture. So `minFpCount` does NOT distinguish an empty pocket from a card, and without this
+    /// flag two empty pockets rendered as "a card here I couldn't read".
+    var synthesized: Bool = false
     /// Set by pass A, independently of `state` — a card can be a known wishlist hit while pass B
     /// has not run yet.
     var onWishlist: Bool
@@ -38,9 +47,10 @@ struct LensCell: Identifiable, Equatable {
     var state: LensCellState
 
     init(id: UUID = UUID(), quad: CardQuad, degrees: Int = 0, fpCount: Int = 0,
-         onWishlist: Bool = false, wishlistCardId: String? = nil,
+         synthesized: Bool = false, onWishlist: Bool = false, wishlistCardId: String? = nil,
          state: LensCellState = .pending) {
         self.id = id; self.quad = quad; self.degrees = degrees; self.fpCount = fpCount
+        self.synthesized = synthesized
         self.onWishlist = onWishlist
         self.wishlistCardId = wishlistCardId; self.state = state
     }

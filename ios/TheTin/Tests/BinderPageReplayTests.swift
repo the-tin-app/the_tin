@@ -126,6 +126,47 @@ final class BinderPageReplayTests: XCTestCase {
                         byCell[cell.id] = obs
                     }
                 }
+                // Pockets nothing was detected in, extrapolated from the cards that were — mirroring
+                // `LiveLensWork.detect`'s tail. ⚠️ The RULE is not duplicated: `missingPocketQuads` is
+                // the shared pure function, exactly as `place` and `verdict` are. Only the
+                // plate/fingerprint plumbing is repeated, which this harness already does for the loop
+                // above because it needs per-cell diagnostics `detect` does not return.
+                try autoreleasepool {
+                    let context = CIContext()
+                    let real = cells.filter { $0.fpCount >= BinderPlan.minFpCount }
+                    let degrees = Dictionary(grouping: real, by: \.degrees)
+                        .max { $0.value.count < $1.value.count }?.key ?? 0
+                    for quad in BinderPlan.missingPocketQuads(from: real.map(\.quad),
+                                                              extent: ci.extent) {
+                        guard let plate = MultiCardDetector.plate(quad: quad, in: ci,
+                                                                  context: context, degrees: degrees),
+                              let fp = LensMatcher.fingerprint(plate),
+                              fp.count >= BinderPlan.minFpCount else { continue }
+                        let fields = TextGate.extract(plate: plate)
+                        let pool = index.pool(fields: fields)
+                        var cell = LensCell(quad: quad, degrees: degrees, fpCount: fp.count,
+                                            synthesized: true, state: .noMatch)
+                        var obs = Obs(tile: tile.id, poolSize: pool.count, fpCount: fp.count,
+                                      shortSide: 0, longSide: 0, aspect: 0,
+                                      numerators: fields.numerators,
+                                      denominator: fields.denominator, ocrText: fields.rawText)
+                        obs.synthesized = true
+                        if !pool.isEmpty,
+                           let results = try? matcher.match(query: fp, candidateIds: pool),
+                           let top = results.first {
+                            let cons = index.consistency(cardId: top.cardId, fields: fields,
+                                                         pool: Set(pool))
+                            cell.state = LensMatcher.verdict(results: results, consistency: cons)
+                            obs.top1 = top.cardId
+                            obs.top1Inliers = top.inliers
+                            obs.top2Inliers = results.dropFirst().first?.inliers ?? 0
+                            obs.chooser = results.prefix(4).map(\.cardId)
+                        }
+                        obs.verdict = describe(cell.state)
+                        cells.append(cell)
+                        byCell[cell.id] = obs
+                    }
+                }
                 // Production placement — phantom filter, sub-grid split, both shared with the device.
                 for placed in BinderPlan.place(cells: cells, tile: tile, extent: ci.extent) {
                     guard var obs = byCell[placed.cell.id] else { continue }
@@ -217,6 +258,8 @@ final class BinderPageReplayTests: XCTestCase {
         var top2Inliers: Int = 0
         var ratio: Double = 0
         var nameAgrees = false, denomOk = false, twinInPool = false
+        /// Extrapolated into a pocket Vision returned no quad for, rather than detected.
+        var synthesized = false
         var chooser: [String] = []
         let numerators: [String]
         let denominator: String?
