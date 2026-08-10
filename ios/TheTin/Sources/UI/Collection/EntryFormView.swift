@@ -29,6 +29,11 @@ struct EntryFormView: View {
     @State private var acquiredFrom = ""
     @State private var acquiredVia: AcquiredVia? = nil
     @State private var forTrade = false
+    /// Fixed for the life of the form so a photo taken BEFORE Save has a stable key. `save()`
+    /// used to mint the id inline, which is too late — the file would be written under one id and
+    /// the entry saved under another.
+    @State private var entryId = ""
+    @State private var photos = EntryPhotos()
     /// Snapshot of the fields as populated, so Cancel/swipe-down can tell typed-then-abandoned
     /// from untouched (only dirty forms earn a discard confirmation).
     @State private var baseline: [String] = []
@@ -38,7 +43,7 @@ struct EntryFormView: View {
         [groupId, newGroupName, String(qty), condition.rawValue, variant.rawValue,
          grade.map(String.init(describing:)) ?? "", pricePaidText, gradingFeeText,
          hasAcquiredDate ? acquiredAt.description : "", acquiredFrom, String(forTrade),
-         acquiredVia?.rawValue ?? ""]
+         acquiredVia?.rawValue ?? "", photos.all.joined(separator: ",")]
     }
     private var isDirty: Bool { snapshot != baseline }
 
@@ -102,6 +107,7 @@ struct EntryFormView: View {
             } footer: {
                 Text("Collects this copy in your trade list, which you can share as a link or print as a sheet.")
             }
+            EntryPhotosSection(entryId: entryId, photos: $photos)
         }
         .navigationTitle(existing == nil ? "Save to tin" : "Edit entry")
         .toolbar {
@@ -163,6 +169,8 @@ struct EntryFormView: View {
     }
 
     private func populate() {
+        entryId = existing?.id ?? UUID().uuidString
+        photos = existing?.photos ?? EntryPhotos()
         if let existing {
             groupId = existing.groupId
             qty = existing.qty
@@ -200,7 +208,7 @@ struct EntryFormView: View {
                 guard !resolvedGroupId.isEmpty else { return }
             }
             let entry = CollectionEntry(
-                id: existing?.id ?? UUID().uuidString,
+                id: entryId,
                 cardId: card.id,
                 groupId: resolvedGroupId,
                 qty: qty,
@@ -225,7 +233,11 @@ struct EntryFormView: View {
                 // bug with a comment reassuring them it was handled.
                 soldAt: existing?.soldAt,
                 soldFor: existing?.soldFor,
-                acquiredVia: acquiredVia?.rawValue)
+                acquiredVia: acquiredVia?.rawValue,
+                // nil rather than an empty set when nothing was taken, so an entry that was
+                // never photographed stays byte-identical to what it was before this field
+                // existed — the same rule `forTrade` follows above.
+                photos: photos.isEmpty ? nil : photos)
             if await onSave(entry) { dismiss() }
         }
     }
