@@ -193,16 +193,22 @@ final class InsuranceReportTests: XCTestCase {
         XCTAssertTrue(ReportPages.photoRows(rows).isEmpty)
     }
 
-    /// Four photographed entries at 3/page = 2 exhibit pages, starting after cover + rows + sealed.
-    func testExhibitPagesFollowTheSealedSectionAndPackThreeToAPage() {
-        let rows = (1...4).map { photoRow("e\($0)", photos: EntryPhotos(front: "f.jpg")) }
+    /// Six photographed entries at `photosPerPage` = 3 exhibit pages, starting after
+    /// cover + rows + sealed. Written against the constant rather than a hard-coded 2, so
+    /// re-tuning the page density (see `ReportPhotoLayoutTests`) doesn't falsify this test —
+    /// what's asserted here is the OFFSET arithmetic, not how many blocks fit.
+    func testExhibitPagesFollowTheSealedSection() {
+        XCTAssertEqual(ReportPages.photosPerPage, 2, "update the expectations below if this moves")
+        let rows = (1...6).map { photoRow("e\($0)", photos: EntryPhotos(front: "f.jpg")) }
         let index = ReportPages.photoPageIndex(rowPages: 2, sealedPages: 1,
                                                photoRows: ReportPages.photoRows(rows))
         // page 1 cover, pages 2-3 inventory, page 4 sealed ⇒ exhibits start at 5.
         XCTAssertEqual(index["e1"], 5)
         XCTAssertEqual(index["e2"], 5)
-        XCTAssertEqual(index["e3"], 5)
+        XCTAssertEqual(index["e3"], 6)
         XCTAssertEqual(index["e4"], 6)
+        XCTAssertEqual(index["e5"], 7)
+        XCTAssertEqual(index["e6"], 7)
     }
 
     func testPhotoRowsKeepsOnlyEntriesThatActuallyHaveFiles() {

@@ -11,10 +11,15 @@ enum ReportPages {
     static let rowsPerPage = 14        // spec: ~12–15 rows/page
     static let subtotalsPerPage = 20
 
-    /// Three entries per exhibit page. The body is 540 pt wide (612 − 2×36 margin) and ~700 pt
-    /// tall; four photos across at 126 × 176 pt with 12 pt gaps fills the width exactly, and a
-    /// block is 176 + ~28 pt of caption ≈ 204 pt, so three fit with room for the heading.
-    static let photosPerPage = 3
+    /// Two entries per exhibit page.
+    ///
+    /// ⚠️ This was THREE on paper and three does not fit. The arithmetic said a block is
+    /// 176 pt of photo + ~28 pt of caption ≈ 204 pt, so three would land at ~640 pt inside a
+    /// ~700 pt body. Rendered, three worst-case blocks measure **727 pt** — the caption wraps to
+    /// two lines at realistic name/set lengths and the per-photo labels cost more than the
+    /// estimate. `ReportPhotoLayoutTests` measures it rather than trusting the sum; if a caption
+    /// ever grows again, that test fails and this constant is the knob to turn.
+    static let photosPerPage = 2
 
     /// Entries with at least one photo on file. An empty `EntryPhotos` is NOT an exhibit.
     static func photoRows(_ rows: [ReportRow]) -> [ReportRow] {
