@@ -19,6 +19,16 @@
  *      filed under Celebrations Classic Collection). Those are not holes, and creating them
  *      would have added 22 duplicates to a set that was already complete. `denominatorFits`
  *      is the guard; see the comment on it.
+ *
+ * ⚠️ Deriving the mapping from productIds has a blind spot, and it is NOT the one the guards
+ * are about: a set where NOT ONE card carries a tcgplayer id resolves zero products, votes for
+ * nothing, and is rejected `no-matches` before either guard is consulted. Loosening the guards
+ * cannot reach it — there is nothing to threshold. Measured on the live feed: `sma` (Hidden
+ * Fates Shiny Vault, 94 cards) and `bwp` (BW Black Star Promos, 101) are both 0-linked, and
+ * catalog-wide ~4,092 of 23,548 cards carry no tcgplayer id, so they get no TCGplayer price
+ * either. `cardsByNameNumber` is the second, weaker key that breaks that circle — see
+ * `resolveByNameNumber`. It does NOT reach a set we don't have at all (Trading Card Game
+ * Classic); that is a different problem and needs a set to be created, not matched.
  */
 /**
  * Structural match for `FlatCard` in scripts/flatten-cards-db.ts. Declared here rather than
@@ -124,6 +134,58 @@ function stripHtml(s: string): string {
     .replace(/&quot;/g, '"').replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/** A card as seen by the weak key, for the sets whose cards carry no tcgplayer id. */
+export interface CardRef { id: string; setId: string; linked: boolean }
+
+/** The key of `SynthesizeInput.cardsByNameNumber`: a card name and ONE of its `numberKeys`. */
+export function nameNumberKey(name: string, numberKey: string): string {
+  return `${name.toLowerCase().replace(/[^a-z0-9]/g, "")}|${numberKey}`;
+}
+
+/**
+ * Which set a product belongs to, judged by printed name + number instead of by productId.
+ *
+ * Weaker than the id, so it is only ever a fallback (see `mapGroupsToSets`) and it is deliberately
+ * unforgiving: a key whose (name, number) pair exists in more than one set casts NO vote, and two
+ * keys of the same product that disagree cancel each other. That matters because `numberKeys`
+ * emits both the specific form and the bare digits — "SV49" identifies one card in `sma`, while
+ * "49" is card 49 of every set ever printed. Punctuation is stripped on both sides: TCGdex writes
+ * "Farfetch’d" and "Unown !" where TCGplayer writes "Farfetch'd" and "Unown (!)".
+ */
+export function resolveByNameNumber(p: TcgcsvProduct, index: Map<string, CardRef[]>): string | null {
+  const ext = extMap(p);
+  if (!("HP" in ext) && !("Card Type" in ext)) return null;
+  const raw = ext["Number"];
+  const name = cleanName(p.name, (raw ?? "").split("/")[0].trim());
+  let found: string | null = null;
+  for (const k of numberKeys(raw)) {
+    const refs = index.get(nameNumberKey(name, k));
+    if (!refs) continue;
+    const setId = refs[0].setId;
+    if (refs.some((r) => r.setId !== setId)) continue; // the key is ambiguous — no vote
+    if (found && found !== setId) return null;         // two keys, two sets — no vote
+    found = setId;
+  }
+  return found;
+}
+
+/**
+ * The unlinked card in `setId` this product is, or null when that is not exactly one card.
+ * Same key and same strictness as `resolveByNameNumber`, narrowed to the group's own set.
+ */
+function linkTarget(p: TcgcsvProduct, setId: string, index: Map<string, CardRef[]>, claimed: Set<string>): string | null {
+  const ext = extMap(p);
+  const raw = ext["Number"];
+  const name = cleanName(p.name, (raw ?? "").split("/")[0].trim());
+  const hits = new Set<string>();
+  for (const k of numberKeys(raw)) {
+    for (const r of index.get(nameNumberKey(name, k)) ?? []) {
+      if (r.setId === setId && !r.linked && !claimed.has(r.id)) hits.add(r.id);
+    }
+  }
+  return hits.size === 1 ? [...hits][0] : null;
+}
+
 /**
  * Group → set id, voted by the products we already resolve. A set is claimed by at most one
  * group (the one with the most evidence), so an overlapping group can't steal it.
@@ -134,6 +196,8 @@ export interface GroupDecision {
   matched: number;
   topSet: string | null;
   share: number;
+  /** True when `matched` counts name+number votes because no productId resolved. */
+  viaFallback?: true;
   /** Why this group produced no cards. `null` when it was accepted. */
   rejected: "no-matches" | "too-few-matches" | "ambiguous" | "lost-to-better-group" | null;
 }
@@ -142,13 +206,15 @@ export function mapGroupsToSets(
   groups: { groupId: number; products: TcgcsvProduct[] }[],
   setByTcgplayerId: Map<number, string>,
   decisions?: GroupDecision[],
+  cardsByNameNumber?: Map<string, CardRef[]>,
 ): Map<number, string> {
-  const best = new Map<string, { groupId: number; matched: number }>();
-  for (const g of groups) {
+  const best = new Map<string, { groupId: number; matched: number; viaFallback: boolean }>();
+
+  const record = (g: { groupId: number; products: TcgcsvProduct[] }, resolve: (p: TcgcsvProduct) => string | null, viaFallback: boolean) => {
     const votes = new Map<string, number>();
     let matched = 0;
     for (const p of g.products) {
-      const setId = setByTcgplayerId.get(p.productId);
+      const setId = resolve(p);
       if (!setId) continue;
       votes.set(setId, (votes.get(setId) ?? 0) + 1);
       matched++;
@@ -159,15 +225,30 @@ export function mapGroupsToSets(
     const d: GroupDecision = {
       groupId: g.groupId, products: g.products.length, matched,
       topSet: top || null, share: Number(share.toFixed(3)),
+      ...(viaFallback ? { viaFallback: true as const } : {}),
       rejected: matched === 0 ? "no-matches"
               : matched < MIN_MATCHED_PRODUCTS ? "too-few-matches"
               : share < MIN_DOMINANT_SHARE ? "ambiguous" : null,
     };
     decisions?.push(d);
-    if (d.rejected) continue;
+    if (d.rejected) return;
     const cur = best.get(top);
-    if (!cur || topN > cur.matched) best.set(top, { groupId: g.groupId, matched: topN });
+    // Pass 2 runs after pass 1 in full, so `cur.viaFallback === false` here means the set is
+    // already spoken for by real id evidence and a name match must not outbid it.
+    if (!cur || (cur.viaFallback === viaFallback && topN > cur.matched)) {
+      best.set(top, { groupId: g.groupId, matched: topN, viaFallback });
+    }
+  };
+
+  // Pass 1 — by productId, the strong key.
+  const unresolved: typeof groups = [];
+  for (const g of groups) {
+    if (cardsByNameNumber && !g.products.some((p) => setByTcgplayerId.has(p.productId))) { unresolved.push(g); continue; }
+    record(g, (p) => setByTcgplayerId.get(p.productId) ?? null, false);
   }
+  // Pass 2 — name+number, ONLY for groups nothing resolved, and only for sets pass 1 left free.
+  for (const g of unresolved) record(g, (p) => resolveByNameNumber(p, cardsByNameNumber!), true);
+
   const out = new Map<number, string>();
   for (const [setId, { groupId }] of best) out.set(groupId, setId);
   // A group that voted credibly but lost its set to a better-evidenced group.
@@ -184,6 +265,8 @@ export interface SynthesizeInput {
   setTotals: Map<string, { total: number | null; printedTotal: number | null }>;
   /** Lowercased Pokémon name → national dex id, so synthesized cards still reach the Dex. */
   dexByName?: Map<string, number>;
+  /** `nameNumberKey` → the cards holding it. Omit to keep the id-only behaviour. */
+  cardsByNameNumber?: Map<string, CardRef[]>;
 }
 
 export interface SynthesizeResult {
@@ -195,12 +278,20 @@ export interface SynthesizeResult {
   decisions: GroupDecision[];
   /** Products dropped for a foreign denominator, with enough to judge the call by eye. */
   rejects: { setId: string; number: string; name: string; productId: number }[];
+  /**
+   * Existing cards that carry no tcgplayer id and whose product we just identified. The caller
+   * appends the productId to that card's `tcgplayerIds` — which is what buys it a price, since
+   * every price feed joins on that id and a card without one is silently priceless.
+   */
+  links: { cardId: string; setId: string; productId: number }[];
 }
 
 export function synthesizeMissingCards(input: SynthesizeInput): SynthesizeResult {
   const decisions: GroupDecision[] = [];
   const rejects: { setId: string; number: string; name: string; productId: number }[] = [];
-  const groupSets = mapGroupsToSets(input.groups, input.setByTcgplayerId, decisions);
+  const links: { cardId: string; setId: string; productId: number }[] = [];
+  const linked = new Set<string>();
+  const groupSets = mapGroupsToSets(input.groups, input.setByTcgplayerId, decisions, input.cardsByNameNumber);
   const cards: SynthesizedCard[] = [];
   const addedBySet = new Map<string, number>();
   let skippedForeignDenominator = 0;
@@ -223,7 +314,15 @@ export function synthesizeMissingCards(input: SynthesizeInput): SynthesizeResult
         rejects.push({ setId, number: raw ?? "", name: p.name, productId: p.productId });
         continue;
       }
-      if ([...keys].some((k) => taken.has(k))) continue;
+      if ([...keys].some((k) => taken.has(k))) {
+        // Not a hole — a card already holds this number. But it may be one of the cards that has
+        // no tcgplayer id, in which case this product is the id it was missing.
+        if (input.cardsByNameNumber && !input.setByTcgplayerId.has(p.productId)) {
+          const cardId = linkTarget(p, setId, input.cardsByNameNumber, linked);
+          if (cardId) { linked.add(cardId); links.push({ cardId, setId, productId: p.productId }); }
+        }
+        continue;
+      }
       for (const k of keys) taken.add(k);
 
       const localId = (raw ?? "").split("/")[0].trim();
@@ -255,7 +354,7 @@ export function synthesizeMissingCards(input: SynthesizeInput): SynthesizeResult
       addedBySet.set(setId, (addedBySet.get(setId) ?? 0) + 1);
     }
   }
-  return { cards, addedBySet, skippedForeignDenominator, decisions, rejects };
+  return { cards, addedBySet, skippedForeignDenominator, decisions, rejects, links };
 }
 
 /**
