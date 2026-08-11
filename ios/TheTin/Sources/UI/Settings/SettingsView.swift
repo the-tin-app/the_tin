@@ -610,6 +610,26 @@ struct SettingsView: View {
             }
             if let backup = app.backup {
                 LabeledContent("iCloud Backup", value: Self.backupStatusText(backup.status))
+                // One backup file, last writer wins — so a second device holding older data
+                // would quietly overwrite the newer one. It refuses now and says so here.
+                if let conflict = backup.conflict {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("A newer backup from another device",
+                              systemImage: "exclamationmark.icloud")
+                            .font(.subheadline.weight(.semibold))
+                        Text("\(conflict.entryCount) entries, backed up \(conflict.exportedAt.formatted(date: .abbreviated, time: .shortened)). This device hasn't taken it on, so it isn't backing up — that would overwrite it.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Button("Restore the newer backup") {
+                        Task {
+                            do { try await backup.acceptConflict() }
+                            catch { restoreError = error.localizedDescription }
+                        }
+                    }
+                    Button("Back up this device instead", role: .destructive) {
+                        Task { await backup.overwriteConflict() }
+                    }
+                }
                 Button("Back Up Now") { Task { await backup.backUpNow() } }
                 Button("Restore from backup…") { Task { await prepareManualRestore(backup) } }
             }
