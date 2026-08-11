@@ -132,7 +132,7 @@ struct TradeSessionView: View {
                 let u = session.unpriced
                 if u.unpriced > 0 {
                     Text("\(u.unpriced) of \(Int(u.total)) cards have no price — not counted above.")
-                        .font(.caption).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(Color.statusCaution)
                         .multilineTextAlignment(.center)
                 }
                 if let asOf = model.priceAsOf { AsOfLabel(date: asOf) }
@@ -177,7 +177,8 @@ struct TradeSessionView: View {
                                 Text("Offer \(s.percent)%").font(.body.weight(.medium))
                                 Text(offerCaption(s))
                                     .font(.caption)
-                                    .foregroundStyle(reached(s) == s.percent ? Color.secondary : Color.orange)
+                                    .foregroundStyle(reached(s) == s.percent ? Color.secondary
+                                                                             : Color.statusCaution)
                             }
                             Spacer()
                             Text(currency(s.total)).monospacedDigit().foregroundStyle(.secondary)
@@ -273,7 +274,7 @@ struct TradeSessionView: View {
                     if let v = session.pricing.lineValue(line) {
                         Text(currency(v)).monospacedDigit()
                     } else {
-                        Text("No price").font(.caption).foregroundStyle(.orange)
+                        Text("No price").font(.caption).foregroundStyle(Color.statusCaution)
                     }
                     HStack(spacing: 4) {
                         Text("×\(line.copies)").font(.caption).monospacedDigit()
@@ -396,7 +397,7 @@ struct TradeSessionView: View {
     @ViewBuilder private func recorded(_ plan: TradePlan) -> some View {
         VStack(spacing: 14) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 44)).foregroundStyle(.green)
+                .font(.system(size: 44)).foregroundStyle(Color.statusPositive)
             Text("Trade recorded").font(.title3.weight(.semibold))
             Text(recordedSummary(plan))
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)

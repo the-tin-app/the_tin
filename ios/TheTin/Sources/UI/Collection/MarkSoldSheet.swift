@@ -44,7 +44,7 @@ struct MarkSoldSheet: View {
                     let change = amount - paid
                     LabeledContent("Realised") {
                         Text("\(change >= 0 ? "+" : "−")\(abs(change), format: .currency(code: "USD"))")
-                            .foregroundStyle(change >= 0 ? .green : .red)
+                            .foregroundStyle(change >= 0 ? Color.statusPositive : Color.statusNegative)
                             .monospacedDigit()
                     }
                 }

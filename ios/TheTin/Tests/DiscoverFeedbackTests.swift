@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import UIKit
 @testable import TheTin
 
 final class DiscoverFeedbackTests: XCTestCase {
@@ -118,5 +120,70 @@ final class DiscoverFeedbackTests: XCTestCase {
     func testTheRemovedTooExpensiveRawValueDecodesToNil() {
         XCTAssertNil(DismissReason(rawValue: "tooExpensive"))
         XCTAssertNil(DismissReason(rawValue: "notMyKind"))
+    }
+
+    // MARK: - The panel's chip width
+
+    /// ⚠️ **These strings render in a 56.75pt chip, and length is a hard constraint there.**
+    /// `CardFeedbackPanel`'s tightest home is a grid cell on a 375pt phone — SE 2nd/3rd gen, 13
+    /// mini, XS, all supported by the iOS 17 target. "Less from this generation" (25 chars) needed
+    /// a third line and truncated to "Less from this generati…", cutting exactly the tune-vs-hide
+    /// distinction these strings exist to draw. It had done so since the panel shipped, invisibly,
+    /// because the text was 9pt grey.
+    ///
+    /// ⚠️ **A character budget, deliberately, after three attempts to model the layout failed.**
+    /// The obvious tests are all subtly wrong:
+    ///
+    /// 1. Render capped vs free and compare heights — `minimumScaleFactor` shrinks the capped
+    ///    render, so the difference measures shrinking, not truncation. Failed on a good string.
+    /// 2. Count wrapped lines at the `minimumScaleFactor(0.7)` floor of 7.7pt — too permissive.
+    ///    Passed "Less from this generation" at a width where the renderer visibly truncated it;
+    ///    SwiftUI does not reliably reach its stated floor while it is also wrapping.
+    /// 3. Count wrapped lines at `.caption2`'s full 11pt — too strict. Rejected "Less of this
+    ///    Pokémon", which renders correctly in two lines.
+    ///
+    /// The renderer's real behaviour sits between 2 and 3 and is not a layout constant you can
+    /// compute against. So this asserts a budget anchored to `ImageRenderer` output at 375pt:
+    ///
+    /// | string | chars | renders |
+    /// |---|---|---|
+    /// | "Less from this gen" | 18 | whole |
+    /// | "Less of this Pokémon" | 20 | whole |
+    /// | "Less from this generation" | 25 | **truncates** |
+    ///
+    /// All three observed, not derived. **21–24 is unverified** — the budget is the largest length
+    /// actually seen to render, not the smallest seen to fail.
+    ///
+    /// ⚠️ Character count ignores glyph width, so it is a proxy: a string of 18 wide glyphs could
+    /// still overflow. Raising `maxEffectCharacters` is therefore a deliberate act that needs a
+    /// fresh render, not a number to nudge until the test passes. The harness lives in the PR
+    /// description for #149.
+    private static let maxEffectCharacters = 20
+    /// `shortLabel` carries its own hard newline, so the budget is per line.
+    private static let maxLabelLineCharacters = 12
+
+    func testEveryEffectStringFitsTheNarrowestChipItShipsIn() {
+        for reason in DismissReason.allCases {
+            XCTAssertLessThanOrEqual(
+                reason.effect.count, Self.maxEffectCharacters,
+                "\"\(reason.effect)\" is \(reason.effect.count) characters — it will truncate in "
+                + "the 56.75pt chip on a 375pt phone. Shorten it, or re-render and raise the budget.")
+        }
+    }
+
+    func testEveryShortLabelLineFitsTheNarrowestChipItShipsIn() {
+        for reason in DismissReason.allCases {
+            for line in reason.shortLabel.split(separator: "\n") {
+                XCTAssertLessThanOrEqual(
+                    line.count, Self.maxLabelLineCharacters,
+                    "\"\(line)\" is \(line.count) characters — too wide for the 56.75pt chip.")
+            }
+        }
+    }
+
+    /// The string that caused this, kept as an explicit regression: if someone restores the longer
+    /// wording the budget above catches it, and this says why in one line.
+    func testTheWordingThatTruncatedIsStillTooLong() {
+        XCTAssertGreaterThan("Less from this generation".count, Self.maxEffectCharacters)
     }
 }

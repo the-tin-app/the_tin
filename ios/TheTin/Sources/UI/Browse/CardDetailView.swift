@@ -650,7 +650,7 @@ struct CardDetailView: View {
                 Image(systemName: "arrow.right").font(.system(size: 8))
                 Text(now, format: .currency(code: "USD"))
                 Text("· \(change >= 0 ? "+" : "−")\(abs(change) / paid, format: .percent.precision(.fractionLength(0)))")
-                    .foregroundStyle(change >= 0 ? .green : .red)
+                    .foregroundStyle(change >= 0 ? Color.statusPositive : Color.statusNegative)
             }
             .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
             .accessibilityElement(children: .ignore)
@@ -857,7 +857,12 @@ struct CardDetailView: View {
                 Spacer()
                 Image(systemName: "arrow.up.right").font(.caption2).foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 8)
+            // 26pt icon + 8pt above and below is a 42pt row — two short of the 44pt HIG minimum,
+            // which is exactly the size where a miss feels like the app ignored you rather than
+            // like you missed. `minHeight` rather than more padding so the row doesn't grow when
+            // Dynamic Type has already pushed it past 44.
+            .padding(.vertical, 9)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -877,7 +882,7 @@ struct CardDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(verdictHeadline(roi))
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(roi.verdict == .grade ? AnyShapeStyle(.green)
+                    .foregroundStyle(roi.verdict == .grade ? AnyShapeStyle(Color.statusPositive)
                                                            : AnyShapeStyle(.primary))
                     .padding(.top, 6)
                 // Expected-value math: per-grade odds × PSA price. "≈" marks interpolated
@@ -893,7 +898,8 @@ struct CardDetailView: View {
                         Spacer()
                         Text("\(row.isEstimate ? "≈" : "")\(row.value, format: .currency(code: "USD"))")
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(row.isEstimate ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
+                            .foregroundStyle(row.isEstimate ? AnyShapeStyle(Color.statusCaution)
+                                                            : AnyShapeStyle(.primary))
                     }
                 }
                 HStack {
@@ -904,7 +910,7 @@ struct CardDetailView: View {
                 }
                 if roi.hasEstimates {
                     Text("≈ estimated from nearby grades — no recorded sales at that grade.")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption2).foregroundStyle(Color.statusCaution)
                 }
                 if let gem = roi.gemRate {
                     HStack {
@@ -935,7 +941,7 @@ struct CardDetailView: View {
                 }
                 if roi.playedWarning {
                     Text("Your copy is moderately played or worse — played cards rarely gem.")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption2).foregroundStyle(Color.statusCaution)
                 }
                 Text("Estimate only — not what this specific copy will cost. Once you grade it, record the actual fee on the entry for accurate cost-basis and insurance reports.")
                     .font(.caption2).foregroundStyle(.tertiary)

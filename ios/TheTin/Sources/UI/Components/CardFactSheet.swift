@@ -45,6 +45,19 @@ struct CardFactSheet: View {
             }
         }
         .foregroundStyle(.primary)
+        // ⚠️ Everything here used to be `.system(size: 8…10)` — frozen point sizes below the 11pt
+        // HIG floor, on the one surface whose whole job is "read the number and check it against
+        // the card in your hand". A collector who needs larger text got the smallest type in the
+        // app precisely where reading mattered most. It is all Dynamic Type text styles now.
+        //
+        // The CAP is the honest part. This sheet is a card — a fixed 0.717 aspect ratio, sized by
+        // its container — so past a point the type cannot grow without the facts falling out of
+        // the frame, and `minimumScaleFactor` would just shrink them back down anyway. `.compact`
+        // is a ~55–100pt grid tile and stops early; `.full` is the detail sheet and has room to
+        // reach the first accessibility size. Beyond the cap the combined `accessibilityLabel`
+        // below is the real answer, and it carries the same facts at any size.
+        .dynamicTypeSize(density == .compact ? ...DynamicTypeSize.xLarge
+                                             : ...DynamicTypeSize.accessibility1)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(.secondarySystemBackground)))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
@@ -55,13 +68,13 @@ struct CardFactSheet: View {
     private var compactBody: some View {
         VStack(spacing: 2) {
             Text(card.name)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.caption.weight(.semibold))
                 .lineLimit(2).multilineTextAlignment(.center)
             if let hp = card.hp {
-                Text("HP \(hp)").font(.system(size: 9)).foregroundStyle(.secondary)
+                Text("HP \(hp)").font(.caption2).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            Text(numberLine).font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary)
+            Text(numberLine).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .minimumScaleFactor(0.6)
@@ -115,7 +128,7 @@ struct CardFactSheet: View {
             .overlay {
                 VStack(spacing: 2) {
                     Image(systemName: "photo").font(.caption)
-                    Text("No image offline").font(.system(size: 9))
+                    Text("No image offline").font(.caption2)
                 }
                 .foregroundStyle(.tertiary)
                 .minimumScaleFactor(0.5)
@@ -147,13 +160,13 @@ struct CardFactSheet: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         Text(ability.type ?? "Ability")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(.caption2.bold())
                             .padding(.horizontal, 4).padding(.vertical, 1)
                             .background(Capsule().fill(.quaternary))
                         Text(ability.name).font(.caption.bold()).lineLimit(1)
                     }
                     if let effect = ability.effect {
-                        Text(effect).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(3)
+                        Text(effect).font(.caption2).foregroundStyle(.secondary).lineLimit(3)
                     }
                 }
             }
@@ -170,13 +183,13 @@ struct CardFactSheet: View {
                         }
                     }
                     if let effect = attack.effect {
-                        Text(effect).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(3)
+                        Text(effect).font(.caption2).foregroundStyle(.secondary).lineLimit(3)
                     }
                 }
             }
             // Trainers print their rules where a Pokémon prints attacks.
             if let effect = detail?.effect, card.attacks.isEmpty {
-                Text(effect).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(6)
+                Text(effect).font(.caption2).foregroundStyle(.secondary).lineLimit(6)
             }
         }
     }
@@ -184,14 +197,14 @@ struct CardFactSheet: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 2) {
             if let combat = combatLine {
-                Text(combat).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+                Text(combat).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
             Divider()
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(numberLine).font(.caption2.bold()).lineLimit(1)
                 Spacer(minLength: 2)
                 if let mark = detail?.regulationMark {
-                    Text(mark).font(.system(size: 8, weight: .bold))
+                    Text(mark).font(.caption2.bold())
                         .padding(.horizontal, 3)
                         .background(RoundedRectangle(cornerRadius: 2).fill(.quaternary))
                 }
@@ -199,7 +212,7 @@ struct CardFactSheet: View {
             let credits = [card.rarity, card.artist.map { "illus. \($0)" }].compactMap { $0 }
             if !credits.isEmpty {
                 Text(credits.joined(separator: " · "))
-                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
         }
     }
@@ -241,11 +254,24 @@ struct EnergyChip: View {
 
     var body: some View {
         Text(Self.code(type))
-            .font(.system(size: 8, weight: .heavy, design: .rounded))
-            .foregroundStyle(.white)
+            .font(.system(.caption2, design: .rounded).weight(.heavy))
+            .foregroundStyle(Self.textColor(type))
             .padding(.horizontal, 3).padding(.vertical, 1)
             .background(Capsule().fill(Self.color(type)))
             .accessibilityLabel(type)
+    }
+
+    /// ⚠️ **This was `.white` on every chip, and white failed on nine of the eleven.** Measured
+    /// against each capsule's own fill: `.yellow` gave **1.51:1** — the two letters were very
+    /// nearly invisible — `.orange` 2.20, `.green` 2.22, `.gray` 3.26, `.pink` 3.65, `.red` 3.55,
+    /// `.brown` 3.50, `.blue` 4.02, `.purple` 4.13. All under the 4.5:1 floor for text this size.
+    ///
+    /// Black clears it on all of them (5.08–13.89), so the rule is black everywhere except the one
+    /// genuinely dark chip. The letters are the whole point of the chip — the doc note above says
+    /// colour alone is not an accessible distinction, and unreadable letters put us back to
+    /// exactly that.
+    static func textColor(_ type: String) -> Color {
+        type.lowercased() == "darkness" ? .white : .black
     }
 
     static func code(_ type: String) -> String {
@@ -263,9 +289,17 @@ struct EnergyChip: View {
         "colorless": "CL", "fairy": "FY",
     ]
 
+    /// ⚠️ Colorless is a FIXED grey, not `.secondary`. Several of these fills DO shift a little
+    /// between light and dark — systemGreen is #34C759/#30D158, systemYellow #FFCC00/#FFD60A —
+    /// and that is fine, because they shift within the same lightness band and black stays
+    /// legible on both. `.secondary` was different in kind: it INVERTS, dark grey in light mode
+    /// and light grey in dark, so no single text colour can sit on it. `ContrastTests` checks
+    /// every chip in both appearances rather than trusting either claim. Lighter than metal's
+    /// `.gray` (#8E8E93) so the two neutral chips stay distinguishable.
     private static let colors: [String: Color] = [
         "grass": .green, "fire": .red, "water": .blue, "lightning": .yellow,
         "psychic": .purple, "fighting": .orange, "darkness": .black, "metal": .gray,
-        "dragon": .brown, "colorless": .secondary, "fairy": .pink,
+        "dragon": .brown, "fairy": .pink,
+        "colorless": Color(red: 0.72, green: 0.72, blue: 0.75),
     ]
 }

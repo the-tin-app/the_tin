@@ -226,26 +226,7 @@ struct ScanTabContainer: View {
     /// pack state machine around a mode that doesn't use it.
     @ViewBuilder private var labelScanner: some View {
         QRScannerView(onCode: handleScannedLabel)
-            .overlay { labelScanErrorBanner }
-            .task(id: labelScanError) {
-                guard labelScanError != nil else { return }
-                try? await Task.sleep(for: .seconds(5))
-                guard !Task.isCancelled else { return }
-                withAnimation { labelScanError = nil }
-            }
-    }
-
-    @ViewBuilder private var labelScanErrorBanner: some View {
-        if let labelScanError {
-            Text(labelScanError)
-                .font(.callout.weight(.medium))
-                .multilineTextAlignment(.center)
-                .padding(.vertical, 14)
-                .padding(.horizontal, 22)
-                .background(.thinMaterial, in: Capsule())
-                .shadow(radius: 8)
-                .transition(.opacity)
-        }
+            .scanErrorBanner($labelScanError)
     }
 
     /// True stops the reader. A QR that isn't one of ours returns FALSE so the viewfinder keeps

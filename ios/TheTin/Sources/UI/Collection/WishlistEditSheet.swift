@@ -69,9 +69,21 @@ struct WishlistEditSheet: View {
             }
             .navigationTitle("Wishlist details")
             .navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { save(); dismiss() } }
+                // ⚠️ **A `.decimalPad` field in a `Form` has no way out without this.** There is no
+                // return key on that keypad, and a `Form` does not dismiss on tap-outside — so the
+                // keyboard stayed up over the hunting section for as long as the sheet was open.
+                // Worse here than at the app's nine other decimal-pad fields, all of which already
+                // had this: `huntingSection` FOCUSES this field when you switch Hunting on without
+                // a budget, so the app raised a keyboard the user didn't ask for, over the footer
+                // explaining why they needed one, with no way to lower it.
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { targetFocused = false }
+                }
             }
             .onAppear(perform: load)
         }
