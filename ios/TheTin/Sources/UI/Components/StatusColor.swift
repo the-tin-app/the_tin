@@ -25,11 +25,20 @@ import UIKit
 /// | positive | #1D7A35 | 5.40 | 4.84 | #30D158 | 10.39 | 8.42 |
 /// | negative | #D70015 | 5.38 | 4.83 | #FF453A | 6.16 | 4.99 |
 /// | caution | #A85400 | 5.34 | 4.78 | #FF9F0A | 10.22 | 8.28 |
+/// | wishlist | #D30F45 | 5.36 | 4.76 | #FF375F | 5.97 | 4.85 |
 ///
 /// The dark-appearance values ARE the system colors — `systemGreen`/`systemRed`/`systemOrange`
 /// already pass on a dark background. Only the light side needed darkening, which is why this is
 /// a dynamic `UIColor` and not three flat constants: hard-coding the light value would wreck the
 /// dark appearance that was never broken.
+///
+/// ⚠️ **`wishlist` is here because pink is a MEANING in this app, not an accent** — DESIGN.md keys
+/// system pink to wishlist/support, so it lands in text ("on your wishlist" captions in the scan
+/// tray and staging review) exactly the way the other three do. Bare `.pink` (#FF2D55) is
+/// **3.65:1** on white: better than green or orange, still short of the 4.5:1 floor, and the scan
+/// tray's caption sits on `.ultraThinMaterial` over a live camera where the backdrop is whatever
+/// the lens is pointed at. The HEART GLYPHS stay bare `.pink` — a 22 pt symbol is a non-text
+/// component at a 3:1 floor, which 3.65:1 clears.
 ///
 /// ⚠️ **These resolve by APPEARANCE, not by the color behind them.** Text over a fixed dark scrim
 /// — `BinderView`'s camera header sits on `.black.opacity(0.55)` — must keep using the bright
@@ -54,4 +63,10 @@ extension Color {
     static let statusCaution = Color(uiColor: .init { $0.userInterfaceStyle == .dark
         ? UIColor(red: 1.000, green: 0.624, blue: 0.039, alpha: 1)   // #FF9F0A
         : UIColor(red: 0.659, green: 0.329, blue: 0.000, alpha: 1) }) // #A85400
+
+    /// "You want this one." Replaces a bare `.pink` **on text only** — the heart glyphs keep
+    /// `.pink`, which clears the 3:1 non-text floor on its own.
+    static let statusWishlist = Color(uiColor: .init { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 1.000, green: 0.216, blue: 0.373, alpha: 1)   // #FF375F
+        : UIColor(red: 0.827, green: 0.059, blue: 0.271, alpha: 1) }) // #D30F45
 }

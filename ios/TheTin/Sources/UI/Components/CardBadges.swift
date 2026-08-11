@@ -15,10 +15,13 @@ struct CardBadges: View {
     var body: some View {
         HStack(spacing: 3) {
             if owned {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                // `.ultraThinMaterial` over CARD ART, so the backdrop is whatever the holo is
+                // doing — bare `.green` measures ~2.2:1 on a light one, under even the 3:1
+                // non-text floor. The heart below stays `.pink` (3.65:1), which clears it.
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.statusPositive)
                 if let count { Text("\(count)").fontWeight(.semibold).monospacedDigit() }
             }
-            if wanted { Image(systemName: "heart.fill").foregroundStyle(.pink) }
+            if wanted { Image(systemName: "heart.fill").foregroundStyle(.pink) } // contrast-ok: glyph, not text
         }
         .font(.caption2)
         .padding(3)

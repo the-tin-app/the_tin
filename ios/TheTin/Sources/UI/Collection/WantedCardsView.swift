@@ -68,7 +68,7 @@ struct WantedCardsView: View {
             if r.allCards.isEmpty {
                 ContentUnavailableView {
                     Label { Text("Your wishlist is empty") }
-                    icon: { Image(systemName: "heart").foregroundStyle(.pink) }
+                    icon: { Image(systemName: "heart").foregroundStyle(.pink) } // contrast-ok: glyph, not text
                 } description: {
                     // "Hunting" now names a specific opt-in state on its own segment, so this
                     // no longer says it loosely.
@@ -353,8 +353,12 @@ private struct WishlistTile: View {
         if let p = entry?.priority, p != .normal {
             // Grail gets the filled star, not a fourth colour of the same dot: it's a
             // different kind of statement about a card, and a dot can only carry so much.
+            // ⚠️ `.caption2`, not `.system(size: 10)`. This dot and the note glyph below are the
+            // ONLY carriers of "grail" and "has notes" on this row — a frozen point size pins them
+            // at 10 pt while every word beside them roughly triples at AX5, which is precisely the
+            // reader who needs them biggest. A text style scales the symbol for free.
             Image(systemName: p == .grail ? "star.fill" : "circle.fill")
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundStyle(dotTint(p))
                 .padding(4)
                 .accessibilityLabel("\(p.label) priority")
@@ -372,7 +376,7 @@ private struct WishlistTile: View {
     @ViewBuilder private var noteGlyph: some View {
         if let n = entry?.notes, !n.isEmpty {
             Image(systemName: "note.text")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(.secondary)
                 .padding(4).accessibilityLabel("Has notes")
         }
     }
@@ -380,7 +384,7 @@ private struct WishlistTile: View {
     @ViewBuilder private var priceLabel: some View {
         if let usd = priceUsd {
             HStack(spacing: 2) {
-                if onSale { Image(systemName: "target").font(.system(size: 9)) }
+                if onSale { Image(systemName: "target").font(.caption2) }
                 Text(usd, format: .currency(code: "USD"))
             }
             .font(.caption2).monospacedDigit()

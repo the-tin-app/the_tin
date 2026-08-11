@@ -187,7 +187,7 @@ struct BinderCaptureView: View {
             if source.deliveredSmallPhoto {
                 Text("Low-resolution photo (\(source.megapixelsText)) — move back a little and don't let the lens get too close.")
                     .font(.caption2).multilineTextAlignment(.center)
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(.yellow) // contrast-ok: fixed .black.opacity(0.55) scrim, ~13:1
             }
             // ⚠️ Stated, because the alternative is a shutter that silently does nothing. This used to
             // be a crash: `capturePhoto` raises an NSException for invalid settings and Swift cannot
@@ -196,7 +196,7 @@ struct BinderCaptureView: View {
             if let failure = source.captureFailure {
                 Text("The camera refused that shot — \(failure). Tell Tomas; this should not happen.")
                     .font(.caption2).multilineTextAlignment(.center)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.orange) // contrast-ok: fixed .black.opacity(0.55) scrim, ~10:1
             }
             // ⚠️ The "shot N MP → processed N MP · offers …" line used to render HERE. It is not deleted,
             // it MOVED: `LensPhotoSource.capture` writes it to `BinderDiag`. It still answers the

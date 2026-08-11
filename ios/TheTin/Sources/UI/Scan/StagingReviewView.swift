@@ -217,7 +217,8 @@ private struct DraftRow: View {
                 if let caption = knowledge.caption {
                     Text(caption)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(knowledge.wanted ? Color.pink : Color.green)
+                        .foregroundStyle(knowledge.wanted
+                                         ? Color.statusWishlist : Color.statusPositive)
                 }
                 // Plain tinted menus (no borders/icons) so labels never hyphenate on
                 // narrow rows; approved mockup option A, CTA wording "File in…".
