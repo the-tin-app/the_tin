@@ -98,6 +98,36 @@ final class OriginCatalogRemoteTests: XCTestCase {
         XCTAssertEqual(http.sent.first?.value(forHTTPHeaderField: "Authorization"), "Bearer fresh")
     }
 
+    /// An artifact is 26–179 MB and `timeoutInterval` is an IDLE timeout, so the manifest's 5 s
+    /// aborted any download that stalled briefly on a home upstream — silently, because the edge
+    /// had already sent its 200 with the headers. Nothing else observes this value, so without
+    /// this assertion the regression is invisible until someone diffs served bytes against object
+    /// size. Both must be checked in one test: the fix is that they DIFFER.
+    func testArtifactGetsTheLongTimeoutAndTheManifestKeepsTheShortOne() async throws {
+        let http = PathHTTP()
+        http.responses["/catalog/average-v7.sqlite.gz"] = [(200, Data("gz".utf8))]
+        http.responses["/catalog/manifest.json"] = [(200, manifestJSON())]
+        let remote = OriginCatalogRemote(baseURL: base, authorize: Authorizers.appAttest(TokenStub()), http: http, tier: "average")
+
+        _ = try await remote.fetchData(path: "average-v7.sqlite.gz")
+        _ = try await remote.fetchManifest()
+
+        XCTAssertEqual(http.sent[0].timeoutInterval, AppConfig.artifactTimeout)
+        XCTAssertEqual(http.sent[1].timeoutInterval, AppConfig.selfHostTimeout)
+        XCTAssertGreaterThan(AppConfig.artifactTimeout, AppConfig.selfHostTimeout)
+    }
+
+    /// The 401 retry rebuilds the request, so it is a second place the timeout can be dropped.
+    func testTheRetryAfterA401KeepsTheArtifactTimeout() async throws {
+        let http = PathHTTP()
+        http.responses["/catalog/average-v7.sqlite.gz"] = [(401, Data()), (200, Data("gz".utf8))]
+        let remote = OriginCatalogRemote(baseURL: base, authorize: Authorizers.appAttest(TokenStub()), http: http, tier: "average")
+
+        _ = try await remote.fetchData(path: "average-v7.sqlite.gz")
+        XCTAssertEqual(http.sent.count, 2)
+        XCTAssertEqual(http.sent[1].timeoutInterval, AppConfig.artifactTimeout)
+    }
+
     func test401RefreshesTokenAndRetriesOnce() async throws {
         let http = PathHTTP()
         http.responses["/catalog/average-v7.sqlite.gz"] = [(401, Data()), (200, Data("gz".utf8))]

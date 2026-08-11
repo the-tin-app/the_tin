@@ -146,20 +146,41 @@ struct LabelSheetPage: View {
         .environment(\.colorScheme, .light)
     }
 
-    /// 0.75" QR on the left, the rest text, with breathing room all round so nothing rides the
-    /// die-cut edge. The QR is rasterized at 216 pt (3× its printed size) and drawn down, so the
-    /// PDF carries enough resolution for a 300 dpi printer.
-    private func label(_ item: LabelItem) -> some View {
-        HStack(spacing: 6) {
+    /// QR on the left, the rest text. The QR is rasterized at 216 pt (well above its printed size)
+    /// and drawn down, so the PDF carries enough resolution for a 300 dpi printer.
+    ///
+    /// ⚠️ **QR size and text width are the SAME budget.** The label is 2" × 1", so a square QR
+    /// grown to fill the height eats that height out of the 2" of width, and the text column is
+    /// whatever is left. It is sized here to the full height less the padding — 64 pt of 72, a
+    /// ~1.4 mm buffer off each die-cut edge — because scanning it across a table is the sticker's
+    /// whole job, and that leaves 68 pt for the text. The type is sized to that 68 pt, not the
+    /// other way round.
+    ///
+    /// A worst-case payload is QR version 9 (53 modules), so 64 pt = 0.889" prints at **16.8 mil**
+    /// per module, comfortably above the ~10 mil where phone cameras start to struggle (it was
+    /// 14 mil at the original 0.75").
+    func label(_ item: LabelItem) -> some View {
+        HStack(spacing: 4) {
             if let qr = LabelSheet.qrImage(for: item.url, size: 216) {
                 Image(uiImage: qr).resizable().interpolation(.none)
-                    .frame(width: 54, height: 54)
+                    .frame(width: 64, height: 64)
             }
+            // ⚠️ NOTHING here truncates, deliberately. One line per row cut "Mega Charizard ex"
+            // short and — worse — ate the "· #233" off the tail of the set line, which is the
+            // part that identifies the copy. Width is the scarce resource; HEIGHT is not (the QR
+            // sets the label's height anyway). So every row wraps instead.
+            //
+            // The limits are the catalog's MEASURED maxima, not guesses: the longest card name is
+            // 49 chars ("Team Galactic's Invention G-107 Technical Machine") and the longest set
+            // line 39 ("Brilliant Stars Trainer Gallery · #TG21"). At these sizes those need 3 and
+            // 2 lines in a 68 pt column; the type shrank when the QR grew, for exactly that reason.
+            // `testTheWorstCaseLabelStillFitsItsDieCut` renders both and fails either way — too
+            // tall clips the die-cut, too short means a row started truncating again.
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.name).font(.system(size: 8, weight: .bold)).lineLimit(1)
-                Text(item.setLine).font(.system(size: 6)).lineLimit(1)
+                Text(item.name).font(.system(size: 6.5, weight: .bold)).lineLimit(3)
+                Text(item.setLine).font(.system(size: 5.5)).lineLimit(2)
                     .foregroundStyle(.black.opacity(0.7))
-                Text(item.detail).font(.system(size: 6)).lineLimit(1)
+                Text(item.detail).font(.system(size: 5.5)).lineLimit(2)
                     .foregroundStyle(.black.opacity(0.7))
             }
             .frame(maxWidth: .infinity, alignment: .leading)

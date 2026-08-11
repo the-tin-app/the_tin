@@ -49,6 +49,21 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
               session.canAddInput(input) else { return }   // no camera (simulator): stays black
         session.addInput(input)
 
+        // ⚠️ The preset IS this reader's range, and the default (`.high`, 1080p) is not enough.
+        // Detection runs on the capture stream, so what matters is how many PIXELS the code spans,
+        // not how big it looks in the preview. The wide camera covers ~823 mm at 2 ft, so a
+        // 22.6 mm label QR is ~2.7% of the frame — 52 px at 1080p, spread over 53 modules, i.e.
+        // ~1 px per module against the ~2 the detector wants. That is why it only read once you
+        // pinch-zoomed to 2.4×: zooming buys pixels. 4K doubles them linearly instead, for free
+        // and without narrowing the field you have to aim.
+        //
+        // Falls back on anything without 4K — notably the A10 iPad's 8 MP camera, which tops out
+        // at 1080p and therefore still wants the label closer. Resolution is the constraint there,
+        // same as it is for the card scanner on that device.
+        if session.canSetSessionPreset(.hd4K3840x2160) {
+            session.sessionPreset = .hd4K3840x2160
+        }
+
         let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else { return }
         session.addOutput(output)
