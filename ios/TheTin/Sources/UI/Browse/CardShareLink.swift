@@ -21,13 +21,10 @@ enum CardShareLink {
         c.path = "/c/\(card.id)"
         var items = [URLQueryItem(name: "n", value: card.name)]
         if let setName { items.append(URLQueryItem(name: "set", value: setName)) }
-        // og:image must render in iMessage / WhatsApp previews — webp support there is spotty,
-        // so prefer a PNG (tcgdex serves high.png); the legacy imageUrl fallback is already a JPEG.
-        if let base = card.imageBase {
-            items.append(URLQueryItem(name: "img", value: "\(base)/high.png"))
-        } else if let img = card.imageUrl {
-            items.append(URLQueryItem(name: "img", value: img))
-        }
+        // See `CardRecord.webArtURL` for why this isn't `imageURL(quality:)`. It used to be
+        // inlined here as imageBase-then-imageUrl, which SKIPPED the TCGplayer-CDN branch — a card
+        // TCGdex has no art for shared with no preview image at all.
+        if let art = card.webArtURL { items.append(URLQueryItem(name: "img", value: art.absoluteString)) }
         c.queryItems = items
         // Components are all app-constructed from known-safe pieces; a nil url here is a
         // programming error, not user input.
