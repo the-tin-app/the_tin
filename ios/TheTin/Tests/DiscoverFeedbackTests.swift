@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import UIKit
 @testable import TheTin
 
 final class DiscoverFeedbackTests: XCTestCase {
@@ -118,5 +120,68 @@ final class DiscoverFeedbackTests: XCTestCase {
     func testTheRemovedTooExpensiveRawValueDecodesToNil() {
         XCTAssertNil(DismissReason(rawValue: "tooExpensive"))
         XCTAssertNil(DismissReason(rawValue: "notMyKind"))
+    }
+
+    // MARK: - The panel's chip width, measured
+
+    /// ⚠️ **Every `effect` string is rendered in a ~73pt chip, and two of them do not fit on one
+    /// line at any legible size.** `CardFeedbackPanel` ships at two widths: ~420pt over the 1-up
+    /// deck, and a ~172pt grid cell where each of the four chips is about 73pt. "Less from this
+    /// generation" truncated to "Less from this ge…" there — cutting exactly the tune-vs-hide
+    /// distinction the line exists to draw — and it had done so since the panel shipped. It hid
+    /// because the text was 9pt grey; rendering it at `.caption2` only made it visible.
+    ///
+    /// The fix is `lineLimit(2)`. Truncation happens when the string still needs a third line at
+    /// the SMALLEST size `minimumScaleFactor(0.7)` permits, so that is what gets measured —
+    /// caption2 is 11pt, so the floor is 7.7pt.
+    ///
+    /// ⚠️ The obvious version of this test — render capped, render free, compare heights — is a
+    /// FALSE POSITIVE and was written first. `minimumScaleFactor` shrinks the capped render to fit,
+    /// so it is legitimately shorter than a free one that wrapped at full size; the difference
+    /// measures shrinking, not truncation. It failed on a string that renders perfectly.
+    ///
+    /// Guards the copy as much as the layout: a longer `effect` string fails here.
+    @MainActor
+    func testEveryEffectStringFitsTheNarrowestChipItShipsIn() throws {
+        for reason in DismissReason.allCases {
+            XCTAssertLessThanOrEqual(
+                linesNeeded(reason.effect, width: Self.chipWidth), 2,
+                "\(reason.effect) needs a third line at \(Self.chipWidth)pt — it will truncate")
+        }
+    }
+
+    /// The labels share the chip and carry a hard newline of their own, so they get the same check.
+    @MainActor
+    func testEveryShortLabelFitsTheNarrowestChipItShipsIn() throws {
+        for reason in DismissReason.allCases {
+            XCTAssertLessThanOrEqual(
+                linesNeeded(reason.shortLabel, width: Self.chipWidth), 2,
+                "\(reason.shortLabel.replacingOccurrences(of: "\n", with: " ")) truncates at "
+                + "\(Self.chipWidth)pt")
+        }
+    }
+
+    /// 172pt panel − 10pt padding each side = 152; two columns at 6pt spacing → 73pt.
+    private static let chipWidth: CGFloat = 73
+    /// `.caption2` at the default content size, times `minimumScaleFactor(0.7)`.
+    private static let floorPointSize: CGFloat = 11 * 0.7
+
+    /// Lines the string wraps to at the smallest permitted size, by measuring against the height
+    /// of a single line of the same font rather than assuming a line height.
+    @MainActor
+    private func linesNeeded(_ string: String, width: CGFloat) -> Int {
+        let oneLine = renderedHeight("X", width: width)
+        return Int((renderedHeight(string, width: width) / oneLine).rounded())
+    }
+
+    @MainActor
+    private func renderedHeight(_ string: String, width: CGFloat) -> CGFloat {
+        let text = Text(string)
+            .font(.system(size: Self.floorPointSize))
+            .multilineTextAlignment(.center)
+        let host = UIHostingController(rootView: text.frame(width: width))
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        return host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height
     }
 }

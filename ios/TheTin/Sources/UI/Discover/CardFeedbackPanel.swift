@@ -57,10 +57,28 @@ struct CardFeedbackPanel<Option: Identifiable & Equatable>: View {
                                 .lineLimit(2)
                                 .minimumScaleFactor(0.8)
                             if let effect = effect(option) {
+                                // ⚠️ `lineLimit(2)`, and it is load-bearing at GRID density.
+                                //
+                                // This panel ships at two very different widths: ~420pt over the
+                                // 1-up deck, and a ~172pt grid cell — where each of the four chips
+                                // is about 73pt. "Less from this generation" has never fitted 73pt
+                                // on one line at any legible size, so it truncated to
+                                // "Less from this ge…" and the tune-vs-hide distinction this line
+                                // exists to make was the part that got cut.
+                                //
+                                // It was invisible because the text was 9pt grey. Rendering it at
+                                // `.caption2` did not cause the truncation — measured, both ways —
+                                // it just made it big enough to notice.
+                                //
+                                // Wrapping rather than shortening the copy: the grid card is ~268pt
+                                // tall and the panel only uses ~192pt, so the second line is free,
+                                // and the deck at 420pt still fits every string on one line and is
+                                // unchanged.
                                 Text(effect)
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(2)
                                     .minimumScaleFactor(0.7)
                             }
                         }
