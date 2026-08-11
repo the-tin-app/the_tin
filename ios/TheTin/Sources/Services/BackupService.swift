@@ -99,6 +99,34 @@ final class BackupService {
     /// which a debounced auto-backup could have swapped out from under them in the meantime.
     private var offeredSnapshot: BackupSnapshot?
 
+    /// A backup in iCloud that another device wrote and this one has not taken on.
+    ///
+    /// One file, last writer wins — which is fine until two devices are in use, and then the
+    /// staler one silently overwrites the fresher. Measured 2026-08-10: an iPad, idle on a
+    /// shelf, overwrote the iPhone's backup within ~25 s of every launch and reduced it to its
+    /// own months-old collection. Nothing warned, and the only symptom was restored data that
+    /// was quietly wrong.
+    struct Conflict: Equatable {
+        var exportedAt: Date
+        var entryCount: Int
+    }
+
+    /// Set when a write is refused because the file belongs to another device. Cleared by taking
+    /// that backup (`acceptConflict`) or by deliberately overwriting it (`overwriteConflict`).
+    private(set) var conflict: Conflict?
+
+    /// `exportedAt` of the last snapshot this device WROTE or RESTORED FROM — the definition of
+    /// "the backup is mine". Persisted, so an ordinary relaunch on a one-device setup recognises
+    /// its own file instead of treating it as foreign and nagging.
+    ///
+    /// ⚠️ Deliberately not "the newest date I have seen". The iPad had seen the iPhone's newer
+    /// backup and overwrote it anyway; having *read* a file is not having incorporated it.
+    private var lastSyncedExportedAt: Date? {
+        get { defaults.object(forKey: Self.lastSyncedKey) as? Date }
+        set { defaults.set(newValue, forKey: Self.lastSyncedKey) }
+    }
+    private static let lastSyncedKey = "backupLastSyncedExportedAt"
+
     private let store: BackupStore
     /// Photos are NOT in the snapshot; they ride the same container. Injected so tests can point
     /// it at a temp dir.
@@ -109,6 +137,9 @@ final class BackupService {
     /// tests and any goal-less wiring construct the service unchanged.
     private let setGoals: SetGoalsModel?
     private let uid: String
+    /// Where `lastSyncedExportedAt` lives. Injected so two services in one test process are two
+    /// devices rather than one — with `.standard` they share the flag and neither sees a conflict.
+    private let defaults: UserDefaults
     private let debounce: Duration
     private let now: () -> Date
     private var pendingWrite: Task<Void, Never>?
@@ -117,9 +148,10 @@ final class BackupService {
     init(store: BackupStore = ICloudBackupStore(),
          collection: CollectionRepository, wants: WantsRepository,
          setGoals: SetGoalsModel? = nil, uid: String,
-         photos: PhotoStore? = nil,
+         photos: PhotoStore? = nil, defaults: UserDefaults = .standard,
          debounce: Duration = .seconds(5), now: @escaping () -> Date = { Date() }) {
         self.store = store
+        self.defaults = defaults
         self.photos = photos ?? .default(mirror: store)
         self.collection = collection
         self.wants = wants
@@ -189,9 +221,19 @@ final class BackupService {
     // MARK: Backup
 
     /// Write the snapshot now — the manual "Back Up Now" button and the debounce timer's target.
-    func backUpNow() async {
+    ///
+    /// Refuses when the file in iCloud is a newer one this device never took on; see `Conflict`.
+    /// `force` is the user answering that prompt with "back up this device anyway".
+    func backUpNow(force: Bool = false) async {
         pendingWrite?.cancel()   // a manual backup supersedes any armed debounce
         guard !Task.isCancelled else { return }   // a cancelled caller must not snapshot empty streams
+        if !force, let foreign = await foreignBackup() {
+            conflict = foreign
+            PhotoDiag.record("backUpNow", "REFUSED — newer backup from another device "
+                             + "(\(foreign.entryCount) entries, \(foreign.exportedAt))")
+            return
+        }
+        conflict = nil
         let snapshot = await currentSnapshot()
         // Photos are the one part of an entry that can be on the device and not in the snapshot,
         // because they are only persisted when the form is SAVED. Counting them here separates
@@ -213,6 +255,36 @@ final class BackupService {
                 return .failed
             }
         }.value
+        // We now own the file — record it, or the very next write would call our own backup
+        // foreign and refuse it.
+        if case .backedUp = status { lastSyncedExportedAt = snapshot.exportedAt }
+    }
+
+    /// The backup in iCloud, when it is newer than the one this device last wrote or restored
+    /// from — i.e. another device has written since, and overwriting it would destroy that work.
+    ///
+    /// nil covers every ordinary case: no backup yet, iCloud off, an unreadable file (a write is
+    /// the best available repair), or a file this device already owns. Only a readable, strictly
+    /// newer, foreign snapshot blocks a write.
+    private func foreignBackup() async -> Conflict? {
+        guard let remote = try? await loadBackup() else { return nil }
+        if let mine = lastSyncedExportedAt, remote.exportedAt <= mine { return nil }
+        if lastSyncedExportedAt == nil, remote.entries.isEmpty { return nil }
+        return Conflict(exportedAt: remote.exportedAt, entryCount: remote.entries.count)
+    }
+
+    /// Take the other device's backup: restore from it, which also makes it ours.
+    func acceptConflict() async throws {
+        guard conflict != nil else { return }
+        let snapshot = try await loadBackup()
+        try await performRestore(snapshot: snapshot)
+        conflict = nil
+    }
+
+    /// Keep this device's data and overwrite the other device's backup. Deliberate, and the only
+    /// way past the prompt without losing what is on this device.
+    func overwriteConflict() async {
+        await backUpNow(force: true)
     }
 
     /// Authoritative current state: each repository stream yields its current value on
@@ -250,7 +322,12 @@ final class BackupService {
     }
 
     /// Settings-open probe: report the on-disk backup's date without writing anything.
+    ///
+    /// Also probes for a conflict, so the warning appears when you go looking rather than only
+    /// after a write has already been refused — on a device you barely touch, that write might
+    /// not come for weeks.
     func refreshStatus() async {
+        conflict = await foreignBackup()
         if case .backedUp = status { return }   // an in-session write already set it
         do {
             status = .backedUp(try await loadBackup().exportedAt)
@@ -316,6 +393,10 @@ final class BackupService {
         // Photos live beside the snapshot, not in it. Pulled down off-main and best-effort: a
         // restored entry whose photo hasn't arrived yet is a far smaller failure than a restore
         // that blocks on a few hundred file downloads.
+        // Restoring from it is what makes it ours. Without this the device would refuse to back
+        // up afterwards, calling the very snapshot it is now running on "another device's".
+        lastSyncedExportedAt = snapshot.exportedAt
+        conflict = nil
         let photos = self.photos
         let needed = PhotoStore.needed(from: snapshot.entries)
         Task.detached(priority: .utility) { photos.mirrorDown(needed: needed) }

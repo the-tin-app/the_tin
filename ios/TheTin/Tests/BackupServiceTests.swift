@@ -344,4 +344,89 @@ final class BackupServiceTests: XCTestCase {
         let snapshot = try await service.loadBackup()
         XCTAssertEqual(Set(snapshot.entries.map(\.id)), ["e1", "e2"])
     }
+
+    // MARK: Two devices, one file
+
+    /// A second device with its own UserDefaults and its own clock — the whole point of the
+    /// injection is that these are two devices, not one talking to itself.
+    private func makeDevice(sub: String, at date: Date) throws
+    -> (BackupService, LocalCollectionRepository) {
+        let (collection, wants) = try makeRepos(sub: sub)
+        let service = BackupService(
+            store: TempDirBackupStore(dir: dir.appendingPathComponent("icloud", isDirectory: true)),
+            collection: collection, wants: wants, uid: "local",
+            defaults: UserDefaults(suiteName: "test-\(sub)-\(UUID().uuidString)")!,
+            debounce: .seconds(5), now: { date })
+        return (service, collection)
+    }
+
+    /// The bug, exactly: an idle second device overwrote the phone's newer backup with its own
+    /// staler collection and nothing warned (device pair, 2026-08-10).
+    func testAStalerDeviceRefusesToOverwriteANewerBackup() async throws {
+        let (phone, phoneCollection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await phoneCollection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        let (pad, _) = try makeDevice(sub: "pad", at: fixedNow.addingTimeInterval(60))
+        await pad.backUpNow()   // the iPad is empty and would have clobbered the phone
+
+        XCTAssertEqual(pad.conflict?.entryCount, 1)
+        let onDisk = try await pad.loadBackup()
+        XCTAssertEqual(onDisk.entries.map(\.id), ["e1"], "the phone's backup must survive")
+    }
+
+    /// Taking the other device's backup makes it ours — otherwise the device would refuse to
+    /// back up forever, calling the snapshot it is now running on foreign.
+    func testAcceptingTheConflictRestoresAndThenBacksUpNormally() async throws {
+        let (phone, phoneCollection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await phoneCollection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        let (pad, padCollection) = try makeDevice(sub: "pad", at: fixedNow.addingTimeInterval(60))
+        await pad.backUpNow()
+        try await pad.acceptConflict()
+
+        XCTAssertNil(pad.conflict)
+        let restored = await firstValue(padCollection.entriesStream()) ?? []
+        XCTAssertEqual(restored.map(\.id), ["e1"])
+
+        try await padCollection.addEntry(fixtureEntry(id: "e2", groupId: ""))
+        await pad.backUpNow()
+        XCTAssertNil(pad.conflict, "the backup it restored from is its own now")
+        let onDisk = try await pad.loadBackup()
+        XCTAssertEqual(Set(onDisk.entries.map(\.id)), ["e1", "e2"])
+    }
+
+    /// The escape hatch: this device's data is the one you want, so overwrite deliberately.
+    func testOverwritingTheConflictKeepsThisDevicesData() async throws {
+        let (phone, phoneCollection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await phoneCollection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        let (pad, padCollection) = try makeDevice(sub: "pad", at: fixedNow.addingTimeInterval(60))
+        try await padCollection.addEntry(fixtureEntry(id: "e2", groupId: ""))
+        await pad.backUpNow()
+        XCTAssertNotNil(pad.conflict)
+
+        await pad.overwriteConflict()
+
+        XCTAssertNil(pad.conflict)
+        let onDisk = try await pad.loadBackup()
+        XCTAssertEqual(onDisk.entries.map(\.id), ["e2"])
+    }
+
+    /// One device, many launches: writing its own backup repeatedly must never look foreign.
+    func testASingleDeviceNeverConflictsWithItself() async throws {
+        let (phone, collection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await collection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+        XCTAssertNil(phone.conflict)
+
+        try await collection.addEntry(fixtureEntry(id: "e2", groupId: ""))
+        await phone.backUpNow()
+
+        XCTAssertNil(phone.conflict)
+        let onDisk = try await phone.loadBackup()
+        XCTAssertEqual(Set(onDisk.entries.map(\.id)), ["e1", "e2"])
+    }
 }
