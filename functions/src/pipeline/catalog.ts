@@ -19,7 +19,7 @@ const SCHEMA = `
 CREATE TABLE set_info(id TEXT PRIMARY KEY, name TEXT NOT NULL, release_date TEXT, total INTEGER NOT NULL, printed_total INTEGER, era TEXT, rep_card_id TEXT);
 CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT NOT NULL REFERENCES set_info(id), number TEXT NOT NULL,
   name TEXT NOT NULL, hp INTEGER, types TEXT, rarity TEXT, artist TEXT, image_base TEXT, image_url TEXT, tcgplayer_id INTEGER,
-  attacks TEXT);
+  attacks TEXT, detail TEXT);
 CREATE VIRTUAL TABLE card_text USING fts5(card_id UNINDEXED, name, body);
 -- raw_printing records WHICH printing raw_usd quotes. The pick falls through to the next printing
 -- when the primary has no market price that night, so the column can change identity between
@@ -96,7 +96,7 @@ export function buildCatalog(input: CatalogInput, outPath: string): void {
   db.exec(SCHEMA);
 
   const insSet = db.prepare("INSERT INTO set_info VALUES (?,?,?,?,?,?,?)");
-  const insCard = db.prepare("INSERT INTO card VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+  const insCard = db.prepare("INSERT INTO card VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
   const insText = db.prepare("INSERT INTO card_text (card_id, name, body) VALUES (?,?,?)");
   const insPrice = db.prepare(`INSERT INTO price_latest(card_id, raw_usd, raw_eur, ${PSA_COLUMNS.join(", ")}, as_of)
     VALUES (?,?,?,${PSA_COLUMNS.map(() => "?").join(",")},?)`);
@@ -141,7 +141,8 @@ export function buildCatalog(input: CatalogInput, outPath: string): void {
         const psaVals = PSA_COLUMNS.map((col) => p?.graded[col] ?? null);
         const hasPrice = c.rawUsd != null || c.rawEur != null || psaVals.some((v) => v != null);
         insCard.run(c.id, setId, c.localId, c.name, c.hp, c.types.join(","), c.rarity, c.artist, c.imageBase, c.imageUrl ?? null, p?.tcgPlayerId ?? null,
-          c.attacks?.length ? JSON.stringify(c.attacks) : null);
+          c.attacks?.length ? JSON.stringify(c.attacks) : null,
+          c.detail ? JSON.stringify(c.detail) : null);
         insText.run(c.id, c.name, c.text);
         if (hasPrice) insPrice.run(c.id, c.rawUsd, c.rawEur, ...psaVals, input.asOf);
         for (const dex of input.dexByCard.get(c.id) ?? []) insCardDex.run(c.id, dex);

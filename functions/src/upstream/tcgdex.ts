@@ -4,7 +4,26 @@ export interface TcgdexSet {
   id: string; name: string; releaseDate: string | null;
   cardCountTotal: number; printedTotal: number | null; serie: string | null;
 }
-export interface TcgdexAttack { name: string; damage: string | null; cost: string[] }
+export interface TcgdexAttack { name: string; damage: string | null; cost: string[]; effect?: string }
+export interface TcgdexAbility { name: string; type?: string; effect?: string }
+export interface TcgdexTypeValue { type: string; value: string }
+
+/**
+ * Everything else the card prints, for the offline fact sheet (`CardFactSheet` on iOS).
+ * Stored as ONE JSON column so a field added later never costs another schema migration.
+ */
+export interface TcgdexDetail {
+  category?: string;
+  stage?: string;
+  evolveFrom?: string;
+  abilities?: TcgdexAbility[];
+  weaknesses?: TcgdexTypeValue[];
+  resistances?: TcgdexTypeValue[];
+  retreat?: number;
+  regulationMark?: string;
+  trainerType?: string;
+  effect?: string;
+}
 
 export interface TcgdexCard {
   id: string; localId: string; name: string; hp: number | null;
@@ -13,18 +32,66 @@ export interface TcgdexCard {
   imageUrl?: string | null;
   rawUsd: number | null; rawEur: number | null;
   attacks?: TcgdexAttack[];
+  detail?: TcgdexDetail;
 }
 
-/** Attack list for the no-image placeholder (name + damage + energy cost, no effect text). */
-export function pickAttacks(raw: { attacks?: { name?: unknown; damage?: unknown; cost?: unknown }[] }): TcgdexAttack[] {
+/**
+ * Attack list for the no-image fact sheet: name, damage, energy cost and effect text.
+ *
+ * ⚠️ `damage` arrives as a NUMBER for plain damage (90) and a STRING when it is printed with a
+ * modifier ("90+", "20×"). Both occur on the live API; always stringify.
+ */
+export function pickAttacks(raw: { attacks?: { name?: unknown; damage?: unknown; cost?: unknown; effect?: unknown }[] }): TcgdexAttack[] {
   return (raw.attacks ?? []).flatMap((a) => {
     if (typeof a?.name !== "string" || !a.name) return [];
     return [{
       name: a.name,
       damage: a.damage != null ? String(a.damage) : null,
       cost: Array.isArray(a.cost) ? a.cost.filter((c): c is string => typeof c === "string") : [],
+      ...(typeof a.effect === "string" && a.effect ? { effect: a.effect } : {}),
     }];
   });
+}
+
+const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+
+function pickTypeValues(raw: unknown): TcgdexTypeValue[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw.flatMap((w: any) => {
+    const type = str(w?.type), value = w?.value != null ? String(w.value) : undefined;
+    return type && value ? [{ type, value }] : [];
+  });
+  return out.length ? out : undefined;
+}
+
+/**
+ * The rest of the printed card. Costs NOTHING upstream — `getSetCards` already fetches the full
+ * `/cards/{id}` record per card and `buildCardText` already parses abilities and attack effects,
+ * then flattens them into an FTS blob and discards the structure. This keeps the structure.
+ *
+ * Every key is omitted when absent rather than emitted as null: `JSON.stringify` drops undefined,
+ * and the Swift side declares each field a real `Optional` for exactly that reason.
+ */
+export function pickDetail(raw: any): TcgdexDetail | undefined {
+  const abilities = Array.isArray(raw?.abilities)
+    ? raw.abilities.flatMap((a: any) => {
+        const name = str(a?.name);
+        return name ? [{ name, ...(str(a?.type) ? { type: str(a.type)! } : {}), ...(str(a?.effect) ? { effect: str(a.effect)! } : {}) }] : [];
+      })
+    : [];
+  const detail: TcgdexDetail = {
+    ...(str(raw?.category) ? { category: str(raw.category)! } : {}),
+    ...(str(raw?.stage) ? { stage: str(raw.stage)! } : {}),
+    ...(str(raw?.evolveFrom) ? { evolveFrom: str(raw.evolveFrom)! } : {}),
+    ...(abilities.length ? { abilities } : {}),
+    ...(pickTypeValues(raw?.weaknesses) ? { weaknesses: pickTypeValues(raw.weaknesses)! } : {}),
+    ...(pickTypeValues(raw?.resistances) ? { resistances: pickTypeValues(raw.resistances)! } : {}),
+    ...(typeof raw?.retreat === "number" ? { retreat: raw.retreat } : {}),
+    ...(str(raw?.regulationMark) ? { regulationMark: str(raw.regulationMark)! } : {}),
+    ...(str(raw?.trainerType) ? { trainerType: str(raw.trainerType)! } : {}),
+    ...(str(raw?.effect) ? { effect: str(raw.effect)! } : {}),
+  };
+  return Object.keys(detail).length ? detail : undefined;
 }
 
 const BASE = "https://api.tcgdex.net/v2/en";
@@ -90,6 +157,7 @@ export class TcgdexClient {
         artist: c.illustrator ?? null,
         text: buildCardText(c),
         attacks: pickAttacks(c),
+        detail: pickDetail(c),
         imageBase: c.image ?? null,
         rawUsd: pickTcgplayerMarket(c.pricing?.tcgplayer),
         rawEur: typeof c.pricing?.cardmarket?.trend === "number" ? c.pricing.cardmarket.trend : null,

@@ -366,7 +366,11 @@ struct BinderSlotSheet: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 6).fill(Color(.secondarySystemBackground))
                     if let card = entry?.cardId.flatMap({ model.cardCache[$0] }) {
-                        CardImageView(card: card, quality: "high")
+                        // The set name comes from the batch the model already read — never a lookup
+                        // here. Offline this pane IS the fact sheet, and "Darkness Ablaze #136" is
+                        // what you check against the card in your hand; "SWSH3" is not.
+                        CardImageView(card: card, quality: "high",
+                                      setName: entry?.cardId.flatMap { model.setNameCache[$0] })
                     } else {
                         Image(systemName: "questionmark").foregroundStyle(.secondary)
                     }
