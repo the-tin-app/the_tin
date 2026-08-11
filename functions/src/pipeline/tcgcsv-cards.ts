@@ -30,6 +30,8 @@
  * `resolveByNameNumber`. It does NOT reach a set we don't have at all (Trading Card Game
  * Classic); that is a different problem and needs a set to be created, not matched.
  */
+import type { TcgdexAttack, TcgdexDetail } from "../upstream/tcgdex";
+
 /**
  * Structural match for `FlatCard` in scripts/flatten-cards-db.ts. Declared here rather than
  * imported because `src/` is the tsc rootDir and may not reach into `scripts/`; the assignment
@@ -46,7 +48,8 @@ export interface SynthesizedCard {
   rarity: string | null;
   artist: string | null;
   text: string;
-  attacks: { name: string; damage: string | null; cost: string[] }[];
+  attacks: TcgdexAttack[];
+  detail?: TcgdexDetail;
   tcgplayerIds: number[];
   tcgplayerByType: [string, number][];
   cardmarketIds: number[];
@@ -127,6 +130,40 @@ export function parseAttack(value: string): { name: string; damage: string | nul
     else if (/\d/.test(ch)) for (let i = 0; i < Number(ch); i++) cost.push("Colorless");
   }
   return { name: stripHtml(m[2]), damage: m[3]?.trim() || null, cost, effect: stripHtml(rest.join(" ")) };
+}
+
+/**
+ * "Rx2" / "Fx2" / "Wx2" → `{ type: "Fire", value: "×2" }`; "F-30" → `{ type, value: "-30" }`.
+ *
+ * tcgcsv packs weakness and resistance as an energy LETTER followed by the printed modifier, which
+ * is not the shape TCGdex uses. Returns undefined for anything that does not parse — these cards
+ * are gap-fill, so a field we cannot read is a blank row on the sheet, never a wrong one.
+ */
+export function parseTypeValue(value: string | undefined): { type: string; value: string }[] | undefined {
+  const m = /^\s*([A-Z])\s*(x\s*\d+|[-+]\s*\d+)\s*$/i.exec(value ?? "");
+  const type = m ? ENERGY_BY_LETTER[m[1]!.toUpperCase()] : undefined;
+  if (!m || !type) return undefined;
+  return [{ type, value: m[2]!.replace(/\s+/g, "").replace(/^x/i, "×") }];
+}
+
+/** The detail blob for a gap-fill card, from whatever the tcgcsv `extendedData` happens to carry. */
+export function pickCsvDetail(ext: Record<string, string>, hp: number | null): TcgdexDetail | undefined {
+  const weaknesses = parseTypeValue(ext["Weakness"]);
+  const resistances = parseTypeValue(ext["Resistance"]);
+  const retreat = /^\d+$/.test(ext["RetreatCost"] ?? "") ? Number(ext["RetreatCost"]) : undefined;
+  const text = stripHtml(ext["CardText"] ?? "");
+  const detail: TcgdexDetail = {
+    // HP is the only signal in this feed for "is this a Pokémon": a Trainer has none.
+    category: hp != null ? "Pokemon" : "Trainer",
+    ...(ext["Stage"] ? { stage: ext["Stage"] } : {}),
+    ...(weaknesses ? { weaknesses } : {}),
+    ...(resistances ? { resistances } : {}),
+    ...(retreat != null ? { retreat } : {}),
+    // A Pokémon's CardText is flavour; a Trainer's IS the rules text, and the sheet prints it
+    // where a Pokémon's attacks go.
+    ...(hp == null && text ? { effect: text } : {}),
+  };
+  return detail;
 }
 
 function stripHtml(s: string): string {
@@ -475,7 +512,11 @@ export function synthesizeMissingCards(input: SynthesizeInput): SynthesizeResult
         rarity: ext["Rarity"] || null,
         artist: null,        // not in the tcgcsv feed
         text: [stripHtml(ext["CardText"] ?? ""), ...attacks.map((a) => a.effect)].filter(Boolean).join("\n"),
-        attacks: attacks.map((a) => ({ name: a.name, damage: a.damage, cost: a.cost })),
+        attacks: attacks.map((a) => ({ name: a.name, damage: a.damage, cost: a.cost, ...(a.effect ? { effect: a.effect } : {}) })),
+        // These are the cards TCGdex does not have — so they have no TCGdex art either, which makes
+        // them exactly the cards most likely to be read off the offline fact sheet. The feed carries
+        // less than TCGdex does; every key is omitted rather than guessed.
+        detail: pickCsvDetail(ext, hp),
         tcgplayerIds: [p.productId],
         tcgplayerByType: [],
         cardmarketIds: [],
