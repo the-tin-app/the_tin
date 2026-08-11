@@ -148,7 +148,7 @@ private struct SetGoalRow: View {
                     Text("\(progress.owned)/\(progress.total)")
                         .monospacedDigit()
                     if progress.isComplete {
-                        Text("· complete").foregroundStyle(.green)
+                        Text("· complete").foregroundStyle(Color.statusPositive)
                     } else {
                         Text("· ^[\(progress.remaining) card](inflect: true) left")
                         if progress.gapValue > 0 {

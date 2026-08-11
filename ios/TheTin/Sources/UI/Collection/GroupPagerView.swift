@@ -177,7 +177,7 @@ private struct EntryCardPage: View {
                     Image(systemName: delta >= 0 ? "arrow.up" : "arrow.down").font(.caption2.bold())
                     Text(abs(delta), format: .currency(code: "USD"))
                 }
-                .foregroundStyle(delta >= 0 ? .green : .red)
+                .foregroundStyle(delta >= 0 ? Color.statusPositive : Color.statusNegative)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(delta >= 0 ? "up" : "down") \(abs(delta).formatted(.currency(code: "USD"))) since you bought it")
             }

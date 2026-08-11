@@ -58,7 +58,7 @@ struct CardFeedbackPanel<Option: Identifiable & Equatable>: View {
                                 .minimumScaleFactor(0.8)
                             if let effect = effect(option) {
                                 Text(effect)
-                                    .font(.system(size: 9))
+                                    .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.7)
@@ -76,8 +76,10 @@ struct CardFeedbackPanel<Option: Identifiable & Equatable>: View {
             }
         }
         .padding(10)
+        // No `.shadow()` — the Flat Tin Rule reserves those for card art, and this panel floats
+        // over exactly that. `.regularMaterial` already separates it from the art underneath;
+        // the shadow only made it read as a web card sitting on top of one.
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .shadow(radius: 8, y: 2)
         // Inset on purpose — see the header. A full-bleed panel is what ate the deck's swipe.
         .padding(.horizontal, 10)
         .transition(.opacity.combined(with: .scale(scale: 0.96)))

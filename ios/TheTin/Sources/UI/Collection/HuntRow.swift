@@ -29,7 +29,7 @@ struct HuntRow: View {
                 if let marketUsd, let target {
                     HStack(spacing: 4) {
                         Text(marketUsd, format: .currency(code: "USD"))
-                            .foregroundStyle(marketUsd <= target ? .green : .primary)
+                            .foregroundStyle(marketUsd <= target ? Color.statusPositive : .primary)
                         Text("· budget \(target, format: .currency(code: "USD"))")
                             .foregroundStyle(.secondary)
                     }
@@ -42,7 +42,8 @@ struct HuntRow: View {
                             let d = Self.delta(delta7d)
                             Text(d.text)
                                 .foregroundStyle(d.isFlat ? AnyShapeStyle(.secondary)
-                                                 : AnyShapeStyle(delta7d < 0 ? .green : .red))
+                                                 : AnyShapeStyle(delta7d < 0 ? Color.statusPositive
+                                                                             : Color.statusNegative))
                         }
                     }
                     .font(.caption).foregroundStyle(.secondary)

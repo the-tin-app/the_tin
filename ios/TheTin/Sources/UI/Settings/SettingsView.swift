@@ -316,6 +316,9 @@ struct SettingsView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                // The checkmark is the only thing distinguishing the installed tier from the other
+                // two, and it says nothing to VoiceOver on its own — see `BrowseFilterSheet`.
+                .accessibilityAddTraits(tier.rawValue == app.currentTier ? .isSelected : [])
                 .disabled(app.tierChange == .downloading)
             }
         } header: {
@@ -332,7 +335,7 @@ struct SettingsView: View {
         case .done:
             Text("Downloaded. Restart The Tin to finish switching.")
         case .failed(let msg):
-            Text(msg).foregroundStyle(.red)
+            Text(msg).foregroundStyle(Color.statusNegative)
         case .idle:
             if onBackupSource {
                 Text("The backup source carries your chosen tier too.\(installedTierNote)")
@@ -436,7 +439,8 @@ struct SettingsView: View {
                         Text(line)
                             .font(.caption.monospaced())
                             .foregroundStyle(line.contains("failed") || line.contains("FAILED")
-                                             ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                                             ? AnyShapeStyle(Color.statusNegative)
+                                             : AnyShapeStyle(.secondary))
                     }
                 }
             }
@@ -773,10 +777,13 @@ private struct StatusRow: View {
         }
     }
 
+    /// A 9pt dot is a graphic, not text — but it is the ONLY thing distinguishing a healthy
+    /// connection row from a failed one, and systemGreen at 2.22:1 misses even the 3:1 floor for
+    /// meaning-bearing graphics. Same tokens as the text, so a green dot and a green number agree.
     private var dotColor: Color {
         switch ok {
-        case .some(true): return .green
-        case .some(false): return .red
+        case .some(true): return .statusPositive
+        case .some(false): return .statusNegative
         case nil: return .gray
         }
     }

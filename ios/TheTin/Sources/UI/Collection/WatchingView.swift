@@ -106,7 +106,7 @@ struct WatchingView: View {
                             // Always a real drop here (past DiscoverConstants.dealsMaxPct7d),
                             // so this can never be the flat case.
                             Text(HuntRow.delta(drop.pct7d).text)
-                                .font(.caption).foregroundStyle(.green)
+                                .font(.caption).foregroundStyle(Color.statusPositive)
                         }
                     }
                 }

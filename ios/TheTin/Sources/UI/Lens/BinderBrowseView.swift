@@ -202,30 +202,44 @@ private struct Pocket: View {
                 }
             }
 
-            if let entry, !entry.isResolved, entry.wishlistCandidate != nil {
-                Text("probably — tap").font(.system(size: 9)).foregroundStyle(.pink)
-            } else if let price {
-                Text(price, format: .currency(code: "USD"))
-                    .font(.system(size: 9)).monospacedDigit().lineLimit(1)
-            } else if entry == nil {
-                Text("empty").font(.system(size: 9)).foregroundStyle(.secondary)
-            } else if isStillReading {
-                Text("reading…").font(.system(size: 9)).foregroundStyle(.secondary)
-            } else if entry?.options.isEmpty == false {
-                Text("tap to pick").font(.system(size: 9)).foregroundStyle(.secondary)
-            } else if let why = entry?.unreadable {
-                // Verbatim, so "reflection" and "blur" tell the user what to change about the shot.
-                Text(why).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
-            } else if !(entry?.isResolved ?? false) {
-                // ⚠️ NOT "tap to pick". A pocket the gate could not read has no candidates to pick
-                // from, and measured over 90 real cells its four best guesses held the true card
-                // **1 time in 12** — so offering them would be wrong eleven times out of twelve.
-                // The old label promised a list and opened a sheet with nothing in it.
-                Text("not read").font(.system(size: 9)).foregroundStyle(.secondary)
-            } else {
-                Text(" ").font(.system(size: 9))     // keeps rows the same height
+            // ⚠️ `.caption2`, not `.system(size: 9)`. These nine words ARE the state of a pocket —
+            // whether it read, whether it's still working, whether it wants a tap — and at 9pt they
+            // were below the 11pt HIG floor AND frozen against Dynamic Type, so a collector who
+            // needs larger text got the one line on this screen that never grew. The font is set
+            // once on the Group rather than per branch: ten copies of the same modifier is how the
+            // size stayed wrong in ten places.
+            Group {
+                if let entry, !entry.isResolved, entry.wishlistCandidate != nil {
+                    Text("probably — tap").foregroundStyle(.pink)
+                } else if let price {
+                    Text(price, format: .currency(code: "USD")).monospacedDigit().lineLimit(1)
+                } else if entry == nil {
+                    Text("empty").foregroundStyle(.secondary)
+                } else if isStillReading {
+                    Text("reading…").foregroundStyle(.secondary)
+                } else if entry?.options.isEmpty == false {
+                    Text("tap to pick").foregroundStyle(.secondary)
+                } else if let why = entry?.unreadable {
+                    // Verbatim, so "reflection" and "blur" tell the user what to change about the shot.
+                    Text(why).foregroundStyle(.secondary).lineLimit(1)
+                } else if !(entry?.isResolved ?? false) {
+                    // ⚠️ NOT "tap to pick". A pocket the gate could not read has no candidates to pick
+                    // from, and measured over 90 real cells its four best guesses held the true card
+                    // **1 time in 12** — so offering them would be wrong eleven times out of twelve.
+                    // The old label promised a list and opened a sheet with nothing in it.
+                    Text("not read").foregroundStyle(.secondary)
+                } else {
+                    Text(" ")     // keeps rows the same height
+                }
             }
+            .font(.caption2)
         }
+        // Caps the caption at the largest NON-accessibility size. A 3×3 grid of pockets is a
+        // fixed-geometry surface — the tiles are the binder page, one per pocket — so past this
+        // point the label grows out of its tile instead of the page reflowing. The card art and
+        // the spoken label below carry the pocket at accessibility sizes; the caption is the
+        // redundant channel, and clipping it would be worse than capping it.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
     }

@@ -150,7 +150,7 @@ struct PortfolioView: View {
                 Text(signed(delta) + (start > 0 ? String(format: " (%+.1f%%)", delta / start * 100) : ""))
                     .font(.subheadline.weight(.semibold))
                     .monospacedDigit()
-                    .foregroundStyle(delta >= 0 ? .green : .red)
+                    .foregroundStyle(delta >= 0 ? Color.statusPositive : Color.statusNegative)
             }
             if sealed.boxes > 0 {
                 Text("\(cards, format: .currency(code: "USD").precision(.fractionLength(0))) in cards · \(sealed.total, format: .currency(code: "USD").precision(.fractionLength(0))) in ^[\(sealed.boxes) sealed box](inflect: true)")
@@ -179,7 +179,7 @@ struct PortfolioView: View {
             if basis > 0 {
                 statCard(label: "You paid", value: basis.formatted(.currency(code: "USD")), tint: .secondary)
                 statCard(label: "Change vs. paid", value: signed(change),
-                         tint: change >= 0 ? .green : .red)
+                         tint: change >= 0 ? Color.statusPositive : Color.statusNegative)
             }
             // Only once something has actually gone — otherwise it's a row of zero for a thing
             // most people never do.

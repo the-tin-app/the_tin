@@ -144,7 +144,7 @@ struct WantedCardsView: View {
                 Text(total, format: .currency(code: "USD")).monospacedDigit()
                 if atTarget > 0 {
                     Text("· \(atTarget) at target")
-                        .foregroundStyle(.green).font(.caption).bold()
+                        .foregroundStyle(Color.statusPositive).font(.caption).bold()
                 }
             }
             .font(.subheadline)
@@ -153,7 +153,7 @@ struct WantedCardsView: View {
             // 67 and says nothing — which is how it was found on device, by counting the web page.
             if let shareLink, shareLink.included < r.allCards.count {
                 Text("A shared link fits the \(shareLink.included) most valuable of these.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Color.statusCaution)
             }
             if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
         }
@@ -384,7 +384,7 @@ private struct WishlistTile: View {
                 Text(usd, format: .currency(code: "USD"))
             }
             .font(.caption2).monospacedDigit()
-            .foregroundStyle(onSale ? Color.green : Color.primary)
+            .foregroundStyle(onSale ? Color.statusPositive : Color.primary)
         }
     }
 }

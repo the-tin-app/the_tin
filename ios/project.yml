@@ -117,6 +117,19 @@ targets:
         # This does NOT expose the app's Documents folder in Files — that's UIFileSharingEnabled,
         # which stays off.
         LSSupportsOpeningDocumentsInPlace: true
+        # ⚠️ **`UIRequiresFullScreen` is DEPRECATED and no longer a reliable opt-out.** It was true
+        # while the app was built against older SDKs; this project now builds with Xcode 26 /
+        # iOS SDK 26, and in iPadOS 26 an app linked against that SDK is freely resizable whatever
+        # this key says. So the long-standing assumption behind "deliberately no NavigationSplitView
+        # adaptation" — that the app only ever renders at one width per device — has a hole in it,
+        # and nothing in the codebase reads a size class (0 occurrences in 31k lines of Swift).
+        #
+        # What holds it up today: every card grid is `GridItem(.adaptive(minimum: 110))`, which
+        # reflows to any width for free, and there are no fixed-width containers — only thumbnails.
+        # So this is expected to degrade gracefully rather than break. **Expected, not verified.**
+        #
+        # ⚠️ The iPad here runs iOS 18.7.9, which CANNOT surface this. Verifying it needs an
+        # iPadOS 26 device or simulator — see `docs/testing/ipad-resizable-window.md`.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         AppIdentifierPrefix: $(AppIdentifierPrefix)

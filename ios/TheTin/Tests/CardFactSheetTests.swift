@@ -107,6 +107,41 @@ final class CardFactSheetTests: XCTestCase {
         XCTAssertLessThanOrEqual(size.height, frame.height + 1, "compact sheet overflowed a grid tile")
     }
 
+    /// ⚠️ The two tests above render at the DEFAULT text size, which is not where this sheet is at
+    /// risk. Its type used to be frozen `.system(size: 8…10)`; it is Dynamic Type now, capped at
+    /// `.accessibility1` for the full sheet and `.xLarge` for a grid tile. The cap is the claim,
+    /// and an uncapped claim is what would overflow — so assert at the cap, with a worst-case card,
+    /// or the sheet is only known to fit at the one size nobody's accessibility settings are on.
+    @MainActor
+    func testTheSheetStillFitsItsCardFrameAtTheLargestSizeItAllows() throws {
+        let detail = CardDetail(category: "Pokemon", stage: "Stage1", evolveFrom: "Sentret",
+                                abilities: [CardAbility(name: "Energy Burn", type: "Pokemon Power",
+                                                        effect: String(repeating: "long effect text. ", count: 6))],
+                                weaknesses: [CardTypeValue(type: "Fighting", value: "×2")],
+                                retreat: 1, regulationMark: "D")
+        let attacks = [Attack(name: "Tail Smash", damage: "90", cost: ["Colorless", "Grass"],
+                              effect: String(repeating: "flip a coin. ", count: 8))]
+        let sheet = CardFactSheet(card: card(attacks: attacks, detail: detail),
+                                  setName: "Darkness Ablaze", setTotal: 189)
+        let frame = CGSize(width: 240, height: 240 / 0.717)
+        // `.accessibility5` is deliberately ABOVE the sheet's own cap: the environment offers the
+        // largest size iOS has, and the sheet's `.dynamicTypeSize(...)` is what must clamp it. If
+        // someone deletes that modifier this renders at accessibility5 for real and overflows.
+        let size = try XCTUnwrap(sizeThatFits(sheet.dynamicTypeSize(.accessibility5), in: frame))
+        XCTAssertLessThanOrEqual(size.height, frame.height + 1,
+                                 "sheet overflowed its card frame at its Dynamic Type ceiling")
+    }
+
+    @MainActor
+    func testTheCompactSheetStillFitsAGridTileAtTheLargestSizeItAllows() throws {
+        let sheet = CardFactSheet(card: card(name: "Iron Valiant ex Tera Type Fighting"),
+                                  density: .compact)
+        let frame = CGSize(width: 56, height: 56 / 0.717)
+        let size = try XCTUnwrap(sizeThatFits(sheet.dynamicTypeSize(.accessibility5), in: frame))
+        XCTAssertLessThanOrEqual(size.height, frame.height + 1,
+                                 "compact sheet overflowed a grid tile at its Dynamic Type ceiling")
+    }
+
     @MainActor
     private func sizeThatFits<V: View>(_ view: V, in frame: CGSize) -> CGSize? {
         let host = UIHostingController(rootView: view.frame(width: frame.width, height: frame.height))

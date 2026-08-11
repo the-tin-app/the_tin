@@ -102,7 +102,7 @@ struct TradeListView: View {
             // the menu item's text has to live beside the count instead.
             if let shareLink, shareLink.included < model.tradeEntries.count {
                 Text("A shared link fits the \(shareLink.included) most valuable of these.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Color.statusCaution)
             }
             if let asOf = model.priceAsOf { AsOfLabel(date: asOf) }
         }
