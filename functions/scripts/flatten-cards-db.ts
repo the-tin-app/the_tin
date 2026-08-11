@@ -16,6 +16,7 @@
 import { readdirSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pickAttacks, pickDetail, type TcgdexAttack, type TcgdexDetail } from "../src/upstream/tcgdex";
 
 // import.meta.dir is Bun-only; fall back to import.meta.url for Node-based
 // runners (e.g. vitest workers) that import this module for its exports.
@@ -57,7 +58,8 @@ export interface FlatCard {
   rarity: string | null;
   artist: string | null;
   text: string; // english ability+attack effects joined by \n
-  attacks: { name: string; damage: string | null; cost: string[] }[];
+  attacks: TcgdexAttack[];
+  detail?: TcgdexDetail; // the rest of the printed card, for the offline fact sheet
   // ordered candidate ids (variant-priority) for the price joins
   tcgplayerIds: number[];
   // ordered [tcgdexVariantType, tcgPlayerId] pairs (same priority order as tcgplayerIds);
@@ -100,17 +102,37 @@ export function dexIdsOf(card: any): number[] {
   return Array.isArray(card?.dexId) ? card.dexId.filter((n: unknown): n is number => typeof n === "number") : [];
 }
 
-/** English attack list (name + damage + energy cost) for the no-image placeholder. */
+/**
+ * The repo's card shape vs the REST API's, flattened to the latter.
+ *
+ * ⚠️ These are TWO SOURCES OF THE SAME CARD and they do NOT agree. The REST API returns already-
+ * localized strings (`effect: "Discard…"`); the repo stores every human-readable field as a
+ * `Languages` map (`effect: { en: "Discard…", fr: … }`), because it is the thing the API is
+ * generated FROM. Everything machine-readable — category, stage, retreat, regulationMark,
+ * trainerType, weaknesses[].type/value — is identical in both and passes straight through.
+ *
+ * This adapter exists so the extractors are shared rather than reimplemented. The nightly builds
+ * from the repo, never from REST, so a field added to `pickDetail`/`pickAttacks` alone reaches
+ * production as a column full of NULLs — which is exactly how `detail` shipped empty in v40.
+ */
+function restShaped(card: any): any {
+  return {
+    ...card,
+    effect: en(card?.effect),
+    evolveFrom: en(card?.evolveFrom),
+    abilities: (card?.abilities ?? []).map((a: any) => ({ ...a, name: en(a?.name), effect: en(a?.effect) })),
+    attacks: (card?.attacks ?? []).map((a: any) => ({ ...a, name: en(a?.name), effect: en(a?.effect) })),
+  };
+}
+
+/** English attack list (name + damage + energy cost + effect) for the offline fact sheet. */
 export function attacksOf(card: any): FlatCard["attacks"] {
-  return (card.attacks ?? []).flatMap((a: any) => {
-    const name = en(a?.name);
-    if (!name) return [];
-    return [{
-      name,
-      damage: a?.damage != null ? String(a.damage) : null,
-      cost: Array.isArray(a?.cost) ? a.cost.filter((c: unknown): c is string => typeof c === "string") : [],
-    }];
-  });
+  return pickAttacks(restShaped(card));
+}
+
+/** The rest of the printed card — abilities, weaknesses, retreat, trainer effect. */
+export function detailOf(card: any): TcgdexDetail | undefined {
+  return pickDetail(restShaped(card));
 }
 
 export function effectText(card: any): string {
@@ -177,6 +199,7 @@ async function main() {
           artist: cardObj.illustrator ?? null,
           text: effectText(cardObj),
           attacks: attacksOf(cardObj),
+          detail: detailOf(cardObj),
           tcgplayerIds: tcgplayer,
           tcgplayerByType,
           cardmarketIds: cardmarket,
@@ -209,6 +232,9 @@ async function main() {
   console.log(`flattened ${cards.length} cards across ${sets.length} sets in ${(dt / 1000).toFixed(1)}s`);
   console.log(`  skipped: ${skippedSets} sets, ${skippedCards} cards (no english name / unloadable)`);
   console.log(`  join keys: ${withTp} cards w/ tcgplayer id, ${withCm} cards w/ cardmarket id`);
+  // Printed here because the failure mode is silent: a field name guessed wrong, or an extractor
+  // wired into the REST client the nightly never calls, yields a column of NULLs and no error.
+  console.log(`  fact sheet: ${cards.filter((c) => c.detail).length} cards w/ detail, ${cards.filter((c) => c.attacks.some((a) => a.effect)).length} w/ attack effects`);
   console.log(`  wrote ${outFile}`);
   const u = cards.find((c) => c.id === "swsh7-215");
   if (u) console.log(`  spot swsh7-215: "${u.name}" hp=${u.hp} tcgplayer=${JSON.stringify(u.tcgplayerIds)} cardmarket=${JSON.stringify(u.cardmarketIds)}`);
