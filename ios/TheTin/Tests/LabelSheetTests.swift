@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 import XCTest
 @testable import TheTin
@@ -83,6 +84,38 @@ final class LabelSheetTests: XCTestCase {
                                    addedAt: Date(timeIntervalSince1970: 0), variant: "holo")
         sold.soldAt = Date(timeIntervalSince1970: 1)
         XCTAssertTrue(LabelSheet.items(entries: [sold], cards: [:], setNames: [:]).isEmpty)
+    }
+
+    /// Nothing on a label truncates — a name wraps to three lines, a set line and a detail to two —
+    /// and that only works if the block still fits the die-cut 1" height. Measured, not derived.
+    ///
+    /// The strings are the CATALOG'S REAL MAXIMA, not invented ones: 49 chars is the longest card
+    /// name in v8 and 39 the longest "set · #number". An over-long fixture would demand a layout
+    /// no card needs; an under-long one would pass while real cards clipped.
+    @MainActor
+    func testTheWorstCaseLabelStillFitsItsDieCut() {
+        let worst = LabelItem(id: "e1",
+                              name: "Team Galactic's Invention G-107 Technical Machine",
+                              setLine: "Brilliant Stars Trainer Gallery · #TG21",
+                              detail: "Reverse Holo · NM · PSA 10",
+                              url: LabelPayload.url(cardId: "sv1-1", printing: .holo,
+                                                    condition: .nm, entryId: "e1"))
+        let size = LabelStock.spartanR005.labelSize
+        let page = LabelSheetPage(page: LabelSheetPageModel(slots: []),
+                                  stock: .spartanR005, offset: .zero)
+        let renderer = ImageRenderer(content: page.label(worst).frame(width: size.width))
+        renderer.scale = 1
+        renderer.proposedSize = ProposedViewSize(width: size.width, height: nil)
+        let height = renderer.uiImage?.size.height ?? .infinity
+        // Upper bound: it must not outgrow the die-cut, or the printer clips it.
+        XCTAssertLessThanOrEqual(height, size.height,
+                                 "label renders \(height) pt into a \(size.height) pt die-cut")
+        // Lower bound: seven wrapped lines have a floor. Cutting a line limit back makes the block
+        // SHORTER, not taller — so without this, the day someone reinstates lineLimit(1) the
+        // upper bound still passes and the truncation ships again.
+        XCTAssertGreaterThan(height, 55,
+                             "\(height) pt is too short to be 3 + 2 + 2 wrapped lines — a row is "
+                             + "truncating again")
     }
 
     /// A card the catalog lost still gets a sticker — the label's job is to identify the thing in
