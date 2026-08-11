@@ -42,8 +42,14 @@ struct LabelPayload: Equatable {
     ///
     /// Rule 3 permits this: parameters are only ever ADDED. A label printed before this still
     /// parses identically, because `parse` ignores `n` exactly as it always did.
+    ///
+    /// `imageURL` is the same deal, and for the same reason: the page cannot look a card up, so
+    /// the art has to travel on the URL. It reuses `img`, which share links have always carried and
+    /// `site/functions/c/[id].js` already renders — so this needs no site change and no new letter.
+    /// A card id alone can NEVER get the page there: `image_base` is an opaque TCGdex asset path
+    /// whose serie segment isn't in the id, and cards TCGdex lacks fall back to the TCGplayer CDN.
     static func url(cardId: String, printing: CardVariant?, condition: CardCondition?,
-                    entryId: String?, name: String? = nil) -> URL {
+                    entryId: String?, name: String? = nil, imageURL: String? = nil) -> URL {
         var components = URLComponents()
         components.scheme = "https"
         components.host = host
@@ -64,6 +70,9 @@ struct LabelPayload: Equatable {
         if let name, !name.isEmpty {
             items.append(URLQueryItem(name: "n", value: String(name.prefix(maxNameLength))))
         }
+        // After `n` for the same reason `n` is after everything else: it is the longest parameter
+        // and the most droppable, so it sits where sacrificing it costs the least.
+        if let imageURL, !imageURL.isEmpty { items.append(URLQueryItem(name: "img", value: imageURL)) }
         components.queryItems = items
         return components.url!
     }
@@ -75,9 +84,10 @@ struct LabelPayload: Equatable {
     ///
     /// `name` is optional because a card the catalog has lost still gets a label — the sticker's
     /// job is to identify the thing in your hand, and that is exactly when it matters most.
-    static func url(for entry: CollectionEntry, name: String? = nil) -> URL {
+    static func url(for entry: CollectionEntry, name: String? = nil,
+                    imageURL: String? = nil) -> URL {
         url(cardId: entry.cardId, printing: entry.variantValue,
-            condition: entry.conditionValue, entryId: entry.id, name: name)
+            condition: entry.conditionValue, entryId: entry.id, name: name, imageURL: imageURL)
     }
 
     /// nil when this isn't a card link at all. A card link with nothing else on it is valid and
