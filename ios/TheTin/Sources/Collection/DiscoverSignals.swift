@@ -62,10 +62,20 @@ enum DismissReason: String, Codable, CaseIterable, Identifiable, Sendable {
     /// What this answer actually moves, shown under the label so the gesture is never a black box.
     ///
     /// ⚠️ The two hide-only cases say so honestly rather than implying a tuning that will not happen.
+    ///
+    /// ⚠️ **These are rendered in a 56.75pt chip and the length is a constraint, not a preference.**
+    /// `CardFeedbackPanel`'s tightest home is a grid cell on a 375pt phone; "Less from this
+    /// generation" needed a third line there and truncated to "Less from this generati…", cutting
+    /// exactly the tune-vs-hide distinction these strings exist to draw. It had done so since the
+    /// panel shipped, invisibly, because the text was 9pt grey.
+    ///
+    /// "gen" rather than "generation" because the app already says Gen — the sets browser groups by
+    /// "Gen N · #lo–hi" under a Generation heading. `DiscoverFeedbackTests` fails if a future string
+    /// outgrows the chip.
     var effect: String {
         switch self {
         case .notMySpecies:      return "Less of this Pokémon"
-        case .wrongEra:          return "Less from this generation"
+        case .wrongEra:          return "Less from this gen"
         case .dontLikeArt:       return "Hides this card"
         case .notWorthThisPrice: return "Hides this card"
         }

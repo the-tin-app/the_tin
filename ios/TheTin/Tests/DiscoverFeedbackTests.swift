@@ -122,66 +122,68 @@ final class DiscoverFeedbackTests: XCTestCase {
         XCTAssertNil(DismissReason(rawValue: "notMyKind"))
     }
 
-    // MARK: - The panel's chip width, measured
+    // MARK: - The panel's chip width
 
-    /// ⚠️ **Every `effect` string is rendered in a ~73pt chip, and two of them do not fit on one
-    /// line at any legible size.** `CardFeedbackPanel` ships at two widths: ~420pt over the 1-up
-    /// deck, and a ~172pt grid cell where each of the four chips is about 73pt. "Less from this
-    /// generation" truncated to "Less from this ge…" there — cutting exactly the tune-vs-hide
-    /// distinction the line exists to draw — and it had done so since the panel shipped. It hid
-    /// because the text was 9pt grey; rendering it at `.caption2` only made it visible.
+    /// ⚠️ **These strings render in a 56.75pt chip, and length is a hard constraint there.**
+    /// `CardFeedbackPanel`'s tightest home is a grid cell on a 375pt phone — SE 2nd/3rd gen, 13
+    /// mini, XS, all supported by the iOS 17 target. "Less from this generation" (25 chars) needed
+    /// a third line and truncated to "Less from this generati…", cutting exactly the tune-vs-hide
+    /// distinction these strings exist to draw. It had done so since the panel shipped, invisibly,
+    /// because the text was 9pt grey.
     ///
-    /// The fix is `lineLimit(2)`. Truncation happens when the string still needs a third line at
-    /// the SMALLEST size `minimumScaleFactor(0.7)` permits, so that is what gets measured —
-    /// caption2 is 11pt, so the floor is 7.7pt.
+    /// ⚠️ **A character budget, deliberately, after three attempts to model the layout failed.**
+    /// The obvious tests are all subtly wrong:
     ///
-    /// ⚠️ The obvious version of this test — render capped, render free, compare heights — is a
-    /// FALSE POSITIVE and was written first. `minimumScaleFactor` shrinks the capped render to fit,
-    /// so it is legitimately shorter than a free one that wrapped at full size; the difference
-    /// measures shrinking, not truncation. It failed on a string that renders perfectly.
+    /// 1. Render capped vs free and compare heights — `minimumScaleFactor` shrinks the capped
+    ///    render, so the difference measures shrinking, not truncation. Failed on a good string.
+    /// 2. Count wrapped lines at the `minimumScaleFactor(0.7)` floor of 7.7pt — too permissive.
+    ///    Passed "Less from this generation" at a width where the renderer visibly truncated it;
+    ///    SwiftUI does not reliably reach its stated floor while it is also wrapping.
+    /// 3. Count wrapped lines at `.caption2`'s full 11pt — too strict. Rejected "Less of this
+    ///    Pokémon", which renders correctly in two lines.
     ///
-    /// Guards the copy as much as the layout: a longer `effect` string fails here.
-    @MainActor
-    func testEveryEffectStringFitsTheNarrowestChipItShipsIn() throws {
+    /// The renderer's real behaviour sits between 2 and 3 and is not a layout constant you can
+    /// compute against. So this asserts a budget anchored to `ImageRenderer` output at 375pt:
+    ///
+    /// | string | chars | renders |
+    /// |---|---|---|
+    /// | "Less from this gen" | 18 | whole |
+    /// | "Less of this Pokémon" | 20 | whole |
+    /// | "Less from this generation" | 25 | **truncates** |
+    ///
+    /// All three observed, not derived. **21–24 is unverified** — the budget is the largest length
+    /// actually seen to render, not the smallest seen to fail.
+    ///
+    /// ⚠️ Character count ignores glyph width, so it is a proxy: a string of 18 wide glyphs could
+    /// still overflow. Raising `maxEffectCharacters` is therefore a deliberate act that needs a
+    /// fresh render, not a number to nudge until the test passes. The harness lives in the PR
+    /// description for #149.
+    private static let maxEffectCharacters = 20
+    /// `shortLabel` carries its own hard newline, so the budget is per line.
+    private static let maxLabelLineCharacters = 12
+
+    func testEveryEffectStringFitsTheNarrowestChipItShipsIn() {
         for reason in DismissReason.allCases {
             XCTAssertLessThanOrEqual(
-                linesNeeded(reason.effect, width: Self.chipWidth), 2,
-                "\(reason.effect) needs a third line at \(Self.chipWidth)pt — it will truncate")
+                reason.effect.count, Self.maxEffectCharacters,
+                "\"\(reason.effect)\" is \(reason.effect.count) characters — it will truncate in "
+                + "the 56.75pt chip on a 375pt phone. Shorten it, or re-render and raise the budget.")
         }
     }
 
-    /// The labels share the chip and carry a hard newline of their own, so they get the same check.
-    @MainActor
-    func testEveryShortLabelFitsTheNarrowestChipItShipsIn() throws {
+    func testEveryShortLabelLineFitsTheNarrowestChipItShipsIn() {
         for reason in DismissReason.allCases {
-            XCTAssertLessThanOrEqual(
-                linesNeeded(reason.shortLabel, width: Self.chipWidth), 2,
-                "\(reason.shortLabel.replacingOccurrences(of: "\n", with: " ")) truncates at "
-                + "\(Self.chipWidth)pt")
+            for line in reason.shortLabel.split(separator: "\n") {
+                XCTAssertLessThanOrEqual(
+                    line.count, Self.maxLabelLineCharacters,
+                    "\"\(line)\" is \(line.count) characters — too wide for the 56.75pt chip.")
+            }
         }
     }
 
-    /// 172pt panel − 10pt padding each side = 152; two columns at 6pt spacing → 73pt.
-    private static let chipWidth: CGFloat = 73
-    /// `.caption2` at the default content size, times `minimumScaleFactor(0.7)`.
-    private static let floorPointSize: CGFloat = 11 * 0.7
-
-    /// Lines the string wraps to at the smallest permitted size, by measuring against the height
-    /// of a single line of the same font rather than assuming a line height.
-    @MainActor
-    private func linesNeeded(_ string: String, width: CGFloat) -> Int {
-        let oneLine = renderedHeight("X", width: width)
-        return Int((renderedHeight(string, width: width) / oneLine).rounded())
-    }
-
-    @MainActor
-    private func renderedHeight(_ string: String, width: CGFloat) -> CGFloat {
-        let text = Text(string)
-            .font(.system(size: Self.floorPointSize))
-            .multilineTextAlignment(.center)
-        let host = UIHostingController(rootView: text.frame(width: width))
-        host.view.setNeedsLayout()
-        host.view.layoutIfNeeded()
-        return host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height
+    /// The string that caused this, kept as an explicit regression: if someone restores the longer
+    /// wording the budget above catches it, and this says why in one line.
+    func testTheWordingThatTruncatedIsStillTooLong() {
+        XCTAssertGreaterThan("Less from this generation".count, Self.maxEffectCharacters)
     }
 }
