@@ -41,8 +41,11 @@ final class BackupServiceTests: XCTestCase {
     private func makeService(collection: LocalCollectionRepository, wants: LocalWantsRepository,
                              setGoals: SetGoalsModel? = nil,
                              debounce: Duration = .seconds(5)) -> BackupService {
+        // A per-service defaults suite: `.standard` is shared by every test in the process (and
+        // survives the run), so the last-written fingerprint would leak between cases.
         BackupService(store: TempDirBackupStore(dir: dir.appendingPathComponent("icloud", isDirectory: true)),
                       collection: collection, wants: wants, setGoals: setGoals, uid: "local",
+                      defaults: UserDefaults(suiteName: "test-\(UUID().uuidString)")!,
                       debounce: debounce, now: { self.fixedNow })
     }
 
@@ -89,6 +92,8 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertNotNil(snapshot.wantEntries?["sv1-25"])
 
         // Two-slot rotation: a second write moves the previous snapshot to the .prev slot.
+        // It has to be a write of something NEW — an unchanged snapshot is skipped now.
+        try await col.addEntry(fixtureEntry(id: "e2", groupId: gid))
         await service.backUpNow()
         let prev = dir.appendingPathComponent("icloud", isDirectory: true)
             .appendingPathComponent(BackupService.prevFileName)
@@ -413,6 +418,40 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertNil(pad.conflict)
         let onDisk = try await pad.loadBackup()
         XCTAssertEqual(onDisk.entries.map(\.id), ["e2"])
+    }
+
+    /// The phantom write: a launch that changed nothing produced a fresh `exportedAt` over
+    /// identical data, which kept the idle iPad permanently "newest" and meant it could never
+    /// fall behind — so the conflict guard could never fire on it (device pair, 2026-08-10).
+    func testAnUnchangedSnapshotIsNotWrittenAgain() async throws {
+        let (phone, collection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await collection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        let file = dir.appendingPathComponent("icloud", isDirectory: true)
+            .appendingPathComponent(BackupService.fileName)
+        let first = try Data(contentsOf: file)
+
+        await phone.backUpNow()   // nothing changed in between
+
+        let prev = dir.appendingPathComponent("icloud", isDirectory: true)
+            .appendingPathComponent(BackupService.prevFileName)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: prev.path),
+                       "a skipped write must not rotate the previous slot away")
+        XCTAssertEqual(try Data(contentsOf: file), first)
+    }
+
+    /// …but a real change still writes.
+    func testAChangedSnapshotIsWritten() async throws {
+        let (phone, collection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await collection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        try await collection.addEntry(fixtureEntry(id: "e2", groupId: ""))
+        await phone.backUpNow()
+
+        let onDisk = try await phone.loadBackup()
+        XCTAssertEqual(Set(onDisk.entries.map(\.id)), ["e1", "e2"])
     }
 
     /// One device, many launches: writing its own backup repeatedly must never look foreign.

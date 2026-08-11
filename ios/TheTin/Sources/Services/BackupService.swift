@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -127,6 +128,34 @@ final class BackupService {
     }
     private static let lastSyncedKey = "backupLastSyncedExportedAt"
 
+    /// Fingerprint of the last payload this device wrote, `exportedAt` excluded.
+    ///
+    /// A launch that changes nothing must not produce a backup. The iPad wrote an identical
+    /// snapshot within ~25 s of every launch, unprompted — each one a fresh `exportedAt` over the
+    /// same data, which made it perpetually "the newest backup" and meant it could never fall
+    /// behind the iPhone, so the conflict guard could never fire on it. Nothing new to say ⇒
+    /// nothing written ⇒ the device that actually changed keeps the newest file.
+    private var lastContentHash: String? {
+        get { defaults.string(forKey: Self.lastHashKey) }
+        set { defaults.set(newValue, forKey: Self.lastHashKey) }
+    }
+    private static let lastHashKey = "backupLastContentHash"
+
+    /// Content identity of a snapshot: everything except when it was taken.
+    ///
+    /// ⚠️ `.sortedKeys` is load-bearing, not tidiness. Without it two encodes of identical data
+    /// came out the same LENGTH with different bytes — dictionary keys in hash order — so every
+    /// comparison said "changed" and the skip never fired. A fingerprint has to be canonical.
+    static func contentHash(_ snapshot: BackupSnapshot) -> String? {
+        var stripped = snapshot
+        stripped.exportedAt = Date(timeIntervalSince1970: 0)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(stripped) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     private let store: BackupStore
     /// Photos are NOT in the snapshot; they ride the same container. Injected so tests can point
     /// it at a temp dir.
@@ -235,6 +264,10 @@ final class BackupService {
         }
         conflict = nil
         let snapshot = await currentSnapshot()
+        if let hash = Self.contentHash(snapshot), hash == lastContentHash {
+            PhotoDiag.record("backUpNow", "skipped — nothing changed since the last backup")
+            return
+        }
         // Photos are the one part of an entry that can be on the device and not in the snapshot,
         // because they are only persisted when the form is SAVED. Counting them here separates
         // "the backup didn't carry them" from "the other device didn't pull them" — the two were
@@ -257,7 +290,10 @@ final class BackupService {
         }.value
         // We now own the file — record it, or the very next write would call our own backup
         // foreign and refuse it.
-        if case .backedUp = status { lastSyncedExportedAt = snapshot.exportedAt }
+        if case .backedUp = status {
+            lastSyncedExportedAt = snapshot.exportedAt
+            lastContentHash = Self.contentHash(snapshot)
+        }
     }
 
     /// The backup in iCloud, when it is newer than the one this device last wrote or restored
@@ -396,6 +432,7 @@ final class BackupService {
         // Restoring from it is what makes it ours. Without this the device would refuse to back
         // up afterwards, calling the very snapshot it is now running on "another device's".
         lastSyncedExportedAt = snapshot.exportedAt
+        lastContentHash = Self.contentHash(snapshot)
         conflict = nil
         let photos = self.photos
         let needed = PhotoStore.needed(from: snapshot.entries)
