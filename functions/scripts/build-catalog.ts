@@ -415,6 +415,7 @@ async function main() {
       id: c.id, localId: c.localId, name: c.name, hp: c.hp,
       types: c.types, rarity: c.rarity, artist: c.artist, text: c.text,
       attacks: c.attacks ?? [], // pre-attacks metadata JSON lacks the field
+      detail: c.detail, // ditto — undefined on a metadata JSON built before detailOf existed
       imageBase, rawUsd, rawEur,
     };
     if (!cardsBySet.has(c.setId)) cardsBySet.set(c.setId, []);
