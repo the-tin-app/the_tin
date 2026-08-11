@@ -40,26 +40,31 @@ struct OriginCatalogRemote: CatalogRemote {
         return (m.version, m.tiers.mapValues { $0.sizeBytes })
     }
 
-    func fetchData(path: String) async throws -> Data { try await get(path) }
+    /// ⚠️ Artifacts, unlike the manifest, get `artifactTimeout` — see its doc comment. Both
+    /// `fetchData` overloads are artifact paths; everything else here is the small manifest.
+    func fetchData(path: String) async throws -> Data {
+        try await get(path, timeout: AppConfig.artifactTimeout)
+    }
 
     func fetchData(path: String, onBytes: @escaping @Sendable (Int) -> Void) async throws -> Data {
-        try await get(path, onBytes: onBytes)
+        try await get(path, timeout: AppConfig.artifactTimeout, onBytes: onBytes)
     }
 
     /// GET `<baseURL>/catalog/<path>`; on 401 re-authorize once and retry.
     private func get(_ path: String,
+                     timeout: TimeInterval = AppConfig.selfHostTimeout,
                      onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
-        do { return try await send(path, refresh: false, onBytes: onBytes) }
+        do { return try await send(path, refresh: false, timeout: timeout, onBytes: onBytes) }
         catch CatalogError.httpStatus(401) {
-            return try await send(path, refresh: true, onBytes: onBytes)
+            return try await send(path, refresh: true, timeout: timeout, onBytes: onBytes)
         }
     }
 
-    private func send(_ path: String, refresh: Bool,
+    private func send(_ path: String, refresh: Bool, timeout: TimeInterval,
                       onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
         let url = baseURL.appendingPathComponent("catalog").appendingPathComponent(path)
         var req = URLRequest(url: url)
-        req.timeoutInterval = AppConfig.selfHostTimeout
+        req.timeoutInterval = timeout
         try await authorize(&req, refresh)
         let (data, response) = if let onBytes {
             try await http.send(req, onBytes: onBytes)

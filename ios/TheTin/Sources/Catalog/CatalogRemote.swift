@@ -92,9 +92,22 @@ enum AppConfig {
         return URL(string: "https://apithetin.reyes.ai")
     }()
 
-    /// Per-request timeout on every self-host call; on expiry the composite falls back to the R2
-    /// backup origin.
+    /// Per-request timeout on the SMALL self-host calls (manifest, health, challenge, attest); on
+    /// expiry the composite falls back to the R2 backup origin. Small and deliberate: these are
+    /// short JSON round-trips and 5 s is how fast we want the failover decision made.
     static let selfHostTimeout: TimeInterval = 5
+
+    /// Timeout for a catalog ARTIFACT download, which is 26–179 MB and cannot share the number
+    /// above. `URLRequest.timeoutInterval` is an *idle* timeout — it fires after N seconds with no
+    /// bytes, however healthy the transfer — so 5 s aborted any download that stalled briefly on a
+    /// home upstream. Measured 2026-08-11 on the served zone: the NAS delivered a mean of 36.9 MB
+    /// per `average-v39.sqlite.gz` request against 51.43 MB on the object, i.e. **72% of the bytes**,
+    /// with **zero 5xx in six days** — the edge logs 200 because the status ships with the headers,
+    /// which is exactly why this hid. Roughly 13% of catalog downloads then re-fetched the whole
+    /// artifact from R2. The control that proves it: `OriginFingerprintRemote` never sets
+    /// `timeoutInterval`, so its 52.4 MB parts run on URLSession's 60 s default over the same box,
+    /// tunnel and hours — and complete at 100%.
+    static let artifactTimeout: TimeInterval = 60
 
     /// Which catalog tier the self-hosted client downloads: "casual" | "average" | "expert".
     /// User-changeable in Settings, persisted in UserDefaults; defaults to the average archetype
