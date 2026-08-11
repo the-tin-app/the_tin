@@ -11,13 +11,17 @@ struct CollectionEntryRow: View {
     /// Sold rows have no current value *by definition*, so they leave the price column empty
     /// rather than claiming the catalog failed them.
     var hidesNoData: Bool = false
+    /// Given, the row carries a visible Edit chip between the name and the price. Editing used to
+    /// be a long-press or a leading swipe — both invisible. Rows with no edit verb (trade pickers,
+    /// the trade list) pass nothing and are unchanged.
+    var onEdit: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
             if let card {
                 CardImageView(card: card, quality: "low").frame(width: 44)
                 VStack(alignment: .leading) {
-                    Text(card.name)
+                    Text(card.name).lineLimit(2)
                     Text("×\(entry.qty)\(entry.variantValue.map { " · \($0.label)" } ?? "")\(entry.condition.map { " · \($0)" } ?? "")\(entry.gradeValue.map { " · \($0.label)" } ?? "")")
                         .font(.caption).foregroundStyle(.secondary)
                     if let dividerName {
@@ -27,6 +31,21 @@ struct CollectionEntryRow: View {
                     }
                 }
                 Spacer()
+                if let onEdit {
+                    Button(action: onEdit) {
+                        Label("Edit", systemImage: "pencil")
+                            .font(.caption.weight(.semibold))
+                            .labelStyle(.titleAndIcon)
+                            .lineLimit(1)
+                            // Without this the row squeezes the chip before the name and it
+                            // renders as "Edi / t". The name truncates instead.
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+                    .accessibilityLabel("Edit entry")
+                }
                 VStack(alignment: .trailing, spacing: 2) {
                     PriceLabel(value: value, hidesNoData: hidesNoData)
                     DeltaBadge(record: delta)
@@ -451,8 +470,10 @@ struct GroupDetailView: View {
         }
     }
 
-    // Tap shows the card — the app-wide "open a card" verb (the cards are the hero);
-    // editing is the deliberate second gesture, on leading swipe + long-press.
+    // Tap still shows the card — the app-wide "open a card" verb — but editing was only ever a
+    // long-press or a leading swipe, i.e. invisible. The row reads name · Edit · price · chevron:
+    // the chip is the edit affordance, the chevron the one for details. While selecting there is
+    // no chip: the tap belongs to the tick.
     @ViewBuilder
     private func row(_ entry: CollectionEntry, showDivider: Bool) -> some View {
         let content = CollectionEntryRow(
@@ -461,7 +482,8 @@ struct GroupDetailView: View {
             dividerName: showDivider
                 ? model.groups.first(where: { $0.id == entry.groupId })?.name : nil,
             value: model.entryValue(entry),
-            delta: deltaRecord(entry))
+            delta: deltaRecord(entry),
+            onEdit: isSelecting ? nil : { editingEntry = entry })
         // A NavigationLink row owns its own tap, so in selection mode it eats the tick instead of
         // toggling — the row has to be a plain, selectable row while selecting. `.tag` pins the
         // selection identity either way rather than leaving it to be inferred.
