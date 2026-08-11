@@ -145,7 +145,12 @@ struct PhotoStore: Sendable {
     /// them under names no entry references. A known path needs neither. The tests missed all of
     /// this because their double is a plain temp dir, where enumeration is instant and total.
     func mirrorDown(needed: [String: [String]]) {
-        guard !needed.isEmpty else { return }
+        guard !needed.isEmpty else {
+            // Recorded, not silent. This returned quietly once and the empty trail read as "the
+            // pull never ran" when it had run and found nothing to want (iPad, 2026-08-10).
+            PhotoDiag.record("mirrorDown", "no entry references a photo")
+            return
+        }
         guard let mirror, let container = mirror.containerURL() else {
             PhotoDiag.record("mirrorDown", "no iCloud container")
             return

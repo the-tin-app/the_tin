@@ -193,6 +193,13 @@ final class BackupService {
         pendingWrite?.cancel()   // a manual backup supersedes any armed debounce
         guard !Task.isCancelled else { return }   // a cancelled caller must not snapshot empty streams
         let snapshot = await currentSnapshot()
+        // Photos are the one part of an entry that can be on the device and not in the snapshot,
+        // because they are only persisted when the form is SAVED. Counting them here separates
+        // "the backup didn't carry them" from "the other device didn't pull them" — the two were
+        // indistinguishable from the receiving end.
+        PhotoDiag.record("backUpNow",
+                         "\(PhotoStore.needed(from: snapshot.entries).count) of "
+                         + "\(snapshot.entries.count) entries have photos")
         let store = self.store
         status = await Task.detached { () -> Status in
             guard let dir = store.containerURL() else { return .unavailable }
