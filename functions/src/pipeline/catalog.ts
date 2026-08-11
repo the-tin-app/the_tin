@@ -13,6 +13,13 @@ export interface CatalogInput {
   dexByCard: Map<string, number[]>;
   pokemonNames: Map<number, string>;
   twins?: [string, string][];
+  /**
+   * Free-form artifact facts the app reads back, e.g. the EUR→USD rate a Japanese price was
+   * converted at and the day the ECB published it. A price shown without the rate that produced
+   * it cannot be footnoted honestly, and the rate belongs to the artifact that used it — not to
+   * the manifest, which the nightly rewrites independently.
+   */
+  meta?: Record<string, string>;
 }
 
 const SCHEMA = `
@@ -63,6 +70,10 @@ CREATE TABLE price_matrix(card_id TEXT NOT NULL REFERENCES card(id), printing TE
   PRIMARY KEY(card_id, printing, condition));
 CREATE INDEX idx_price_matrix_card ON price_matrix(card_id);
 CREATE TABLE card_twin(card_id TEXT NOT NULL, twin_id TEXT NOT NULL, PRIMARY KEY(card_id, twin_id));
+-- Artifact-level facts, deliberately key/value rather than columns: this exists so a new one
+-- (an FX rate today, something else later) never means another schema migration on a 230 MB
+-- artifact every device re-downloads. Absent keys are normal; readers must tolerate an empty table.
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE sealed_product(tcgplayer_id INTEGER PRIMARY KEY, name TEXT NOT NULL, set_id TEXT, product_type TEXT,
   market_usd REAL, low_usd REAL, as_of TEXT);
 CREATE INDEX idx_sealed_product_set ON sealed_product(set_id);
@@ -104,10 +115,12 @@ export function buildCatalog(input: CatalogInput, outPath: string): void {
   const insPokemon = db.prepare("INSERT INTO pokemon VALUES (?,?,?)");
   const insCardDex = db.prepare("INSERT INTO card_dex VALUES (?,?)");
   const insTwin = db.prepare("INSERT OR IGNORE INTO card_twin VALUES (?,?)");
+  const insMeta = db.prepare("INSERT OR REPLACE INTO meta VALUES (?,?)");
 
   const allCardIds = new Set<string>();
 
   db.transaction(() => {
+    for (const [key, value] of Object.entries(input.meta ?? {})) insMeta.run(key, value);
     // price/card lookup maps for representative selection — built as a no-DB-write pass so
     // set_info rows (which need rep_card_id) can be inserted before card rows, satisfying the
     // card.set_id -> set_info(id) foreign key (better-sqlite3 enforces FKs by default).
