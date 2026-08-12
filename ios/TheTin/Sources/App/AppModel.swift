@@ -567,6 +567,9 @@ final class AppModel {
         wants.onWriteError = { [weak collection] message in
             collection?.writeError = .init(message: message)
         }
+        wants.onWishlistAdd = { [weak self] in
+            self?.confirm("On your wishlist", route: .wishlist)
+        }
         self.wants = wants
     }
 

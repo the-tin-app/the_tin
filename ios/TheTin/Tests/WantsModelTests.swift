@@ -82,6 +82,32 @@ final class WantsModelTests: XCTestCase {
         XCTAssertEqual(model.wanted, ["c1"])
     }
 
+    /// The heart is the only "I want this" gesture in the app and it had no feedback at all.
+    /// The hook lives in `toggle` rather than at the seven call sites, so Discover, the card
+    /// detail screen and the quick actions cannot drift apart.
+    func testHeartingACardAnnouncesItOnce() {
+        let model = WantsModel(repo: InMemoryWantsRepository(), uid: "u1")
+        var announced = 0
+        model.onWishlistAdd = { announced += 1 }
+
+        model.toggle("sv1-25")
+        XCTAssertEqual(announced, 1)
+
+        // Un-hearting is not an add — it must stay silent.
+        model.toggle("sv1-25")
+        XCTAssertEqual(announced, 1, "un-hearting should not announce")
+    }
+
+    /// Bulk add ("everything I'm missing from this set") deliberately does NOT announce: the
+    /// screen that offers it already reports what it did, and one toast after 60 cards is noise.
+    func testBulkAddStaysSilent() {
+        let model = WantsModel(repo: InMemoryWantsRepository(), uid: "u1")
+        var announced = 0
+        model.onWishlistAdd = { announced += 1 }
+        model.addMany(["sv1-25", "sv1-26", "sv1-27"])
+        XCTAssertEqual(announced, 0)
+    }
+
     /// `WantsModel.persist` writes through an unstructured `Task`, so the repo lands on its own
     /// schedule. These tests used to sleep a fixed 20 ms and assert — which loses the race under
     /// load and made the suite intermittently red (one failure per few full runs, previously

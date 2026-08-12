@@ -10,6 +10,10 @@ final class WantsModel {
     private let uid: String
     /// Routes write failures into the same alert sink as collection writes. Set by AppModel.
     var onWriteError: ((String) -> Void)?
+    /// Fires when a heart ADDS a card — never on un-heart, never on `addMany`. Set by AppModel,
+    /// which owns the toast. Here rather than at the seven `toggle` call sites so they cannot
+    /// drift apart.
+    var onWishlistAdd: (() -> Void)?
 
     init(repo: WantsRepository, uid: String) {
         self.repo = repo; self.uid = uid
@@ -22,7 +26,12 @@ final class WantsModel {
     /// Heart on/off. New wishes start at default priority/no-target/no-notes.
     func toggle(_ cardId: String) {
         let previous = entries
-        if entries[cardId] == nil { entries[cardId] = WantEntry() } else { entries[cardId] = nil }
+        if entries[cardId] == nil {
+            entries[cardId] = WantEntry()
+            onWishlistAdd?()
+        } else {
+            entries[cardId] = nil
+        }
         persist(rollbackTo: previous)
     }
 
