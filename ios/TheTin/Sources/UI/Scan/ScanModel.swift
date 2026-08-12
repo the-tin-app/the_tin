@@ -17,6 +17,31 @@ struct FrameOutcome {
     var confirmationsNeeded: Int = 0
 }
 
+/// Decides when the camera may drop to its idle frame rate. Pure policy, no camera and no CV,
+/// so the rule that governs the scanner's power draw is checkable without either.
+///
+/// The scanner is left open and face-up on a table between stacks of cards. At the capture
+/// session's default rate that idle time costs a document-segmentation pass ~22 times a second
+/// against a tabletop, plus the ISP behind it, indefinitely — which is what makes the phone hot
+/// during a long look-up session.
+struct CameraThrottle {
+    /// Consecutive empty frames before idling. Comfortably above `LockConfig.graceMisses` (12),
+    /// which is the run of dropouts a card being held by hand is already expected to produce —
+    /// idle below that and a mid-scan flicker would throttle the camera during a real scan.
+    static let emptyFramesBeforeIdle = 30
+    private var empty = 0
+    private(set) var isIdle = false
+
+    /// Returns the frame rate the camera should now be at, as `isIdle`.
+    mutating func update(cardVisible: Bool, modal: Bool) -> Bool {
+        // A modal sheet idles immediately AND holds the empty count at zero, so dismissing it
+        // returns to the scanning rate on the very next frame instead of after a fresh streak.
+        empty = (cardVisible || modal) ? 0 : empty + 1
+        isIdle = modal || empty >= Self.emptyFramesBeforeIdle
+        return isIdle
+    }
+}
+
 /// Owns the stateful/heavy per-frame CV cascade (detect → quality-gate → fingerprint →
 /// OCR gate → match → session) off the main actor so live 30fps camera capture doesn't
 /// jank the UI. `ScanModel` only reads the `FrameOutcome` back on main.
@@ -219,6 +244,9 @@ final class ScanModel {
     private let staging: ScanStagingStore
     private let store: CatalogStore
     private let pipeline: ScanPipeline
+    /// Written on every frame and read by nothing on screen — kept out of Observation so it
+    /// can't register a dependency at camera rate.
+    @ObservationIgnored private var throttle = CameraThrottle()
 
     /// Shown while nothing is detected. The frame rectangle on screen already says this, so
     /// the view suppresses it — named here so the two can't drift apart.
@@ -364,7 +392,18 @@ final class ScanModel {
 
     func run(source: FrameSource) async {
         for await pb in source.stream() {
+            // A chooser or a presented look-up card is modal, and `handle` already discards every
+            // event while one is up — but the cascade behind that event ran anyway. In look-up
+            // mode that is most of a session: the whole time you spend reading the card you just
+            // scanned, the phone is grinding OCR + ORB + RANSAC on frames whose results are
+            // thrown away on arrival. Skip the work, not just the result.
+            let modal = lookedUpCardId != nil || !ambiguous.isEmpty
+            if modal {
+                source.setIdle(throttle.update(cardVisible: false, modal: true))
+                continue
+            }
             let out = await pipeline.process(pb)          // runs OFF the main actor
+            source.setIdle(throttle.update(cardVisible: !out.noCard, modal: false))
             if out.noCard {
                 guidance = Self.idleGuidance; bestGuess = nil; bestGuessName = nil
                 confirmations = 0
