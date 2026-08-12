@@ -562,6 +562,21 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.labelRequest?.title, "Charizard")
         XCTAssertEqual(model.labelRequest?.entries.map { $0.id }, ["e1"])
     }
+
+    /// Submitting a BGTaskScheduler request whose id was never registered raises an **ObjC**
+    /// `NSInternalInconsistencyException`, which the `try?` at the submit site does not catch — it
+    /// takes the whole test host down. `register` is skipped under XCTest, so submitting has to be
+    /// too, and this asserts the two agree.
+    ///
+    /// Worth its own test because the failure it guards is *anonymous*: the app backgrounds at
+    /// whatever moment the run happens to reach, so the crash was attributed to whichever
+    /// unrelated test was mid-flight — three different innocent suites on two runs, every one of
+    /// them passing in isolation. Remove either guard and THIS test dies instead, by name.
+    func testSchedulingBackgroundWorkUnderTestIsANoOpRatherThanACrash() {
+        XCTAssertTrue(BackgroundRefresh.isTesting, "the flag every guard here depends on")
+        BackgroundRefresh.scheduleRefresh()
+        BackgroundRefresh.scheduleDownload()
+    }
 }
 
 private extension ISO8601DateFormatter {
