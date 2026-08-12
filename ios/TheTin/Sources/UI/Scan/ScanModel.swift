@@ -441,6 +441,14 @@ final class ScanModel {
         // running underneath, and a second lock landing while the sheet is up would swap the card
         // out from under you (or, with `.sheet(item:)`, silently fail to re-present). Cleared by
         // `clearLookedUpCard()` on dismiss, which also resets the session.
+        //
+        // ⚠️ DO NOT narrow this to `isModalPresented`, however tempting the symmetry looks. There is
+        // no sheet at all on a borrowed viewfinder, and this guard is still what makes that path
+        // correct: it discards events for the few ms between `stage()` setting the id and
+        // `ScanView`'s `onChange` Task clearing it, so one card cannot be handed to a trade twice.
+        // The throttle asks "is something on screen" and must exclude a handoff; this asks "has a
+        // card already been claimed" and must not. Same field, two different questions — which is
+        // the overload that produced the #154/#155 collision in the first place (#156).
         if lookedUpCardId != nil { return }
         switch event {
         case .idle: break
