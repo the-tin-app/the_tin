@@ -55,7 +55,8 @@ final class ContrastTests: XCTestCase {
     func testStatusColorsClearTheSmallTextFloorInBothAppearances() {
         let cases: [(String, Color)] = [("statusPositive", .statusPositive),
                                         ("statusNegative", .statusNegative),
-                                        ("statusCaution", .statusCaution)]
+                                        ("statusCaution", .statusCaution),
+                                        ("statusWishlist", .statusWishlist)]
         for (name, color) in cases {
             for style in [UIUserInterfaceStyle.light, .dark] {
                 for (bgName, bg) in backgrounds(style) {
@@ -95,6 +96,56 @@ final class ContrastTests: XCTestCase {
                     "\(type) letters on their own capsule are \(r) in \(style == .light ? "light" : "dark")")
             }
         }
+    }
+
+    // MARK: - The call sites
+
+    /// ⚠️ **The test above guards the TOKEN. This one guards the CALL SITES, and it exists because
+    /// the token alone stopped nothing.** `StatusColor.swift` and its assertions shipped in the
+    /// same week as five surviving bare `.green`s — including both delta figures on Movers, which
+    /// are the entire content of that screen. A sweep is a one-time act; nothing prevented the
+    /// *next* `.green` from being typed, and an audit found them by grep in under a minute.
+    ///
+    /// So the grep is the test. Scope is deliberately narrow — `foregroundStyle` / `foregroundColor`
+    /// only, which is where text colour lives and where every one of the failures actually was:
+    ///
+    /// - **`.tint(.red)` is NOT scanned.** A destructive swipe action is white-on-red and correct;
+    ///   a `.bordered` button's tint is coloured text on near-white and is not. A grep cannot tell
+    ///   those two apart, and a test that guesses would be dismissed the first time it cried wolf.
+    ///   `SetDetailView`'s collect button was the real one and is fixed by hand.
+    /// - **`UI/Print/` is excluded wholesale** — fixed-canvas PDF pages that draw black on white,
+    ///   exempt from the Dynamic Type rule for the same reason.
+    ///
+    /// Deliberate exceptions carry `// contrast-ok:` **on the same line**, so the reason lives at
+    /// the site instead of in an allowlist here that nobody would read. `BinderView` is the real
+    /// case: its camera header sits on a fixed `.black.opacity(0.55)` scrim where `.orange` is
+    /// ~10:1 and a status token would make the text *worse*.
+    func testNoBareStatusColorReachesTextAgain() throws {
+        let sources = URL(fileURLWithPath: #filePath)   // …/TheTin/Tests/ContrastTests.swift
+            .deletingLastPathComponent()                // …/TheTin/Tests
+            .deletingLastPathComponent()                // …/TheTin
+            .appendingPathComponent("Sources/UI")
+        let files = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" && !$0.path.contains("/UI/Print/") } ?? []
+
+        // A layout change that moves this file would otherwise turn the whole test into a silent
+        // pass over zero files — the exact failure mode it was written to prevent.
+        XCTAssertGreaterThan(files.count, 50, "scanned \(files.count) files — path is wrong")
+
+        let banned = [".green", ".red", ".orange", ".pink", ".yellow"]
+        var offences: [String] = []
+        for file in files {
+            for (n, line) in try String(contentsOf: file, encoding: .utf8)
+                .split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                guard line.contains("foregroundStyle(") || line.contains("foregroundColor(") else { continue }
+                guard !line.contains("contrast-ok:") else { continue }
+                for color in banned where line.contains(color) && !line.contains("Color\(color)") {
+                    offences.append("\(file.lastPathComponent):\(n + 1) — bare \(color)")
+                }
+            }
+        }
+        XCTAssertEqual(offences, [], "bare system colors on text:\n" + offences.joined(separator: "\n"))
     }
 
     /// An unknown type still has to be readable — `EnergyChip.color` falls back to grey and the

@@ -223,7 +223,7 @@ private struct MarketMoverRow: View {
             Text((row.pct > 0 ? "+" : "−") + abs(row.pct).formatted(.percent.precision(.fractionLength(1))))
                 .font(.system(.subheadline, design: .rounded).weight(.bold))
                 .monospacedDigit()
-                .foregroundStyle(row.pct > 0 ? .green : .red)
+                .foregroundStyle(row.pct > 0 ? Color.statusPositive : Color.statusNegative)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(card?.name ?? row.cardId), \(row.usd.formatted(.currency(code: "USD"))), \(row.pct >= 0 ? "up" : "down") \(abs(row.pct).formatted(.percent.precision(.fractionLength(1))))\(wanted ? ", on your wishlist" : "")\(owned ? ", in your tin" : "")")
@@ -248,7 +248,7 @@ private struct MoverRow: View {
                 Text(signed(row.impact))
                     .font(.system(.subheadline, design: .rounded).weight(.bold))
                     .monospacedDigit()
-                    .foregroundStyle(row.impact > 0 ? .green : .red)
+                    .foregroundStyle(row.impact > 0 ? Color.statusPositive : Color.statusNegative)
                 if let pct = row.pct {
                     Text(pct, format: .percent.precision(.fractionLength(1)))
                         .font(.caption2).foregroundStyle(.secondary).monospacedDigit()

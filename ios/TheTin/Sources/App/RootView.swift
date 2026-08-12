@@ -512,7 +512,17 @@ private struct ReducedDataBanner: View {
         }
         .font(.caption.bold())
         .padding(.vertical, 6).frame(maxWidth: .infinity)
-        .background(.yellow.opacity(0.9))
+        // ⚠️ **`ignoresSafeAreaEdges: []` is load-bearing, and only on iPad.** `background(_:)`
+        // defaults to `.all`, so a view inside a top `safeAreaInset` paints the whole safe-area
+        // region above itself. On iPhone that region is already filled by the navigation bar and
+        // nothing showed — for the app's entire life. On **iPadOS 26 the tab bar floats at the top
+        // and there is no nav bar there**, so this banner painted the status bar and the area
+        // behind the floating tab pills: a full-bleed yellow header, on an app whose brief names
+        // "kiddie Pokémon kitsch — no Pikachu-yellow" as an anti-reference.
+        //
+        // Found by rendering on an iPadOS 26 simulator, which is the ONLY thing that surfaces it —
+        // the test iPad runs 18.7.9 and cannot. Do not delete this argument to tidy the call.
+        .background(.yellow.opacity(0.9), ignoresSafeAreaEdges: [])
         .foregroundStyle(.black)
     }
 }
@@ -527,7 +537,9 @@ private struct OfflineBanner: View {
         }
         .font(.caption.bold())
         .padding(.vertical, 6).frame(maxWidth: .infinity)
-        .background(.orange.opacity(0.9))
+        // Same safe-area bleed as `ReducedDataBanner` — this one is topmost whenever you're
+        // offline, which is exactly when it will be seen.
+        .background(.orange.opacity(0.9), ignoresSafeAreaEdges: [])
         .foregroundStyle(.black) // white-on-orange fails contrast; black is ~9.5:1
     }
 }

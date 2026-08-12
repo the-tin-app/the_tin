@@ -102,7 +102,7 @@ struct TradeCatalogPicker: View {
                             // you're actually hunting, without reading every name.
                             if wants?.isWanted(card.id) == true {
                                 Image(systemName: "heart.fill")
-                                    .font(.caption2).foregroundStyle(.pink)
+                                    .font(.caption2).foregroundStyle(.pink) // contrast-ok: glyph, not text
                                     .accessibilityLabel("On your wanted list")
                             }
                         }

@@ -27,13 +27,16 @@ struct FundingBar: View {
         Group {
             if collapsed { collapsedStrip } else { expanded }
         }
-        .background(.thinMaterial)
+        // ⚠️ `ignoresSafeAreaEdges: []` — see `ReducedDataBanner` for why. This bar and the two
+        // banners above it live in one top `safeAreaInset`, and whichever is topmost paints the
+        // region behind iPadOS 26's floating tab bar unless it is told not to.
+        .background(.thinMaterial, ignoresSafeAreaEdges: [])
     }
 
     private var collapsedStrip: some View {
         Button { setCollapsed(false) } label: {
             HStack(spacing: 8) {
-                Image(systemName: "heart.fill").foregroundStyle(.pink).font(.caption)
+                Image(systemName: "heart.fill").foregroundStyle(.pink).font(.caption) // contrast-ok: glyph, not text
                 Text(collapsedText)
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 8)

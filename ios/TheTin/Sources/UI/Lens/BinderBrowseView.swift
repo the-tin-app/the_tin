@@ -83,7 +83,7 @@ struct BinderBrowseView: View {
                     if model.wishlistHitCount > 0 {
                         Label("^[\(model.wishlistHitCount) wishlist hit](inflect: true)",
                               systemImage: "heart.fill")
-                            .foregroundStyle(.pink)
+                            .foregroundStyle(Color.statusWishlist)
                     }
                 }
             }
@@ -98,7 +98,8 @@ struct BinderBrowseView: View {
                 }
                 if model.unresolvedCount > 0 { Text("\(model.unresolvedCount) need a choice") }
                 if model.unconfirmedWishlistCount > 0 {
-                    Text("\(model.unconfirmedWishlistCount) to confirm").foregroundStyle(.pink)
+                    Text("\(model.unconfirmedWishlistCount) to confirm")
+                        .foregroundStyle(Color.statusWishlist)
                 }
                 if model.unreadCount > 0 { Text("\(model.unreadCount) unread") }
             }
@@ -195,7 +196,7 @@ private struct Pocket: View {
             .overlay(alignment: .topTrailing) {
                 if entry?.onWishlist == true {
                     Image(systemName: "heart.fill")
-                        .font(.system(size: 9)).foregroundStyle(.white)
+                        .font(.caption2).foregroundStyle(.white)
                         .padding(3).background(Circle().fill(.pink))
                         .padding(2)
                         .accessibilityHidden(true)
@@ -210,7 +211,7 @@ private struct Pocket: View {
             // size stayed wrong in ten places.
             Group {
                 if let entry, !entry.isResolved, entry.wishlistCandidate != nil {
-                    Text("probably — tap").foregroundStyle(.pink)
+                    Text("probably — tap").foregroundStyle(Color.statusWishlist)
                 } else if let price {
                     Text(price, format: .currency(code: "USD")).monospacedDigit().lineLimit(1)
                 } else if entry == nil {
@@ -301,7 +302,8 @@ struct BinderSlotSheet: View {
                         }
                     }
                     if entry.onWishlist {
-                        Label("On your wishlist", systemImage: "heart.fill").foregroundStyle(.pink)
+                        Label("On your wishlist", systemImage: "heart.fill")
+                            .foregroundStyle(Color.statusWishlist)
                     }
                 }
             }
@@ -535,9 +537,10 @@ private struct BinderRowView: View {
                     // guess is that pass A has no separation, OCR or twin check behind it.
                     Text(row.onWishlist ? "Probably on your wishlist — tap to confirm"
                                         : "Not confirmed — tap to confirm")
-                        .font(.caption2).foregroundStyle(.pink)
+                        .font(.caption2).foregroundStyle(Color.statusWishlist)
                 } else if row.onWishlist {
-                    Text("On your wishlist").font(.caption2).foregroundStyle(.pink)
+                    Text("On your wishlist").font(.caption2)
+                        .foregroundStyle(Color.statusWishlist)
                 } else if row.owned {
                     Text("Already in your tin").font(.caption2).foregroundStyle(.secondary)
                 }

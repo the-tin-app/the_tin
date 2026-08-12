@@ -6,6 +6,7 @@ import UIKit
 struct RemoteImage: View {
     let url: URL?
     @State private var image: Image?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -23,7 +24,10 @@ struct RemoteImage: View {
         image = nil
         guard let url, let data = await ImageCache.shared.image(for: url),
               let ui = UIImage(data: data) else { return }
-        withAnimation(.easeOut(duration: 0.25)) { image = Image(uiImage: ui) }
+        // Same cross-fade as `CardImageView.decoded`, and it needs the same guard — this one was
+        // missing it, so Reduce Motion was honoured on card art and ignored on sealed art.
+        if reduceMotion { image = Image(uiImage: ui) }
+        else { withAnimation(.easeOut(duration: 0.25)) { image = Image(uiImage: ui) } }
     }
 }
 

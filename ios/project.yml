@@ -124,12 +124,33 @@ targets:
         # adaptation" — that the app only ever renders at one width per device — has a hole in it,
         # and nothing in the codebase reads a size class (0 occurrences in 31k lines of Swift).
         #
-        # What holds it up today: every card grid is `GridItem(.adaptive(minimum: 110))`, which
-        # reflows to any width for free, and there are no fixed-width containers — only thumbnails.
-        # So this is expected to degrade gracefully rather than break. **Expected, not verified.**
+        # ✅ **VERIFIED 2026-08-11 on an iPadOS 26 simulator (iPad Pro 11" M4, 834 pt portrait)** —
+        # this block used to end "expected to degrade gracefully rather than break. **Expected, not
+        # verified.**" It is verified now, and the expectation was RIGHT about layout and WRONG
+        # about chrome:
         #
-        # ⚠️ The iPad here runs iOS 18.7.9, which CANNOT surface this. Verifying it needs an
-        # iPadOS 26 device or simulator — see `docs/testing/ipad-resizable-window.md`.
+        # - **Layout holds.** Discover's shelves reflow to the wider width, the tin's dividers and
+        #   rows lay out correctly, and the For You sheet presents as a proper centred form sheet.
+        #   Nothing reads as a stretched phone. The app also picks up **iPadOS 26's floating top
+        #   tab bar for free**, because it uses a stock `TabView`.
+        # - **Measured, so the width axis needs no size class:** the widest fixed container in
+        #   `Sources/UI` outside `UI/Print/` is **126 pt** (`ReportPages` photo tile); every card
+        #   grid is `GridItem(.adaptive(minimum: 110))` or `.flexible(maximum:)`, and every other
+        #   wide constraint is a `maxWidth` CAP (700 pt on the tin column) which never demands
+        #   width. A narrow window therefore degrades toward the 375 pt phone layout that
+        #   `DiscoverFeedbackTests` and `LabelSheetTests` already pin.
+        # - ⚠️ **One real bug, and only iPadOS 26 could show it:** the banners in `FundingBanner`'s
+        #   top `safeAreaInset` painted the entire top safe area, because `background(_:)` defaults
+        #   to `ignoresSafeAreaEdges: .all`. On iPhone the nav bar fills that region so nothing
+        #   showed — for the app's whole life. With the tab bar floating at the top instead, the
+        #   yellow `ReducedDataBanner` became a full-bleed header behind the status bar and the tab
+        #   pills. Fixed with `ignoresSafeAreaEdges: []` on all three; see `RootView.swift`.
+        #
+        # ⚠️ **STILL UNVERIFIED: landscape.** The orientation lock below is unchanged, deliberately.
+        # Unlocking it is a shipped-behaviour change that wants a walk through every screen in
+        # landscape, and this environment cannot rotate the simulator (Simulator has no
+        # accessibility permission to receive the ⌘← keystroke). See
+        # `docs/testing/ipad-resizable-window.md` — it is Tomas's call, with the evidence above.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         AppIdentifierPrefix: $(AppIdentifierPrefix)

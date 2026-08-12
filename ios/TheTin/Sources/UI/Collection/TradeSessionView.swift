@@ -263,7 +263,7 @@ struct TradeSessionView: View {
                         // actually hunting, answered without reading fourteen names.
                         if !mine, wants?.isWanted(line.entry.cardId) == true {
                             Image(systemName: "heart.fill")
-                                .font(.caption2).foregroundStyle(.pink)
+                                .font(.caption2).foregroundStyle(.pink) // contrast-ok: glyph, not text
                                 .accessibilityLabel("On your wanted list")
                         }
                     }
@@ -397,7 +397,7 @@ struct TradeSessionView: View {
     @ViewBuilder private func recorded(_ plan: TradePlan) -> some View {
         VStack(spacing: 14) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 44)).foregroundStyle(Color.statusPositive)
+                .font(.largeTitle).imageScale(.large).foregroundStyle(Color.statusPositive)
             Text("Trade recorded").font(.title3.weight(.semibold))
             Text(recordedSummary(plan))
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)

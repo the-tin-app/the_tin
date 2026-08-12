@@ -325,7 +325,8 @@ private struct StagingTray: View {
                 if let caption = knowledge?.caption {
                     Text(caption)
                         .font(.caption2.weight(.medium))
-                        .foregroundStyle(knowledge?.wanted == true ? Color.pink : Color.green)
+                        .foregroundStyle(knowledge?.wanted == true
+                                         ? Color.statusWishlist : Color.statusPositive)
                         .lineLimit(1)
                 }
             }

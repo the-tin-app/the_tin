@@ -301,7 +301,7 @@ struct ScannerPackSetupView: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "camera.viewfinder")
-                .font(.system(size: 44))
+                .font(.largeTitle).imageScale(.large)
                 .foregroundStyle(.tint)
             Text("Identify cards with your camera")
                 .font(.headline).multilineTextAlignment(.center)

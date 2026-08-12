@@ -1161,8 +1161,10 @@ struct CollectionView: View {
     /// surprise — and drops the download line once the pack is installed.
     private var emptyTin: some View {
         VStack(spacing: 16) {
+            // `.largeTitle` + `.imageScale(.large)` lands at ~41 pt and GROWS; `.system(size: 44)`
+            // pinned the glyph while the title under it tripled.
             Image(systemName: "square.stack.3d.up")
-                .font(.system(size: 44)).foregroundStyle(.tint)
+                .font(.largeTitle).imageScale(.large).foregroundStyle(.tint)
             VStack(spacing: 6) {
                 Text("Your tin is empty")
                     .font(.system(.title2, design: .serif).italic().weight(.semibold))

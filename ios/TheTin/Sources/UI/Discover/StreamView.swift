@@ -276,9 +276,9 @@ struct StreamView: View {
                                       selected: wants.entries[card.id]?.priority ?? .normal,
                                       onPick: { priority in
                                           wants.update(card.id) { $0.priority = priority }
-                                          withAnimation(.snappy) { self.panel = nil }
+                                          panelMotion { self.panel = nil }
                                       },
-                                      onDismiss: { withAnimation(.snappy) { self.panel = nil } })
+                                      onDismiss: { panelMotion { self.panel = nil } })
                 }
             case .reason:
                 CardFeedbackPanel(title: "Why?",
@@ -298,13 +298,23 @@ struct StreamView: View {
         }
     }
 
+    /// Every show/hide of the feedback panel, Reduce Motion aware.
+    ///
+    /// ⚠️ The five panel transitions each spelled out `withAnimation(.snappy)` and **none** of them
+    /// read `reduceMotion`, while the heart's `symbolEffect` ten lines below did — so one screen
+    /// honoured the setting for a 200 ms bounce and ignored it for a whole panel sliding in. One
+    /// funnel rather than five guards, so a sixth transition can't be added without one.
+    private func panelMotion(_ change: () -> Void) {
+        if reduceMotion { change() } else { withAnimation(.snappy, change) }
+    }
+
     /// Take the rejected card out of the deck once the panel is done with it.
     ///
     /// ⚠️ Deferred to panel close rather than done on the tap, because the panel is attached to that
     /// card's page — removing the card immediately would destroy the panel before it could be read
     /// or answered.
     private func dismissCard(_ cardId: String) {
-        withAnimation(.snappy) {
+        panelMotion {
             panel = nil
             pager?.remove(cardId)
         }
@@ -317,7 +327,7 @@ struct StreamView: View {
         if let signals {
             Button {
                 signals.dismiss(card.id)
-                withAnimation(.snappy) { panel = .reason(cardId: card.id) }
+                panelMotion { panel = .reason(cardId: card.id) }
             } label: {
                 Image(systemName: "hand.thumbsdown")
                     .font(.title3)
@@ -359,11 +369,13 @@ struct StreamView: View {
                 wantBump += 1
                 // The action already happened. The panel is the OPTIONAL refinement — ignore it and
                 // the card stays on the wishlist at Normal. Removing a card offers nothing.
-                withAnimation(.snappy) { panel = wasWanted ? nil : .priority(cardId: card.id) }
+                panelMotion { panel = wasWanted ? nil : .priority(cardId: card.id) }
             } label: {
                 Image(systemName: wants.isWanted(card.id) ? "heart.fill" : "heart")
                     .font(.title2)
-                    .foregroundStyle(wants.isWanted(card.id) ? .red : .secondary)
+                    // Pink, not red: DESIGN.md keys system pink to wishlist and red to losses,
+                    // and this heart was the one place the two got swapped.
+                    .foregroundStyle(wants.isWanted(card.id) ? Color.pink : Color.secondary)
                     .padding(8)
                     .background(.thinMaterial, in: Circle())
                     // Pops the heart when this card's want-state flips (add or remove).
