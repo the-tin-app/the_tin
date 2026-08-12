@@ -83,7 +83,7 @@ struct GroupDetailView: View {
     @State private var showingGone = false
 
     var body: some View {
-        List(selection: $selection) {
+        List(selection: listSelection) {
             if searchText.isEmpty {
                 if scope.isEmpty {
                     emptyState   // instead of a "$0.00 · Priced 0 of 0" ledger for nothing
@@ -260,6 +260,19 @@ struct GroupDetailView: View {
 
     private var isSelecting: Bool { editMode == .active }
     private var allSelected: Bool { !scope.isEmpty && selection.count == scope.count }
+
+    /// The selection binding, attached ONLY while selecting — `nil` disables List selection entirely.
+    ///
+    /// ⚠️ **iOS 27 regression, found on device 2026-08-12 and invisible on every iOS 26 simulator.**
+    /// A `List` holding a selection binding claims its rows' taps even with `EditMode` **inactive**,
+    /// so edit mode's row `Button` never received the touch: tapping a row did nothing, while the
+    /// leading swipe and the context menu still opened the same sheet. iOS 26 let the Button win the
+    /// tap, which is why the whole feature verified clean here and failed in his hand.
+    ///
+    /// Attaching it unconditionally was always the wrong shape — a list that is not selecting has
+    /// nothing to select, and handing SwiftUI a binding for it asks the framework to own a tap this
+    /// screen owns. The version bump only made the cost visible.
+    private var listSelection: Binding<Set<String>>? { isSelecting ? $selection : nil }
 
     @ViewBuilder private var destinationDialogActions: some View {
         Button("No divider") { move(to: "") }
@@ -509,7 +522,16 @@ struct GroupDetailView: View {
             if isSelecting {
                 content
             } else if rowTap == .edit {
-                Button { editingEntry = entry } label: { content }
+                // ⚠️ `.contentShape` is NOT decoration. A `.plain` Button hit-tests only where its
+                // label actually DREW, and this row is mostly gap: the HStack's `Spacer` between the
+                // name and the price is the widest thing in it, and the middle of a row is where a
+                // thumb naturally lands. Without this, tapping a row read as broken (device, iOS 27,
+                // 2026-08-12) — "I first thought it was not working, because by default I tap in the
+                // blank area." A NavigationLink never had the problem: it shapes the whole row itself.
+                //
+                // iOS 26 hit-tested the gap anyway, so the simulator on this Mac says this line does
+                // nothing. It is load-bearing on 27. Same lesson as #158, one layer down.
+                Button { editingEntry = entry } label: { content.contentShape(Rectangle()) }
                     .buttonStyle(.plain)
                     .accessibilityHint("Edit this entry")
             } else {
