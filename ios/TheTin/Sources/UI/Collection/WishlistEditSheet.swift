@@ -74,7 +74,8 @@ struct WishlistEditSheet: View {
                 }
                 Section("Priority") {
                     // `.popoverTip` doesn't reliably present on a control inside a `Form` `Section`
-                    // (confirmed by direct test) — `TipView` is the documented inline alternative.
+                    // (inferred from the toolbar `Menu` result, not directly confirmed here) —
+                    // `TipView` is the documented inline alternative.
                     TipView(GrailTip())
                     Picker("Priority", selection: $priority) {
                         ForEach(WantPriority.allCases) { Text($0.label).tag($0) }

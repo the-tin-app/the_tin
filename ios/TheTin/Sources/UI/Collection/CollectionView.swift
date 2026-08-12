@@ -882,7 +882,7 @@ struct CollectionView: View {
                     newDividerRow.tinRow()
                     sealedSection
                     if let wants { wishlistLink(wants).tinRow() }
-                    // Gated on a non-empty wishlist even here, unlike Wanted: with nothing
+                    // Gated on a non-empty wishlist even here, unlike Wishlist: with nothing
                     // hearted the screen has nothing to say, and a row that opens an empty
                     // screen is the same broken promise the trade row avoids below.
                     if let wants, !wants.wanted.isEmpty {

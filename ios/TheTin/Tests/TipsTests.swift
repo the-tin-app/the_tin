@@ -32,7 +32,7 @@ final class TipsTests: XCTestCase {
     }
 
     /// ⚠️ No tip may promise speed. eBay's saved-search alert is a DAILY email and there is no
-    /// faster free route — see `HuntRow`'s warning and the 2026-08-01 price-alert spec §8.3.
+    /// faster free route — see `HuntRow`'s warning.
     func testNoTipPromisesSpeed() {
         let banned = ["instant", "immediately", "real-time", "realtime", "alert you", "notify"]
         for (name, body) in all {

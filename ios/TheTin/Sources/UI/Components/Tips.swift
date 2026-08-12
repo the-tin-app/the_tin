@@ -6,7 +6,8 @@ import TipKit
 /// These are contextual tips, NOT a tour. Each one is presented inline (`TipView`), next to the
 /// control it explains, and TipKit shows it once. Not `.popoverTip`: that doesn't reliably
 /// present on a control inside a `Form` `Section`/`List`, or on a `Menu` inside a `ToolbarItem`
-/// (confirmed by direct test on all four original anchors) — `TipView` is TipKit's documented
+/// (confirmed by direct test on the toolbar `Menu`, iOS 26 simulator; inferred at the `Form`
+/// `Section` and `List` anchors from the same limitation) — `TipView` is TipKit's documented
 /// inline alternative for exactly those contexts.
 ///
 /// A tour was considered and rejected: three of the six things reported as confusing were
@@ -31,7 +32,7 @@ struct GrailTip: Tip {
 
 /// Hunting is the gate on the eBay search, and the search is invisible until it's on.
 struct HuntingTip: Tip {
-    static let body = "Switch this on with a price target and this card gets a one-tap eBay "
+    static let body = "Hunting with a price target gives this card a one-tap eBay "
         + "search at your budget. It runs until you switch it off."
     var title: Text { Text("Hunting means you're buying") }
     var message: Text? { Text(Self.body) }
