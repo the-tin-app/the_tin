@@ -78,8 +78,6 @@ struct WantedCardsView: View {
                 ScrollView { content(r, displayedCards) }
             }
         }
-        .navigationTitle("Wishlist")
-        .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Search wishlist")
         .toolbar {
             sortMenu(disabled: r.allCards.isEmpty)

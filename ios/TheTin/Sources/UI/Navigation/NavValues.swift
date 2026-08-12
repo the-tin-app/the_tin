@@ -34,7 +34,7 @@ struct DexID: Hashable { let raw: Int }
 /// mode shows a card over the live camera rather than navigating away from it.
 extension CardID: Identifiable { var id: String { raw } }
 
-/// Marker route for the pinned virtual "Wanted" group (distinct from the String group-ids
+/// Marker route for the pinned virtual "Wishlist" group (distinct from the String group-ids
 /// used by real collection groups, to avoid a navigationDestination type collision).
 struct WantedRoute: Hashable {}
 

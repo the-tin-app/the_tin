@@ -41,8 +41,17 @@ struct WantedView: View {
                 HuntingListView(store: store, wants: wants)
             }
         }
+        // ⚠️ ONE title for all three segments, set HERE rather than in the children.
+        // The children each titled themselves ("Wishlist", "Hunting", and nothing for Sets), so
+        // the screen behind the pinned row was named by whichever segment was last used — a
+        // choice persisted in `@AppStorage("wantedScope")` and therefore sticky across launches.
+        .navigationTitle("Wishlist")
+        // Hoisted from WantedCardsView with the title, and for the same reason: left on one
+        // child it applied only to the Singles segment, so the bar still changed size when the
+        // segment changed. The grep test can't see this one — it scans string literals.
+        .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .top) {
-            Picker("Wanted", selection: $scopeRaw) {
+            Picker("Wishlist", selection: $scopeRaw) {
                 ForEach(Scope.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
             }
             .pickerStyle(.segmented)

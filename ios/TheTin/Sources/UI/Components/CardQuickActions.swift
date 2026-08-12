@@ -11,6 +11,8 @@ struct CardQuickActions: ViewModifier {
     var collection: CollectionModel?
     var store: CatalogStore?
     @State private var saving = false
+    /// The second door into hunting — see `WishlistEditSheet.armHunt`.
+    @State private var hunting = false
 
     func body(content: Content) -> some View {
         content
@@ -22,6 +24,17 @@ struct CardQuickActions: ViewModifier {
                         Label(wants.isWanted(card.id) ? "Remove from Wishlist" : "Add to Wishlist",
                               systemImage: wants.isWanted(card.id) ? "heart.slash" : "heart")
                     }
+                    // Only for a card already hearted: `WantsModel.update` no-ops on a card that
+                    // isn't wanted, so this would be a button that silently does nothing.
+                    if wants.isWanted(card.id) {
+                        Button {
+                            hunting = true
+                        } label: {
+                            Label(wants.entry(card.id)?.hunt == nil
+                                  ? "Hunt this card…" : "Edit hunt…",
+                                  systemImage: "binoculars")
+                        }
+                    }
                 }
                 if collection != nil {
                     Button {
@@ -32,6 +45,7 @@ struct CardQuickActions: ViewModifier {
                 }
             }
             .sheet(isPresented: $saving) { saveSheet }
+            .sheet(isPresented: $hunting) { huntSheet }
     }
 
     @ViewBuilder private var saveSheet: some View {
@@ -45,6 +59,16 @@ struct CardQuickActions: ViewModifier {
                     await collection.saveEntry(entry)
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var huntSheet: some View {
+        if let wants {
+            WishlistEditSheet(
+                card: card,
+                price: (try? store?.prices(cardIds: [card.id]))?[card.id]?.rawUsd,
+                wants: wants,
+                armHunt: true)
         }
     }
 }

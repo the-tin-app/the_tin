@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import TipKit
 
 @MainActor @Observable
 final class CollectionModel {
@@ -864,6 +865,7 @@ struct CollectionView: View {
                     sealedSection
                     if let wants, !wants.wanted.isEmpty {
                         wishlistLink(wants).tinRow()
+                        TipView(WatchingTip()).tinRow()
                         watchingLink(wants).tinRow()
                     }
                 } else {
@@ -880,10 +882,13 @@ struct CollectionView: View {
                     newDividerRow.tinRow()
                     sealedSection
                     if let wants { wishlistLink(wants).tinRow() }
-                    // Gated on a non-empty wishlist even here, unlike Wanted: with nothing
-                    // hearted the screen has nothing to say, and a row that opens an empty
-                    // screen is the same broken promise the trade row avoids below.
-                    if let wants, !wants.wanted.isEmpty { watchingLink(wants).tinRow() }
+                    // Gated on having something hearted, unlike the always-shown Wishlist row
+                    // above: with nothing hearted the screen has nothing to say, and a row that
+                    // opens an empty screen is the same broken promise the trade row avoids below.
+                    if let wants, !wants.wanted.isEmpty {
+                        TipView(WatchingTip()).tinRow()
+                        watchingLink(wants).tinRow()
+                    }
                     // Not on the empty branch: with no entries there is nothing to trade, so the
                     // row would only be a promise the tin can't keep — same rule as the wishlist.
                     tradeLink.tinRow()
@@ -1416,16 +1421,16 @@ struct CollectionView: View {
 
     private func wishlistLink(_ wants: WantsModel) -> some View {
         // One row for both kinds of wanting: sets you're collecting and singles you're hunting.
-        pinnedLink(title: "Wanted", systemImage: "heart", tint: .pink,
+        pinnedLink(title: "Wishlist", systemImage: "heart", tint: .pink,
                    count: wants.wanted.count + (goals?.setIds.count ?? 0), route: WantedRoute())
     }
 
-    /// What the cards you care about have been doing. Sits under Wanted because it is about the
+    /// What the cards you care about have been doing. Sits under Wishlist because it is about the
     /// same cards — the wishlist is the list, this is the news.
     /// ⚠️ **No count, deliberately.** This row is not a container of N things — the screen behind
     /// it shows hunts, wishlist drops and grail trends, three different subsets that change on
-    /// their own. Any single number is either wrong or just repeats Wanted's. It shipped briefly
-    /// with `wants.wanted.count`, which read as 72 beside Wanted's 74 (Wanted also counts set
+    /// their own. Any single number is either wrong or just repeats Wishlist's. It shipped briefly
+    /// with `wants.wanted.count`, which read as 72 beside Wishlist's 74 (Wishlist also counts set
     /// goals) and meant nothing to anyone. The dot carries "there's something new here", which
     /// is the only thing this row needs to say.
     private func watchingLink(_ wants: WantsModel) -> some View {

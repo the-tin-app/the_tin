@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// Edit a wishlist card's priority / price target / notes / hunt. Writes via `WantsModel.update`,
 /// which no-ops if the card isn't wanted, so this is only presented for wanted cards.
@@ -6,6 +7,13 @@ struct WishlistEditSheet: View {
     let card: CardRecord
     let price: Double?
     let wants: WantsModel
+    /// Open with Hunting already on and a budget seeded from market price.
+    ///
+    /// The second door into hunting: the eBay search is gated on `entry.hunt != nil` and this
+    /// sheet was the only place to set one, so the feature was invisible to anyone who never
+    /// opened it. Deliberately still a SHEET rather than a one-tap action — `save()` drops a
+    /// hunt with no budget, so a one-tap "hunt this" would silently store nothing.
+    var armHunt: Bool = false
     @Environment(\.dismiss) private var dismiss
 
     @State private var priority: WantPriority = .normal
@@ -35,6 +43,18 @@ struct WishlistEditSheet: View {
         return v
     }
 
+    /// The budget an armed hunt starts with. Market price is the only number available at the
+    /// tap site, and it is the right default: "I'd pay about what it's worth."
+    ///
+    /// Formatted with an explicit "." to match `parseBudget`'s canonical form, then re-parsed
+    /// through the locale separator at save time. An unpriced or zero-priced card seeds EMPTY,
+    /// not "0.00" — `parseBudget` rejects non-positive values, so a zero seed would arm a hunt
+    /// that refuses to save and give no reason.
+    static func seedBudget(marketUsd: Double?) -> String {
+        guard let marketUsd, marketUsd > 0 else { return "" }
+        return String(format: "%.2f", marketUsd)
+    }
+
     private var budget: Double? { Self.parseBudget(targetText) }
 
     var body: some View {
@@ -53,9 +73,14 @@ struct WishlistEditSheet: View {
                     }
                 }
                 Section("Priority") {
+                    // `.popoverTip` doesn't reliably present on a control inside a `Form` `Section`
+                    // (inferred from the toolbar `Menu` result, not directly confirmed here) —
+                    // `TipView` is the documented inline alternative.
+                    TipView(GrailTip())
                     Picker("Priority", selection: $priority) {
                         ForEach(WantPriority.allCases) { Text($0.label).tag($0) }
-                    }.pickerStyle(.segmented)
+                    }
+                    .pickerStyle(.segmented)
                 }
                 Section("Price target (USD)") {
                     TextField("e.g. 25.00", text: $targetText)
@@ -91,6 +116,7 @@ struct WishlistEditSheet: View {
 
     @ViewBuilder private var huntingSection: some View {
         Section {
+            TipView(HuntingTip())
             Toggle("Hunting", isOn: Binding(
                 get: { hunting },
                 set: { on in
@@ -115,7 +141,7 @@ struct WishlistEditSheet: View {
                 // No expiry to mention: a hunt runs until you switch it off. Deliberately says
                 // nothing about being notified — eBay's saved search is a DAILY email, and the
                 // app itself no longer sends anything.
-                Text("Shows this card under Watching and Wanted → Hunting, with a one-tap search.")
+                Text("Shows this card under Watching and Wishlist → Hunting, with a one-tap search.")
             }
         }
     }
@@ -129,6 +155,14 @@ struct WishlistEditSheet: View {
         if let h = e.hunt {
             minCondition = h.minCondition
             hunting = true
+        } else if armHunt {
+            hunting = true
+            // Only seed a budget the entry doesn't already have — an existing target the user
+            // typed outranks market price.
+            if targetText.isEmpty { targetText = Self.seedBudget(marketUsd: price) }
+            // No budget to seed (unpriced card) means the footer's "a hunt needs a budget"
+            // is the next thing to read, so put the cursor where it points.
+            if budget == nil { targetFocused = true }
         }
     }
 

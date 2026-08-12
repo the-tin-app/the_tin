@@ -75,6 +75,7 @@ private struct MainTabView: View {
     @State private var consumedTradeToken = 0
     @State private var consumedIntentToken = 0
     @State private var consumedImportToken = 0
+    @State private var consumedPinnedToken = 0
 
     var body: some View {
         TabView(selection: $selection) {
@@ -184,6 +185,7 @@ private struct MainTabView: View {
         .onChange(of: model.importRouteToken) { consumeImportRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
         .onChange(of: model.tradeRouteToken) { consumeTradeRoute() }
+        .onChange(of: model.pinnedRouteToken) { consumePinnedRoute() }
         // A shared WANT link belongs in the browser. `UIApplication.open` called from the app that
         // owns the universal link opens Safari rather than bouncing back here — which is the whole
         // point, since the association file cannot tell a want link from a trade link.
@@ -269,6 +271,18 @@ private struct MainTabView: View {
         selection = .tin
         tinPath.append(TradeSessionRoute(offer: offer))
     }
+
+    /// The confirmation toast's "View": land on the pinned row the card just moved to.
+    private func consumePinnedRoute() {
+        guard model.pinnedRouteToken > consumedPinnedToken,
+              let route = model.pendingPinnedRoute else { return }
+        consumedPinnedToken = model.pinnedRouteToken
+        selection = .tin
+        switch route {
+        case .trade: tinPath.append(TradeRoute())
+        case .wishlist: tinPath.append(WantedRoute())
+        }
+    }
 }
 
 /// Anchors the offline banner + always-on support bar directly under a tab's navigation bar.
@@ -337,6 +351,11 @@ private struct AppToasts: ViewModifier {
             // when a screen is pushed.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 6) {
+                    if let confirmation = model.confirmation {
+                        ConfirmToast(confirmation: confirmation) {
+                            model.openPinned(confirmation.route)
+                        }
+                    }
                     if let collection = model.collection, let undoable = collection.undoable {
                         UndoToast(undoable: undoable) {
                             Task { await collection.undoLastDelete() }
@@ -499,6 +518,39 @@ private struct UndoToast: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: undoable.id)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(undoable.message). Undo available.")
+    }
+}
+
+/// "On your trade list · View" — the follow-through after a state change that moves a card to a
+/// screen the user is not currently looking at.
+///
+/// No countdown bar, unlike `UndoToast`: there is no window to race, so a depleting bar would
+/// imply urgency that isn't there.
+private struct ConfirmToast: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let confirmation: AppModel.Confirmation
+    let onOpen: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(confirmation.message)
+                .font(.subheadline)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button("View", action: onOpen)
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        // Flat Tin Rule: chrome earns separation from a system material, never a shadow.
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: confirmation.id)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(confirmation.message). View available.")
     }
 }
 
