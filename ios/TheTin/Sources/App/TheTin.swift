@@ -31,7 +31,9 @@ struct TheTin: App {
     @AppStorage(Appearance.storageKey) private var appearance = Appearance.system
 
     init() {
-        let isTesting = NSClassFromString("XCTestCase") != nil
+        // One flag, defined next to the scheduler that has to agree with it — a second local copy
+        // here is what let `register` skip under test while the submit below did not.
+        let isTesting = BackgroundRefresh.isTesting
         let model = AppModel.makeDefault(skipFirebase: isTesting)
         _model = State(initialValue: model)
         // BGTaskScheduler requires all launch handlers registered before the app finishes
