@@ -1420,12 +1420,12 @@ struct CollectionView: View {
                    count: wants.wanted.count + (goals?.setIds.count ?? 0), route: WantedRoute())
     }
 
-    /// What the cards you care about have been doing. Sits under Wanted because it is about the
+    /// What the cards you care about have been doing. Sits under Wishlist because it is about the
     /// same cards — the wishlist is the list, this is the news.
     /// ⚠️ **No count, deliberately.** This row is not a container of N things — the screen behind
     /// it shows hunts, wishlist drops and grail trends, three different subsets that change on
-    /// their own. Any single number is either wrong or just repeats Wanted's. It shipped briefly
-    /// with `wants.wanted.count`, which read as 72 beside Wanted's 74 (Wanted also counts set
+    /// their own. Any single number is either wrong or just repeats Wishlist's. It shipped briefly
+    /// with `wants.wanted.count`, which read as 72 beside Wishlist's 74 (Wishlist also counts set
     /// goals) and meant nothing to anyone. The dot carries "there's something new here", which
     /// is the only thing this row needs to say.
     private func watchingLink(_ wants: WantsModel) -> some View {
