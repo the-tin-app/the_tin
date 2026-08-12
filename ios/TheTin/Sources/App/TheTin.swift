@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// User-selected appearance: follow the system, or force light/dark. Persisted raw in
 /// UserDefaults; `colorScheme` nil means "follow system".
@@ -34,6 +35,9 @@ struct TheTin: App {
         // One flag, defined next to the scheduler that has to agree with it — a second local copy
         // here is what let `register` skip under test while the submit below did not.
         let isTesting = BackgroundRefresh.isTesting
+        // Tips are suppressed under XCTest: a popover over the control a UI test is driving is a
+        // flake, and the display-rule store is per-container state a test host shouldn't inherit.
+        if !isTesting { try? Tips.configure() }
         let model = AppModel.makeDefault(skipFirebase: isTesting)
         _model = State(initialValue: model)
         // BGTaskScheduler requires all launch handlers registered before the app finishes

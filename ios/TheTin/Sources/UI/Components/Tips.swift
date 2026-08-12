@@ -1,0 +1,53 @@
+import SwiftUI
+import TipKit
+
+/// The four things a first-run user could not work out on their own (feedback, 2026-08-12).
+///
+/// These are contextual tips, NOT a tour. Each one fires beside the control it explains and
+/// TipKit shows it once. A tour was considered and rejected: three of the six things reported
+/// as confusing were navigation and naming defects, and those are fixed in place — a tour
+/// explaining a mismatched label is a maintained explanation of a bug.
+///
+/// ⚠️ **No tip may promise speed or notification.** eBay's saved search is a DAILY email and the
+/// app sends nothing. `TipsTests.testNoTipPromisesSpeed` is the guard, and `HuntRow`'s header
+/// carries the same warning.
+
+/// Each tip's copy is a `static let` so `TipsTests` can assert it without introspecting a
+/// SwiftUI `Text`. The constant is the source of truth; `message` just wraps it.
+
+/// Grail sits above High in the priority picker with nothing saying what it means.
+struct GrailTip: Tip {
+    static let body = "The card you'd most want, whether or not you're buying one right now. "
+        + "Hunting is the other question — that's the card you're actually shopping for."
+    var title: Text { Text("What's a Grail?") }
+    var message: Text? { Text(Self.body) }
+    var image: Image? { Image(systemName: "star") }
+}
+
+/// Hunting is the gate on the eBay search, and the search is invisible until it's on.
+struct HuntingTip: Tip {
+    static let body = "Switch this on with a price target and this card gets a one-tap eBay "
+        + "search at your budget. It runs until you switch it off."
+    var title: Text { Text("Hunting means you're buying") }
+    var message: Text? { Text(Self.body) }
+    var image: Image? { Image(systemName: "binoculars") }
+}
+
+/// Watching reads as a fourth list beside Wishlist and For Trade. It isn't one.
+struct WatchingTip: Tip {
+    static let body = "Not another list — it's what the cards on your Wishlist have been doing "
+        + "lately, so a card you're after that's dropped turns up here."
+    var title: Text { Text("Watching is the news") }
+    var message: Text? { Text(Self.body) }
+    var image: Image? { Image(systemName: "binoculars") }
+}
+
+/// Editing an owned card was reported as undiscoverable. #152 added the tap-mode picker; this
+/// points at it rather than adding a second way to do the same thing.
+struct EditCardTip: Tip {
+    static let body = "Switch what a tap does here, then tap any card to edit its condition, "
+        + "what you paid, or its photos."
+    var title: Text { Text("Editing a card you own") }
+    var message: Text? { Text(Self.body) }
+    var image: Image? { Image(systemName: "pencil") }
+}

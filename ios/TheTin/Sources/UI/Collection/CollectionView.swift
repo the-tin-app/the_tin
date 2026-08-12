@@ -1433,6 +1433,7 @@ struct CollectionView: View {
                    count: nil, route: WatchingRoute(),
                    dot: WatchingModel.hasUnseen(asOf: model.priceAsOf,
                                                 lastSeen: watchingLastSeenAsOf))
+            .popoverTip(WatchingTip())
     }
 
     /// The other half of the wishlist: what you'll give up. Sits beside it because "hunting" and

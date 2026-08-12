@@ -212,6 +212,7 @@ struct GroupDetailView: View {
                 }
                 .accessibilityLabel(rowTap == .edit ? "View options, tapping a card opens edit"
                                                     : "View options")
+                .popoverTip(EditCardTip())
             }
             if let group {
                 ToolbarItem {

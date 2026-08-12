@@ -74,7 +74,9 @@ struct WishlistEditSheet: View {
                 Section("Priority") {
                     Picker("Priority", selection: $priority) {
                         ForEach(WantPriority.allCases) { Text($0.label).tag($0) }
-                    }.pickerStyle(.segmented)
+                    }
+                    .pickerStyle(.segmented)
+                    .popoverTip(GrailTip())
                 }
                 Section("Price target (USD)") {
                     TextField("e.g. 25.00", text: $targetText)
@@ -117,6 +119,7 @@ struct WishlistEditSheet: View {
                     if on, budget == nil { targetFocused = true }
                 }
             ))
+            .popoverTip(HuntingTip())
             if hunting {
                 Picker("Condition floor", selection: $minCondition) {
                     ForEach(Self.floors) { Text($0.floorLabel).tag($0) }
