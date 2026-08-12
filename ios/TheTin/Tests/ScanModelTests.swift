@@ -487,4 +487,59 @@ final class ScanModelTests: XCTestCase {
                               staging: ScanStagingStore.inMemory(), store: catalog)
         XCTAssertNil(model.stagingVia)
     }
+
+    // MARK: Borrowing the scanner
+
+    /// A trade reads a stranger's card onto the table. Staging it would file someone else's
+    /// property into your tin, so the caller pins look-up — and the lock must obey the pin even
+    /// though the user's own mode says Add.
+    func testForcedLookUpStagesNothingEvenWhenTheUsersModeIsAdd() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: staging, store: catalog, fingerThrottle: 1)
+        let previous = AppConfig.scanLookUpMode
+        defer { AppConfig.scanLookUpMode = previous }
+        AppConfig.scanLookUpMode = false
+        model.isLookUpMode = false
+        model.forcesLookUp = true
+
+        await model.run(source: ReplaySource(buffer: pb, count: 6))
+
+        XCTAssertEqual(model.lookedUpCardId, "card_a", "the caller still needs the card")
+        XCTAssertTrue(staging.drafts.isEmpty, "a borrowed viewfinder must never stage")
+    }
+
+    /// Borrowing must not rewrite the Scan tab's sticky mode. Setting `isLookUpMode` would have
+    /// been the one-line version and it persists — so a single trade would silently leave the
+    /// scanner in Look up the next time the user opened it to catalogue a box.
+    func testForcingLookUpLeavesTheUsersPersistedModeAlone() throws {
+        // No frames needed: this is about the two flags, not about what a lock does with them.
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let catalog = try FixtureCatalog.make()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: try Matcher(store: store, codebook: try Codebook.bundled(in: bundle())),
+                              detector: CardDetector(), textGate: TextGate(index: index),
+                              narrowing: StubNarrowing(), staging: .inMemory(), store: catalog)
+        let previous = AppConfig.scanLookUpMode
+        defer { AppConfig.scanLookUpMode = previous }
+        AppConfig.scanLookUpMode = false
+        model.isLookUpMode = false
+
+        model.forcesLookUp = true
+        XCTAssertTrue(model.isLookingUp, "the pipeline follows the pin")
+        XCTAssertFalse(model.isLookUpMode, "the picker still shows the user's own choice")
+        XCTAssertFalse(AppConfig.scanLookUpMode, "and nothing was written to their preference")
+
+        model.forcesLookUp = false
+        XCTAssertFalse(model.isLookingUp, "handing the scanner back restores Add mode")
+    }
 }

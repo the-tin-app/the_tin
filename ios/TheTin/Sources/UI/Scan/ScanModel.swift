@@ -320,6 +320,17 @@ final class ScanModel {
             if !isLookUpMode { lookedUpCardId = nil }
         }
     }
+    /// Pins the scanner to look-up for callers that have somewhere else to put the card — a trade
+    /// reads a stranger's card onto the table, and staging it would file someone else's property
+    /// into your tin.
+    ///
+    /// Deliberately NOT `isLookUpMode = true`: that setter persists, so borrowing the scanner for
+    /// one card would silently rewrite the mode the user picked for the Scan tab. This is the
+    /// caller's requirement, held for as long as the caller is on screen; `isLookUpMode` stays
+    /// the user's preference and is what the mode picker still reads and writes.
+    var forcesLookUp = false
+    /// The mode the pipeline actually obeys.
+    var isLookingUp: Bool { forcesLookUp || isLookUpMode }
     /// The condition new drafts are staged at. Every capture used to be Near Mint with nothing
     /// asked and nothing shown, so a played collection valued itself as mint — and since the
     /// review screen's per-card menu is a per-card tap, nobody was ever going to correct 300 of
@@ -408,7 +419,7 @@ final class ScanModel {
     private func stage(cardId: String) {
         ambiguous = []
         let card = try? store.card(id: cardId)
-        guard !isLookUpMode else {
+        guard !isLookingUp else {
             lookedUpCardId = cardId
             guidance = Self.idleGuidance
             return
