@@ -75,7 +75,8 @@ struct GroupDetailView: View {
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
     @State private var printRequest: PrintSheetRequest?
-    @State private var labelRequest: LabelPrintRequest?
+    /// Label printing is owned by the app, not this screen — see `AppModel.labelRequest`.
+    @Environment(AppModel.self) private var app: AppModel?
     var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
     @State private var searchIndex = CardSearchIndex()
     // Bulk refiling — stock List multi-select, the same gesture Photos and Files use.
@@ -140,7 +141,6 @@ struct GroupDetailView: View {
             newDividerAlertActions
         }
         .printSheetFlow($printRequest)
-        .labelPrintFlow($labelRequest, store: store)
         .onChange(of: model.catalogGeneration) { searchIndex.clear() }
         .sheet(item: $editingEntry) { entry in
             if let card = try? store.card(id: entry.cardId) {
@@ -207,8 +207,8 @@ struct GroupDetailView: View {
                         Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
                             label: { Label("Trade sheet", systemImage: "printer") }
                             .disabled(model.entries(in: group.id).isEmpty)
-                        Button { labelRequest = LabelPrintRequest(title: group.name,
-                                                                  entries: model.entries(in: group.id)) }
+                        Button { app?.labelRequest = LabelPrintRequest(title: group.name,
+                                                                       entries: model.entries(in: group.id)) }
                             label: { Label("Card labels", systemImage: "qrcode") }
                             .disabled(model.entries(in: group.id).isEmpty)
                     } label: {
@@ -508,9 +508,16 @@ struct GroupDetailView: View {
         }
         .swipeActions(edge: .leading) {
             Button { editingEntry = entry } label: { Label("Edit", systemImage: "pencil") }
+            // On the swipe as well as in the context menu, because a long press is invisible —
+            // the same reason the Edit chip exists. Printing one card's label is the common case
+            // (you added a card; the other 39 on the sheet are already stuck on sleeves), not the
+            // rare one, so it does not get to hide.
+            Button { printLabel(for: entry) } label: { Label("Label", systemImage: "qrcode") }
+                .tint(.teal)
         }
         .contextMenu {
             Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
+            Button { printLabel(for: entry) } label: { Label("Print label", systemImage: "qrcode") }
             Button { sellingEntry = entry } label: { Label("Sold or traded…", systemImage: "bag") }
         }
     }
@@ -541,5 +548,12 @@ struct GroupDetailView: View {
 
     private func cardName(_ entry: CollectionEntry) -> String {
         searchIndex.name(for: entry, store: store)
+    }
+
+    /// This row's labels — `qty` of them, not one. A label identifies a physical card, so three
+    /// copies behind one entry are three stickers. The start-position picker still runs, which is
+    /// the whole point: one label lands on the next free slot of a part-used sheet.
+    private func printLabel(for entry: CollectionEntry) {
+        app?.labelRequest = LabelPrintRequest(title: cardName(entry), entries: [entry])
     }
 }

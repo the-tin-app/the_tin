@@ -15,6 +15,9 @@ struct EntryFormView: View {
     let onSave: (CollectionEntry) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
+    /// Label printing is owned by the app: this form dismisses itself on save, and a print flow
+    /// owned by a dismissing view dies with it.
+    @Environment(AppModel.self) private var app: AppModel?
     @FocusState private var fieldFocused: Bool
     @State private var groupId: String = ""
     @State private var newGroupName = ""
@@ -117,6 +120,15 @@ struct EntryFormView: View {
                 Text("Collects this copy in your trade list, which you can share as a link or print as a sheet.")
             }
             EntryPhotosSection(entryId: entryId, photos: $photos, request: $photoRequest)
+            // A visible row rather than a second toolbar item or a long-press on Save: printing
+            // the sticker for the card you just filed is the next physical step, and a verb you
+            // have to already know about is one nobody finds. Offered on edits too — the QR
+            // encodes printing and condition, so changing either makes the old sticker wrong.
+            Section {
+                Button { save(thenPrintLabel: true) } label: {
+                    Label("Save & print label", systemImage: "qrcode")
+                }
+            }
         }
         // ⚠️ On the Form, NOT on the section above. Attached to the Section this presented and
         // instantly dismissed itself, closing the whole entry sheet with it (device, 2026-08-10).
@@ -225,7 +237,10 @@ struct EntryFormView: View {
         baseline = snapshot
     }
 
-    private func save() {
+    /// `thenPrintLabel` prints this copy's label once the form is gone — see
+    /// `AppModel.printLabelAfterDismiss`. It fires only on a successful save, so a write that
+    /// failed doesn't hand you a sticker for a card that isn't in the tin.
+    private func save(thenPrintLabel: Bool = false) {
         Task {
             var resolvedGroupId = groupId
             let newName = newGroupName.trimmingCharacters(in: .whitespaces)
@@ -266,7 +281,12 @@ struct EntryFormView: View {
                 // never photographed stays byte-identical to what it was before this field
                 // existed — the same rule `forTrade` follows above.
                 photos: photos.isEmpty ? nil : photos)
-            if await onSave(entry) { dismiss() }
+            guard await onSave(entry) else { return }
+            dismiss()
+            if thenPrintLabel {
+                app?.printLabelAfterDismiss(
+                    LabelPrintRequest(title: card.name, entries: [entry]))
+            }
         }
     }
 
