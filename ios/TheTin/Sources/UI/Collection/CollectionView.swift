@@ -768,6 +768,10 @@ struct CollectionView: View {
     var onGetStarted: ((GetStartedTab) -> Void)? = nil
     /// Scanner pack already installed — flips the empty-tin CTA from "set up" to "scan".
     var scannerReady = false
+    /// The pack itself, for the trade screen: reading a stranger's card onto the table is the one
+    /// place outside the Scan tab that needs a live viewfinder, and typing a name you can't see
+    /// across a table was the alternative.
+    var pack: ScannerPackModel? = nil
     /// Hands the current query to the catalog-wide Search tab. Without it, searching your tin for
     /// something you don't own dead-ended in a note pointing at another tab — the app admitting a
     /// seam instead of crossing it.
@@ -1049,7 +1053,8 @@ struct CollectionView: View {
         }
         .navigationDestination(for: TradeSessionRoute.self) { route in
             TradeSessionView(model: model, store: store, wants: wants, staging: staging,
-                             backup: backup, offer: route.offer, onExecuted: onExecutedTrade)
+                             backup: backup, offer: route.offer, pack: pack,
+                             onExecuted: onExecutedTrade)
         }
         .navigationDestination(for: TinAllCardsRoute.self) { _ in
             GroupDetailView(model: model, group: nil, store: store, onGetStarted: onGetStarted)

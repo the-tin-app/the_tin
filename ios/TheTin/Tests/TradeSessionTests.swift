@@ -275,4 +275,35 @@ final class TradeSessionTests: XCTestCase {
         s.setCopies(2, forYourLine: "e1")
         XCTAssertTrue(s.plan().mintedIds.isEmpty)
     }
+
+    // MARK: What the pickers show back
+
+    /// The pickers stay open across several taps, so a row has to say what it has contributed —
+    /// the reported bug was "no feedback on taps when adding my card or their cards", and a
+    /// button that produces no visible result is indistinguishable from a button that is broken.
+    func testYourSideCountsCopiesPerOwnedRow() {
+        let s = TradeSession(store: store)
+        let row = owned("e1", qty: 3)
+        s.offer(row); s.offer(row)
+        s.offer(owned("e2", card: unpricedCard))
+        XCTAssertEqual(s.yours.copiesByEntryId, ["e1": 2, "e2": 1])
+    }
+
+    /// Their side must count per CARD, not per line. One card at two conditions is two synthetic
+    /// rows, and a picker keyed on line id would show "×1" beside a card that is on the table
+    /// three times — a receipt that under-reports is worse than none.
+    func testTheirSideCountsCopiesPerCardAcrossConditions() {
+        let s = TradeSession(store: store)
+        s.request(cardId: ray, rarity: nil, condition: .nm)
+        s.request(cardId: ray, rarity: nil, condition: .nm)
+        s.request(cardId: ray, rarity: nil, condition: .lp)
+        XCTAssertEqual(s.theirs.lines.count, 2, "two conditions are two lines")
+        XCTAssertEqual(s.theirs.copiesByCardId, [ray: 3], "but one card, three copies")
+    }
+
+    func testEmptySidesCountNothing() {
+        let s = TradeSession(store: store)
+        XCTAssertTrue(s.yours.copiesByEntryId.isEmpty)
+        XCTAssertTrue(s.theirs.copiesByCardId.isEmpty)
+    }
 }

@@ -31,6 +31,22 @@ struct TradeSide: Equatable {
     var isEmpty: Bool { lines.isEmpty && cashUsd == 0 }
     var cardCount: Int { lines.reduce(0) { $0 + $1.copies } }
 
+    /// Copies on the table per owned row — what a picker row on YOUR side shows as "×2".
+    ///
+    /// The pickers stay open across several taps, so without a count on the row the only way to
+    /// learn whether a tap landed is to close the sheet and look at the column.
+    var copiesByEntryId: [String: Int] {
+        lines.reduce(into: [:]) { $0[$1.entry.id, default: 0] += $1.copies }
+    }
+
+    /// Copies on the table per CARD — the key their side has to use.
+    ///
+    /// Their rows are synthetic and minted per condition, so one card can be several lines; a
+    /// picker keyed on line id would show "×1" beside a card that is on the table three times.
+    var copiesByCardId: [String: Int] {
+        lines.reduce(into: [:]) { $0[$1.entry.cardId, default: 0] += $1.copies }
+    }
+
     mutating func remove(id: String) { lines.removeAll { $0.id == id } }
 }
 

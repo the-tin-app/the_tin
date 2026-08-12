@@ -25,13 +25,27 @@ struct TradeSessionView: View {
     var backup: BackupService? = nil
     /// The list someone shared, if this trade opened from their link.
     var offer: ShareList.Payload? = nil
+    /// Lets the "their side" picker scan a card in rather than making you type a name you can't
+    /// read off the table. nil where the pack isn't reachable, which hides the camera button.
+    var pack: ScannerPackModel? = nil
     /// Shows the staged cards straight after executing, so filing them is the obvious next step
     /// rather than something you discover later.
     var onExecuted: (() -> Void)? = nil
 
+    /// Which picker is up. ONE `@State` and one `.sheet`, not a Bool and a sheet per side.
+    ///
+    /// Two `.sheet` modifiers on one view is the case SwiftUI silently drops — the same bug
+    /// StagingReviewView, ScanView and CardDetailView each carry a comment about. This screen
+    /// stacked three presentations on the same List (two pickers plus the execute dialog), and
+    /// the symptom was the one that pattern always produces: the sheet presents, and then a
+    /// re-render lands on it and it comes back EMPTY. Adding a card re-renders this view by
+    /// definition, so "their side" went blank on the tap that was supposed to work.
+    private enum PickingSide: String, Identifiable {
+        case yours, theirs
+        var id: String { rawValue }
+    }
     @State private var session: TradeSession?
-    @State private var pickingYours = false
-    @State private var pickingTheirs = false
+    @State private var picking: PickingSide?
     @State private var confirmingExecute = false
     @State private var executing = false
     /// Set once the trade is written. Holds the whole plan, because undoing needs the rows as
@@ -83,23 +97,22 @@ struct TradeSessionView: View {
                 Button("Done") { cashFocused = false }
             }
         }
-        .sheet(isPresented: $pickingYours) {
+        .sheet(item: $picking) { side in
             NavigationStack {
-                TradeOwnedPicker(model: model, store: store) { session.offer($0) }
-            }
-        }
-        .sheet(isPresented: $pickingTheirs) {
-            NavigationStack {
-                TradeCatalogPicker(store: store, wants: wants) { card in
-                    session.request(cardId: card.id, rarity: card.rarity)
+                switch side {
+                case .yours:
+                    TradeOwnedPicker(model: model, store: store,
+                                     onTable: session.yours.copiesByEntryId) {
+                        session.offer($0)
+                    }
+                case .theirs:
+                    TradeCatalogPicker(store: store, wants: wants, collection: model,
+                                       pack: pack, staging: staging,
+                                       onTable: session.theirs.copiesByCardId) { card in
+                        session.request(cardId: card.id, rarity: card.rarity)
+                    }
                 }
             }
-        }
-        .confirmationDialog("Execute this trade?", isPresented: $confirmingExecute,
-                            titleVisibility: .visible) {
-            Button("Execute trade", role: .destructive) { Task { await execute(session) } }
-        } message: {
-            Text(executeSummary(session))
         }
     }
 
@@ -165,7 +178,11 @@ struct TradeSessionView: View {
         let candidates = model.tradeEntries.map {
             TradeOfferBuilder.Candidate(entryId: $0.id, value: model.entryValue($0) ?? 0)
         }
+        // A suggestion naming exactly what's already up is not an offer, it's a no-op row that
+        // reads as a choice. Drop it — the section is about changing the pile, not restating it.
+        let onTable = Set(session.yours.lines.map(\.entry.id))
         let suggestions = session.suggestions(from: candidates)
+            .filter { Set($0.entryIds) != onTable }
         if !suggestions.isEmpty {
             Section {
                 ForEach(suggestions) { s in
@@ -187,11 +204,26 @@ struct TradeSessionView: View {
                     .disabled(s.entryIds.isEmpty)
                 }
             } header: {
-                Text("Build your side")
+                // "Build your side" is an instruction for an empty column, and it used to sit
+                // there unchanged over a side you had just spent a minute building by hand —
+                // still offering rows that would silently throw that work away. Once there is
+                // something to lose, the section says what it would actually do instead.
+                Text(session.yours.lines.isEmpty ? "Build your side" : "Replace your side")
             } footer: {
-                Text("Picks from your For Trade list to reach that share of what you're taking. Tapping one replaces your side.")
+                Text(offersFooter(session))
             }
         }
+    }
+
+    /// Names the cost of tapping, which is the thing the old copy buried. "Tapping one replaces
+    /// your side" is true and unreadable when your side holds four cards you chose yourself; the
+    /// count is what makes it land before the tap rather than after it.
+    private func offersFooter(_ session: TradeSession) -> String {
+        let n = session.yours.lines.count
+        guard n > 0 else {
+            return "Picks from your For Trade list to reach that share of what you're taking."
+        }
+        return "Picks from your For Trade list to reach that share of what you're taking. Tapping one clears the \(n) \(n == 1 ? "card" : "cards") you've put up and uses these instead."
     }
 
     private func reached(_ s: TradeOfferBuilder.Suggestion) -> Int {
@@ -229,7 +261,7 @@ struct TradeSessionView: View {
                 session.reprice()
             }
             Button {
-                if mine { pickingYours = true } else { pickingTheirs = true }
+                picking = mine ? .yours : .theirs
             } label: {
                 Label(mine ? "Add one of your cards" : "Add one of their cards",
                       systemImage: "plus.circle")
@@ -361,6 +393,14 @@ struct TradeSessionView: View {
                 }
             }
             .disabled(!session.isExecutable || executing || staging == nil)
+            // Anchored on the button, not the List: the List already carries the picker sheet,
+            // and stacked presentations on one view are what SwiftUI drops (see `PickingSide`).
+            .confirmationDialog("Execute this trade?", isPresented: $confirmingExecute,
+                                titleVisibility: .visible) {
+                Button("Execute trade", role: .destructive) { Task { await execute(session) } }
+            } message: {
+                Text(executeSummary(session))
+            }
         } footer: {
             Text(staging == nil
                  ? "Incoming cards need the scan tray, which isn't available here."

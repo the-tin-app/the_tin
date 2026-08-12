@@ -130,6 +130,7 @@ private struct MainTabView: View {
                                    }
                                },
                                scannerReady: pack.phase == .ready,
+                               pack: pack,
                                // Searching your tin used to dead-end in a note telling you to go
                                // to another tab. Now it takes you there, carrying the query.
                                onSearchCatalog: { query in
