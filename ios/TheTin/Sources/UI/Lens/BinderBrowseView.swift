@@ -473,8 +473,16 @@ struct BinderListView: View {
                                                          : "Photograph a page to fill the binder."))
             } else {
                 ForEach(model.rows) { row in
-                    Button { onTap(row.slot) } label: { BinderRowView(row: row) }
-                        .buttonStyle(.plain)
+                    // `.contentShape` for the same reason GroupDetailView's edit row carries it: a
+                    // `.plain` Button hit-tests only where its label DREW, and `BinderRowView` puts a
+                    // `Spacer(minLength: 8)` between the text and the price. On iOS 27 that gap is
+                    // dead — and this row's own caption reads "tap to confirm", so the instruction
+                    // would be printed across the part of the row that ignores you. Not reproducible
+                    // on the iOS 26 simulator here, and the iPad that passed the binder pass is on 18.
+                    Button { onTap(row.slot) } label: {
+                        BinderRowView(row: row).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

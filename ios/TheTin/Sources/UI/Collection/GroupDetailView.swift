@@ -522,7 +522,16 @@ struct GroupDetailView: View {
             if isSelecting {
                 content
             } else if rowTap == .edit {
-                Button { editingEntry = entry } label: { content }
+                // ⚠️ `.contentShape` is NOT decoration. A `.plain` Button hit-tests only where its
+                // label actually DREW, and this row is mostly gap: the HStack's `Spacer` between the
+                // name and the price is the widest thing in it, and the middle of a row is where a
+                // thumb naturally lands. Without this, tapping a row read as broken (device, iOS 27,
+                // 2026-08-12) — "I first thought it was not working, because by default I tap in the
+                // blank area." A NavigationLink never had the problem: it shapes the whole row itself.
+                //
+                // iOS 26 hit-tested the gap anyway, so the simulator on this Mac says this line does
+                // nothing. It is load-bearing on 27. Same lesson as #158, one layer down.
+                Button { editingEntry = entry } label: { content.contentShape(Rectangle()) }
                     .buttonStyle(.plain)
                     .accessibilityHint("Edit this entry")
             } else {
