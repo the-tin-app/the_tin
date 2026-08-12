@@ -29,7 +29,6 @@ struct HuntingListView: View {
         Group {
             if hunting.isEmpty { empty } else { list(hunting, rawUsd: rawUsd, setsById: setsById) }
         }
-        .navigationTitle("Hunting")
         // Fills the denominator cache for whichever sets are on the hunt. The id is the set
         // list, so hunting a card from a new set refetches and nothing else does.
         .task(id: cards.map(\.setId).sorted()) {

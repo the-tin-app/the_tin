@@ -115,7 +115,7 @@ struct WishlistEditSheet: View {
                 // No expiry to mention: a hunt runs until you switch it off. Deliberately says
                 // nothing about being notified — eBay's saved search is a DAILY email, and the
                 // app itself no longer sends anything.
-                Text("Shows this card under Watching and Wanted → Hunting, with a one-tap search.")
+                Text("Shows this card under Watching and Wishlist → Hunting, with a one-tap search.")
             }
         }
     }

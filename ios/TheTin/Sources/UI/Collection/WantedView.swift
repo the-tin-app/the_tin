@@ -41,8 +41,13 @@ struct WantedView: View {
                 HuntingListView(store: store, wants: wants)
             }
         }
+        // ⚠️ ONE title for all three segments, set HERE rather than in the children.
+        // The children each titled themselves ("Wishlist", "Hunting", and nothing for Sets), so
+        // the screen behind the pinned row was named by whichever segment was last used — a
+        // choice persisted in `@AppStorage("wantedScope")` and therefore sticky across launches.
+        .navigationTitle("Wishlist")
         .safeAreaInset(edge: .top) {
-            Picker("Wanted", selection: $scopeRaw) {
+            Picker("Wishlist", selection: $scopeRaw) {
                 ForEach(Scope.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
             }
             .pickerStyle(.segmented)

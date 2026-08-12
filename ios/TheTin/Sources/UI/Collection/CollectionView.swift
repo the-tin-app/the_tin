@@ -1416,7 +1416,7 @@ struct CollectionView: View {
 
     private func wishlistLink(_ wants: WantsModel) -> some View {
         // One row for both kinds of wanting: sets you're collecting and singles you're hunting.
-        pinnedLink(title: "Wanted", systemImage: "heart", tint: .pink,
+        pinnedLink(title: "Wishlist", systemImage: "heart", tint: .pink,
                    count: wants.wanted.count + (goals?.setIds.count ?? 0), route: WantedRoute())
     }
 
