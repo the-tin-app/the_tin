@@ -379,6 +379,19 @@ final class ScanModel {
     /// which also resets the scanner so the next card (or the same one again) can be read.
     var lookedUpCardId: String?
 
+    /// Is something actually on screen over the viewfinder? This is what the frame loop throttles
+    /// on, and it is NOT the same question as "did we just recognise a card".
+    ///
+    /// ⚠️ A borrowed viewfinder (`forcesLookUp`) sets `lookedUpCardId` as a **handoff, not a
+    /// presentation**: the trade picker takes the card in `onChange` and clears it, and nothing is
+    /// ever presented over the camera. Counting that as modal idled the camera to 2fps on every
+    /// single card — and since the wake-up frame then arrives at the idle rate, it cost up to half
+    /// a second of dead viewfinder per card, in the one flow whose entire point is working through
+    /// a pile without pause. The chooser stays modal in both worlds: it really is on screen.
+    var isModalPresented: Bool {
+        (lookedUpCardId != nil && !forcesLookUp) || !ambiguous.isEmpty
+    }
+
     init(matcher: Matcher, detector: CardDetector, textGate: TextGate, narrowing: CandidateNarrowing,
          staging: ScanStagingStore, store: CatalogStore, fingerThrottle: Int = 4,
          minFocus: Double = 40) {
@@ -397,7 +410,7 @@ final class ScanModel {
             // mode that is most of a session: the whole time you spend reading the card you just
             // scanned, the phone is grinding OCR + ORB + RANSAC on frames whose results are
             // thrown away on arrival. Skip the work, not just the result.
-            let modal = lookedUpCardId != nil || !ambiguous.isEmpty
+            let modal = isModalPresented
             if modal {
                 source.setIdle(throttle.update(cardVisible: false, modal: true))
                 continue
