@@ -410,6 +410,42 @@ final class ScanModelTests: XCTestCase {
                        "and the camera must sit at its idle rate for as long as the sheet is up")
     }
 
+    /// The interaction between #154 and #155, which merged clean and were each correct alone.
+    ///
+    /// A borrowed viewfinder (the trade picker) sets `lookedUpCardId` as a HANDOFF: `onChange`
+    /// gives the card to the caller and clears it, and nothing is ever presented over the camera.
+    /// Throttling on "a card was recognised" instead of "something is on screen" idled the camera
+    /// on every card — and because the waking frame then arrives at the *idle* rate, that is up to
+    /// half a second of dead viewfinder per card, in the one flow built for working through a pile
+    /// without pause. Both PRs' own tests pass either way; only the pair is wrong.
+    func testABorrowedViewfinderKeepsScanningWhileHandingOffEachCard() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let narrowing = CountingNarrowing(poolIds: ["card_a"])
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: try CandidateIndex(store: catalog)),
+                              narrowing: narrowing, staging: ScanStagingStore.inMemory(),
+                              store: catalog, fingerThrottle: 1)
+        model.forcesLookUp = true                // the trade picker owns this viewfinder
+        model.lookedUpCardId = "card_a"          // mid-handoff, NOT presented
+
+        let source = ThrottleSpySource(buffer: pb, count: 6)
+        await model.run(source: source)
+
+        XCTAssertFalse(model.isModalPresented, "a handoff is not a presentation")
+        XCTAssertFalse(source.idleStates.contains(true),
+                       "the camera must never idle mid-handoff — the next card is already coming")
+        XCTAssertGreaterThan(narrowing.calls, 0, "and the cascade has to keep running to read it")
+
+        // The chooser is the case that IS on screen in both worlds, borrowed or not.
+        model.ambiguous = [ChooserOption(id: "card_a", card: nil, setName: "S",
+                                         year: nil, setTotal: nil)]
+        XCTAssertTrue(model.isModalPresented, "a chooser is really presented, borrowed or not")
+    }
+
     /// The hot-phone case: the scanner left open and face-up on a table between stacks. Nothing
     /// to look at, and at the capture default a segmentation network running against a tabletop
     /// ~22 times a second for as long as it takes to get the next cards ready.
