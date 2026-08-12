@@ -14,6 +14,20 @@ final class AVCaptureFrameSource: NSObject, FrameSource, AVCaptureVideoDataOutpu
     let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "scan.frames")
     private var continuation: AsyncStream<CVPixelBuffer>.Continuation?
+    /// Held past `init` so the frame rate can be re-tuned live. Only written during `init`,
+    /// before any frame is delivered.
+    private var device: AVCaptureDevice?
+    private var idle = false
+
+    /// Frames per second with a card in view. The session's own default is 30, which is twice
+    /// what the pipeline can spend: a lock needs `stabilityK` = 3 heavy frames and
+    /// `fingerThrottle` spends 4 camera frames on each, so 15fps still locks in about a second —
+    /// while halving the ISP, the per-frame document-segmentation pass, and the match cascade.
+    private static let scanningFPS = 15.0
+    /// Frames per second with nothing to look at. The scanner gets left open on a table between
+    /// stacks, and at 30fps that is a segmentation network running ~22 times a second against a
+    /// tabletop — the bulk of why the phone gets hot during a long session.
+    private static let idleFPS = 2.0
 
     override init() {
         super.init()
@@ -55,8 +69,38 @@ final class AVCaptureFrameSource: NSObject, FrameSource, AVCaptureVideoDataOutpu
         if (try? device.lockForConfiguration()) != nil {
             if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
             if device.isAutoFocusRangeRestrictionSupported { device.autoFocusRangeRestriction = .none }
+            // AFTER commitConfiguration, not inside it: setting a session preset resets the
+            // frame-duration properties, so capping the rate before the preset lands is a no-op.
+            device.activeVideoMinFrameDuration = Self.frameDuration(capping: Self.scanningFPS, on: device)
             device.unlockForConfiguration()
         }
+        self.device = device
+    }
+
+    /// Drop to `idleFPS` when there is nothing to look at — nothing detected for a while, or a
+    /// sheet is up over the viewfinder — and back to `scanningFPS` when there is.
+    func setIdle(_ idle: Bool) {
+        guard idle != self.idle else { return }   // called per frame; only act on the transition
+        self.idle = idle
+        let fps = idle ? Self.idleFPS : Self.scanningFPS
+        queue.async {
+            guard let device = self.device, (try? device.lockForConfiguration()) != nil else { return }
+            device.activeVideoMinFrameDuration = Self.frameDuration(capping: fps, on: device)
+            device.unlockForConfiguration()
+        }
+    }
+
+    /// The minimum frame DURATION that caps capture at `fps`, clamped to what the active format
+    /// supports — an out-of-range duration raises rather than failing softly.
+    ///
+    /// Deliberately paired with `activeVideoMinFrameDuration` alone, never `max`: capping the
+    /// maximum duration would also cap exposure time, and a card under indoor light needs the
+    /// long exposures the camera chooses for itself.
+    private static func frameDuration(capping fps: Double, on device: AVCaptureDevice) -> CMTime {
+        let ranges = device.activeFormat.videoSupportedFrameRateRanges
+        let lo = ranges.map(\.minFrameRate).min() ?? fps
+        let hi = ranges.map(\.maxFrameRate).max() ?? fps
+        return CMTime(seconds: 1 / min(max(fps, lo), hi), preferredTimescale: 600)
     }
 
     /// A macro-capable virtual device (triple / dual-wide) when present — it defaults to the

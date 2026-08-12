@@ -34,6 +34,18 @@ final class ScanModelTests: XCTestCase {
         }
     }
 
+    /// Replays like `ReplaySource` and records the frame-rate transitions the model asks for,
+    /// so the camera throttling can be asserted without a camera.
+    private final class ThrottleSpySource: FrameSource, @unchecked Sendable {
+        let buffer: CVPixelBuffer; let count: Int
+        private(set) var idleStates: [Bool] = []
+        init(buffer: CVPixelBuffer, count: Int) { self.buffer = buffer; self.count = count }
+        func stream() -> AsyncStream<CVPixelBuffer> {
+            AsyncStream { cont in for _ in 0..<count { cont.yield(buffer) }; cont.finish() }
+        }
+        func setIdle(_ idle: Bool) { idleStates.append(idle) }
+    }
+
     // The fingerprint fixture ids (card_a/card_b) aren't real catalog cards, so real
     // OCR-narrowing can't produce them — inject a deterministic stub pool so these staging
     // regression tests don't depend on OCR/catalog fixture alignment (recognition accuracy
@@ -371,6 +383,65 @@ final class ScanModelTests: XCTestCase {
         XCTAssertNil(model.lookedUpCardId)
         await model.handle(.lock(cardId: "card_b"))
         XCTAssertEqual(model.lookedUpCardId, "card_b")
+    }
+
+    /// Freezing the EVENT was never enough: the cascade behind it still ran, so every second
+    /// spent reading a looked-up card was a second of OCR + ORB + RANSAC whose result `handle`
+    /// discards on arrival. In look-up mode — scan, read, dismiss, repeat — that is most of a
+    /// session, and it is why the phone gets hot.
+    func testPresentedLookUpCardStopsTheCascadeNotJustItsEvent() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let narrowing = CountingNarrowing(poolIds: ["card_a"])
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: try CandidateIndex(store: catalog)),
+                              narrowing: narrowing, staging: ScanStagingStore.inMemory(),
+                              store: catalog, fingerThrottle: 1)
+        model.lookedUpCardId = "card_a"          // a card is on screen
+
+        let source = ThrottleSpySource(buffer: pb, count: 6)
+        await model.run(source: source)
+
+        XCTAssertEqual(narrowing.calls, 0, "no frame may be OCR'd while its result is pre-discarded")
+        XCTAssertEqual(source.idleStates, Array(repeating: true, count: 6),
+                       "and the camera must sit at its idle rate for as long as the sheet is up")
+    }
+
+    /// The hot-phone case: the scanner left open and face-up on a table between stacks. Nothing
+    /// to look at, and at the capture default a segmentation network running against a tabletop
+    /// ~22 times a second for as long as it takes to get the next cards ready.
+    func testCameraIdlesOnAnEmptyViewfinderAndWakesOnACard() {
+        var throttle = CameraThrottle()
+        XCTAssertFalse(throttle.update(cardVisible: true, modal: false),
+                       "a card in view scans at the full rate")
+        for _ in 0..<(CameraThrottle.emptyFramesBeforeIdle - 1) {
+            XCTAssertFalse(throttle.update(cardVisible: false, modal: false),
+                           "a dropout shorter than the threshold must not throttle a live scan")
+        }
+        XCTAssertTrue(throttle.update(cardVisible: false, modal: false), "an empty viewfinder idles")
+        XCTAssertFalse(throttle.update(cardVisible: true, modal: false), "and the next card wakes it")
+    }
+
+    /// A hand-held card already flickers out of the detector for runs of frames — that is what
+    /// `graceMisses` exists to absorb. Idle at or below it and the camera would throttle itself
+    /// in the middle of a scan that is going fine.
+    func testIdleThresholdClearsTheLockGatesDropoutGrace() {
+        XCTAssertGreaterThan(CameraThrottle.emptyFramesBeforeIdle, LockConfig().graceMisses)
+    }
+
+    /// Dismissing a sheet has to restore the scanning rate on the next frame, and the next card
+    /// is usually NOT in frame yet when it does. Letting the empty count run during the sheet
+    /// would leave the camera idling into the next scan, costing it the wake-up it just earned.
+    func testAModalSheetIdlesTheCameraAndReleasesItOnTheNextFrame() {
+        var throttle = CameraThrottle()
+        for _ in 0..<(CameraThrottle.emptyFramesBeforeIdle + 5) {
+            XCTAssertTrue(throttle.update(cardVisible: false, modal: true), "a sheet idles at once")
+        }
+        XCTAssertFalse(throttle.update(cardVisible: false, modal: false),
+                       "dismissing returns to the scanning rate immediately, empty viewfinder or not")
     }
 
     /// The source is captured ONTO the draft at scan time, not read from the model at commit.
