@@ -190,6 +190,15 @@ private struct MainTabView: View {
             if let url = model.pendingExternalURL { UIApplication.shared.open(url) }
         }
         .onChange(of: model.intentRouteToken) { consumeIntentRoute() }
+        // Labels are printed from the tin, from a card's detail screen (which lives under Search
+        // and Discover too) and from the entry form — and that last one is a sheet that dismisses
+        // itself, taking any flow it owned with it. Same reasoning as the alert below.
+        .labelPrintFlow($model.labelRequest, store: store)
+        // …and the screens that ask for one are four layers down, so they reach the model through
+        // the environment rather than having it threaded through every initialiser between here
+        // and them. Read as an OPTIONAL (`AppModel?`) everywhere — the non-optional form traps
+        // when it is absent, which would take out previews and the view tests.
+        .environment(model)
         // Collection writes can fail from any tab (card detail lives under Browse/Search too),
         // so the failure alert hangs off the TabView, not the Tin stack.
         .alert("Save failed", isPresented: Binding(

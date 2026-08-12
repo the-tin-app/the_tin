@@ -46,6 +46,27 @@ final class AppModel {
     /// seconds away, two deliveries of one tap are milliseconds apart.
     private var lastHandledLink: (url: String, at: Date)?
     static let duplicateLinkWindow: TimeInterval = 1
+    /// The label print run in flight, if any. Lives HERE rather than on each screen for the same
+    /// reason the write-failure alert does: the thing that asks for a label is often a sheet that
+    /// dismisses itself (the entry form's "Save & print"), and a flow owned by a dismissing view
+    /// dies with it. One owner also means the start position carries across prints, so a
+    /// part-used sheet stays usable over a whole session instead of resetting to slot 1.
+    var labelRequest: LabelPrintRequest?
+
+    /// Print a label once the sheet the caller is dismissing has actually gone.
+    ///
+    /// `dismiss()` has no completion, and asking UIKit to present while another sheet is animating
+    /// away is the case it drops on the floor. So this waits out the dismissal rather than hopping
+    /// one turn — a main-actor hop returns long before the animation ends.
+    // ponytail: a fixed wait, not an observed one. UIKit gives no "the sheet is gone" signal to
+    // SwiftUI here; if this ever misfires, the upgrade is a UIViewControllerRepresentable that
+    // reports `viewDidDisappear`, which is a lot of machinery for one button.
+    func printLabelAfterDismiss(_ request: LabelPrintRequest) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))   // > the ~0.35 s sheet dismissal
+            labelRequest = request
+        }
+    }
 
     func openCard(id: String, highlight: CardHighlight? = nil) {
         // Recorded HERE so every route in is captured, not just the deep-link one. A trail with a

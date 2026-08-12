@@ -541,6 +541,27 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(CatalogUpdater(remote: backup, paths: paths).installedState())
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.databaseURL.path))
     }
+
+    /// The entry form dismisses itself on save, so its "Save & print label" hands the request to
+    /// the app and walks away. If the deferred hop is ever dropped or its `Task` cancelled, the
+    /// button becomes a silent no-op — you tap it, the form closes, and no picker ever appears.
+    func testPrintLabelAfterDismissActuallyLandsTheRequest() async throws {
+        let model = AppModel(remote: DeadRemote(), primarySource: .selfHosted, paths: tempPaths(),
+                             makeRepository: { _ in InMemoryCollectionRepository() },
+                             skipFirebase: true)
+        XCTAssertNil(model.labelRequest)
+        let entry = CollectionEntry(id: "e1", cardId: "base1-4", groupId: "", qty: 1,
+                                    condition: "NM", grade: nil, pricePaid: nil,
+                                    acquiredAt: nil, acquiredFrom: nil,
+                                    addedAt: Date(timeIntervalSince1970: 0))
+        model.printLabelAfterDismiss(LabelPrintRequest(title: "Charizard", entries: [entry]))
+
+        // Deliberately longer than the dismissal wait inside `printLabelAfterDismiss`: the point
+        // is that it arrives, not when.
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(model.labelRequest?.title, "Charizard")
+        XCTAssertEqual(model.labelRequest?.entries.map { $0.id }, ["e1"])
+    }
 }
 
 private extension ISO8601DateFormatter {

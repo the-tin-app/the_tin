@@ -184,6 +184,8 @@ struct CardDetailView: View {
     @State private var showingAddSheet = false
     @State private var sharing: SharePayload?
     @State private var editingEntry: CollectionEntry?
+    /// Label printing is owned by the app, not this screen — see `AppModel.labelRequest`.
+    @Environment(AppModel.self) private var app: AppModel?
     @State private var editingWishlist = false
     @State private var selectedPrinting: String?
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
@@ -555,21 +557,37 @@ struct CardDetailView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tint)
                 ForEach(entries) { entry in
-                    Button { editingEntry = entry } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(sleeveText(entry)).font(.caption)
-                                Text("·").font(.caption).foregroundStyle(.tertiary)
-                                Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                                Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                    HStack(spacing: 8) {
+                        Button { editingEntry = entry } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(sleeveText(entry)).font(.caption)
+                                    Text("·").font(.caption).foregroundStyle(.tertiary)
+                                    Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                                }
+                                paidLine(entry)
                             }
-                            paidLine(entry)
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Edit this copy")
+                        // A sibling of the edit button, not a glyph inside it: a tappable control
+                        // nested in another button is a hit-testing coin flip. This is the screen
+                        // you are on right after adding a card, so the verb belongs here rather
+                        // than back on the list you'd have to navigate to.
+                        Button {
+                            app?.labelRequest = LabelPrintRequest(title: model.card.name,
+                                                                  entries: [entry])
+                        } label: {
+                            Image(systemName: "qrcode").font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+                        .accessibilityLabel("Print label for this copy")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Edit this copy")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

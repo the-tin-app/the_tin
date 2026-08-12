@@ -804,7 +804,8 @@ struct CollectionView: View {
     @State private var renameGroupName = ""
     @State private var editMode: EditMode = .inactive
     @State private var printRequest: PrintSheetRequest?
-    @State private var labelRequest: LabelPrintRequest?
+    /// Label printing is owned by the app, not this screen — see `AppModel.labelRequest`.
+    @Environment(AppModel.self) private var app: AppModel?
     /// ⚠️ The label scanner is the app's THIRD AVCaptureSession and it opens from HERE precisely
     /// because the Tin has no camera running — see QRScannerView's header.
     @State private var showingLabelScanner = false
@@ -892,7 +893,6 @@ struct CollectionView: View {
         .environment(\.editMode, $editMode)
         .printSheetFlow($printRequest)
         .collectionReportFlow(isActive: $showingReport, collection: model, store: store)
-        .labelPrintFlow($labelRequest, store: store)
         .fullScreenCover(isPresented: $showingLabelScanner) { labelScannerCover }
         .navigationTitle("The Tin")
         .navigationBarTitleDisplayMode(.inline)
@@ -935,7 +935,7 @@ struct CollectionView: View {
                     // iPadOS 18, and menu contents are never subject to toolbar overflow.
                     Button { labelScanError = nil; showingLabelScanner = true }
                         label: { Label("Scan a label", systemImage: "qrcode.viewfinder") }
-                    Button { labelRequest = LabelPrintRequest(title: "The Tin", entries: model.entries) }
+                    Button { app?.labelRequest = LabelPrintRequest(title: "The Tin", entries: model.entries) }
                         label: { Label("Print labels", systemImage: "qrcode") }
                         .disabled(model.entries.isEmpty)
                 } label: {
@@ -1236,7 +1236,7 @@ struct CollectionView: View {
                 Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
                     label: { Label("Trade sheet…", systemImage: "printer") }
                     .disabled(model.entries(in: group.id).isEmpty)
-                Button { labelRequest = LabelPrintRequest(title: group.name, entries: entries) }
+                Button { app?.labelRequest = LabelPrintRequest(title: group.name, entries: entries) }
                     label: { Label("Print labels…", systemImage: "qrcode") }
                     .disabled(entries.isEmpty)
                 Button(role: .destructive) { deletingGroup = group }
@@ -1385,9 +1385,16 @@ struct CollectionView: View {
                 }
                 .swipeActions(edge: .leading) {
                     Button { editingEntry = entry } label: { Label("Edit", systemImage: "pencil") }
+                    Button {
+                        app?.labelRequest = LabelPrintRequest(title: cardName(entry), entries: [entry])
+                    } label: { Label("Label", systemImage: "qrcode") }
+                        .tint(.teal)
                 }
                 .contextMenu {
                     Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
+                    Button {
+                        app?.labelRequest = LabelPrintRequest(title: cardName(entry), entries: [entry])
+                    } label: { Label("Print label", systemImage: "qrcode") }
                 }
             }
         }
