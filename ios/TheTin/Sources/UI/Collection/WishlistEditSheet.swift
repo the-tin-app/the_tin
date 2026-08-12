@@ -6,6 +6,13 @@ struct WishlistEditSheet: View {
     let card: CardRecord
     let price: Double?
     let wants: WantsModel
+    /// Open with Hunting already on and a budget seeded from market price.
+    ///
+    /// The second door into hunting: the eBay search is gated on `entry.hunt != nil` and this
+    /// sheet was the only place to set one, so the feature was invisible to anyone who never
+    /// opened it. Deliberately still a SHEET rather than a one-tap action — `save()` drops a
+    /// hunt with no budget, so a one-tap "hunt this" would silently store nothing.
+    var armHunt: Bool = false
     @Environment(\.dismiss) private var dismiss
 
     @State private var priority: WantPriority = .normal
@@ -33,6 +40,18 @@ struct WishlistEditSheet: View {
             .replacingOccurrences(of: separator, with: ".")
         guard let v = Double(normalised), v > 0 else { return nil }
         return v
+    }
+
+    /// The budget an armed hunt starts with. Market price is the only number available at the
+    /// tap site, and it is the right default: "I'd pay about what it's worth."
+    ///
+    /// Formatted with an explicit "." to match `parseBudget`'s canonical form, then re-parsed
+    /// through the locale separator at save time. An unpriced or zero-priced card seeds EMPTY,
+    /// not "0.00" — `parseBudget` rejects non-positive values, so a zero seed would arm a hunt
+    /// that refuses to save and give no reason.
+    static func seedBudget(marketUsd: Double?) -> String {
+        guard let marketUsd, marketUsd > 0 else { return "" }
+        return String(format: "%.2f", marketUsd)
     }
 
     private var budget: Double? { Self.parseBudget(targetText) }
@@ -129,6 +148,14 @@ struct WishlistEditSheet: View {
         if let h = e.hunt {
             minCondition = h.minCondition
             hunting = true
+        } else if armHunt {
+            hunting = true
+            // Only seed a budget the entry doesn't already have — an existing target the user
+            // typed outranks market price.
+            if targetText.isEmpty { targetText = Self.seedBudget(marketUsd: price) }
+            // No budget to seed (unpriced card) means the footer's "a hunt needs a budget"
+            // is the next thing to read, so put the cursor where it points.
+            if budget == nil { targetFocused = true }
         }
     }
 
