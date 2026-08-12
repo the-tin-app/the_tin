@@ -32,6 +32,9 @@ struct EntryFormView: View {
     @State private var acquiredFrom = ""
     @State private var acquiredVia: AcquiredVia? = nil
     @State private var forTrade = false
+    /// What `forTrade` was when the form opened, so the confirmation fires only on the
+    /// false→true transition. A toast on every save of an already-flagged card is noise.
+    @State private var wasForTrade = false
     /// Fixed for the life of the form so a photo taken BEFORE Save has a stable key. `save()`
     /// used to mint the id inline, which is too late — the file would be written under one id and
     /// the entry saved under another.
@@ -223,6 +226,7 @@ struct EntryFormView: View {
             acquiredAt = existing.acquiredAt ?? Date()
             acquiredFrom = existing.acquiredFrom ?? ""
             forTrade = existing.isForTrade
+            wasForTrade = existing.isForTrade
             acquiredVia = existing.acquiredViaValue
         } else {
             // New entries default to the tin itself, matching the scanner — filing behind a
@@ -283,6 +287,9 @@ struct EntryFormView: View {
                 photos: photos.isEmpty ? nil : photos)
             guard await onSave(entry) else { return }
             dismiss()
+            if forTrade, !wasForTrade {
+                app?.confirmAfterDismiss("On your trade list", route: .trade)
+            }
             if thenPrintLabel {
                 app?.printLabelAfterDismiss(
                     LabelPrintRequest(title: card.name, entries: [entry]))

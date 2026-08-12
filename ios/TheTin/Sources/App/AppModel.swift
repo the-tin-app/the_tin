@@ -68,6 +68,86 @@ final class AppModel {
         }
     }
 
+    /// Which pinned row a confirmation points at. These are the two rows under the dividers that
+    /// a state change can send a card to.
+    enum PinnedRoute: Equatable { case wishlist, trade }
+
+    /// A short-lived "that worked — here's where it went" toast with one navigation action.
+    ///
+    /// Deliberately NOT `CollectionModel.UndoableDelete`. Undo restores data and the user is
+    /// racing a clock, so its offer carries `expiresAt` and draws a countdown bar. This only
+    /// points at a screen: missing it costs nothing, so there is no bar and no deadline to render
+    /// honestly. Same model-owned expiry task though, and for the same reason — see
+    /// `CollectionModel.offerUndo`: a `.task` on the view is cancelled when SwiftUI re-identifies
+    /// the toast, which swallows its own CancellationError and clears the offer inside a frame.
+    struct Confirmation: Identifiable, Equatable {
+        let id = UUID()
+        /// "On your trade list" — what the toast says happened.
+        let message: String
+        /// Where "View" goes.
+        let route: PinnedRoute
+    }
+
+    private(set) var confirmation: Confirmation?
+    private var confirmationExpiry: Task<Void, Never>?
+
+    /// How long a confirmation stays up. Shorter than the 6 s undo window: nothing is lost by
+    /// missing this one.
+    static let confirmationWindow: Duration = .seconds(5)
+
+    /// Raise a confirmation, replacing any already standing.
+    func confirm(_ message: String, route: PinnedRoute) {
+        confirmationExpiry?.cancel()
+        confirmation = Confirmation(message: message, route: route)
+        confirmationExpiry = Task { [weak self] in
+            try? await Task.sleep(for: Self.confirmationWindow)
+            // A cancelled sleep means a NEWER confirmation superseded this one, or the user took
+            // the action. Clearing here would wipe that newer one.
+            guard !Task.isCancelled else { return }
+            self?.confirmation = nil
+            self?.confirmationExpiry = nil
+        }
+    }
+
+    /// Raise a confirmation from a view that is dismissing itself.
+    ///
+    /// Same 450 ms as `printLabelAfterDismiss`, for the same reason: `dismiss()` has no
+    /// completion handler, and UIKit drops a presentation attempted while another is still
+    /// animating away. A main-actor hop returns far too early.
+    ///
+    /// ponytail: fixed timer, not an observed signal. The honest upgrade is a
+    /// `UIViewControllerRepresentable` reporting `viewDidDisappear`, same shortcut and same
+    /// upgrade path as `printLabelAfterDismiss` (#151).
+    ///
+    /// ⚠️ **Do not trust 450 ms as a measured number.** #151's equivalent wait measured 2-3
+    /// SECONDS end to end on device, because `reset()` and downstream re-warm dominated the
+    /// timer itself. This toast is lighter (no reset, no re-warm), so 450 ms is the starting
+    /// point, not the verified one — it must be checked on device, not on the simulator.
+    func confirmAfterDismiss(_ message: String, route: PinnedRoute) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            confirm(message, route: route)
+        }
+    }
+
+    func clearConfirmation() {
+        confirmationExpiry?.cancel()
+        confirmationExpiry = nil
+        confirmation = nil
+    }
+
+    /// The confirmation's action: dismiss the toast and ask `MainTabView` to push the row.
+    /// Token-based like every other programmatic push in this app (`consumeCardRoute`,
+    /// `consumeTradeRoute`) — the tab's `NavigationPath` lives in the view, not here.
+    private(set) var pendingPinnedRoute: PinnedRoute?
+    private(set) var pinnedRouteToken = 0
+
+    func openPinned(_ route: PinnedRoute) {
+        clearConfirmation()
+        pendingPinnedRoute = route
+        pinnedRouteToken += 1
+    }
+
     func openCard(id: String, highlight: CardHighlight? = nil) {
         // Recorded HERE so every route in is captured, not just the deep-link one. A trail with a
         // preceding "handleDeepLink" line came from a universal link; one without came from an
