@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// One entry of the collection as a list row: art thumbnail, name, sleeve details, value —
 /// plus which divider it lives behind when the list spans the whole tin.
@@ -88,6 +89,11 @@ struct GroupDetailView: View {
                 if scope.isEmpty {
                     emptyState   // instead of a "$0.00 · Priced 0 of 0" ledger for nothing
                 } else {
+                // `EditCardTip` can't anchor to the toolbar Menu it explains — `.popoverTip` on a
+                // `Menu` inside a `ToolbarItem` doesn't present (confirmed by direct test), and
+                // there's no lower control to point at instead. Inline at the top of the list, so
+                // it explains the menu above from below rather than pointing at it.
+                if !isSelecting { TipView(EditCardTip()) }
                 // While selecting, the cards ARE the screen: the plaque + performance chart push
                 // the first row below the fold, which reads as "there's nothing here to tick".
                 if !isSelecting { statsSection }
@@ -212,7 +218,6 @@ struct GroupDetailView: View {
                 }
                 .accessibilityLabel(rowTap == .edit ? "View options, tapping a card opens edit"
                                                     : "View options")
-                .popoverTip(EditCardTip())
             }
             if let group {
                 ToolbarItem {

@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import TipKit
 
 @MainActor @Observable
 final class CollectionModel {
@@ -864,6 +865,7 @@ struct CollectionView: View {
                     sealedSection
                     if let wants, !wants.wanted.isEmpty {
                         wishlistLink(wants).tinRow()
+                        TipView(WatchingTip()).tinRow()
                         watchingLink(wants).tinRow()
                     }
                 } else {
@@ -883,7 +885,10 @@ struct CollectionView: View {
                     // Gated on a non-empty wishlist even here, unlike Wanted: with nothing
                     // hearted the screen has nothing to say, and a row that opens an empty
                     // screen is the same broken promise the trade row avoids below.
-                    if let wants, !wants.wanted.isEmpty { watchingLink(wants).tinRow() }
+                    if let wants, !wants.wanted.isEmpty {
+                        TipView(WatchingTip()).tinRow()
+                        watchingLink(wants).tinRow()
+                    }
                     // Not on the empty branch: with no entries there is nothing to trade, so the
                     // row would only be a promise the tin can't keep — same rule as the wishlist.
                     tradeLink.tinRow()
@@ -1433,7 +1438,6 @@ struct CollectionView: View {
                    count: nil, route: WatchingRoute(),
                    dot: WatchingModel.hasUnseen(asOf: model.priceAsOf,
                                                 lastSeen: watchingLastSeenAsOf))
-            .popoverTip(WatchingTip())
     }
 
     /// The other half of the wishlist: what you'll give up. Sits beside it because "hunting" and

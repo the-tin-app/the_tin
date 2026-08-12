@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// Edit a wishlist card's priority / price target / notes / hunt. Writes via `WantsModel.update`,
 /// which no-ops if the card isn't wanted, so this is only presented for wanted cards.
@@ -72,11 +73,13 @@ struct WishlistEditSheet: View {
                     }
                 }
                 Section("Priority") {
+                    // `.popoverTip` doesn't reliably present on a control inside a `Form` `Section`
+                    // (confirmed by direct test) — `TipView` is the documented inline alternative.
+                    TipView(GrailTip())
                     Picker("Priority", selection: $priority) {
                         ForEach(WantPriority.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    .popoverTip(GrailTip())
                 }
                 Section("Price target (USD)") {
                     TextField("e.g. 25.00", text: $targetText)
@@ -112,6 +115,7 @@ struct WishlistEditSheet: View {
 
     @ViewBuilder private var huntingSection: some View {
         Section {
+            TipView(HuntingTip())
             Toggle("Hunting", isOn: Binding(
                 get: { hunting },
                 set: { on in
@@ -119,7 +123,6 @@ struct WishlistEditSheet: View {
                     if on, budget == nil { targetFocused = true }
                 }
             ))
-            .popoverTip(HuntingTip())
             if hunting {
                 Picker("Condition floor", selection: $minCondition) {
                     ForEach(Self.floors) { Text($0.floorLabel).tag($0) }

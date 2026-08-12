@@ -3,10 +3,15 @@ import TipKit
 
 /// The four things a first-run user could not work out on their own (feedback, 2026-08-12).
 ///
-/// These are contextual tips, NOT a tour. Each one fires beside the control it explains and
-/// TipKit shows it once. A tour was considered and rejected: three of the six things reported
-/// as confusing were navigation and naming defects, and those are fixed in place — a tour
-/// explaining a mismatched label is a maintained explanation of a bug.
+/// These are contextual tips, NOT a tour. Each one is presented inline (`TipView`), next to the
+/// control it explains, and TipKit shows it once. Not `.popoverTip`: that doesn't reliably
+/// present on a control inside a `Form` `Section`/`List`, or on a `Menu` inside a `ToolbarItem`
+/// (confirmed by direct test on all four original anchors) — `TipView` is TipKit's documented
+/// inline alternative for exactly those contexts.
+///
+/// A tour was considered and rejected: three of the six things reported as confusing were
+/// navigation and naming defects, and those are fixed in place — a tour explaining a mismatched
+/// label is a maintained explanation of a bug.
 ///
 /// ⚠️ **No tip may promise speed or notification.** eBay's saved search is a DAILY email and the
 /// app sends nothing. `TipsTests.testNoTipPromisesSpeed` is the guard, and `HuntRow`'s header
@@ -44,9 +49,14 @@ struct WatchingTip: Tip {
 
 /// Editing an owned card was reported as undiscoverable. #152 added the tap-mode picker; this
 /// points at it rather than adding a second way to do the same thing.
+///
+/// Presented as an inline `TipView` at the top of the list rather than `.popoverTip` on the
+/// toolbar `Menu` it explains — `.popoverTip` doesn't reliably present on a `Menu` inside a
+/// `ToolbarItem` (confirmed by direct test). The copy says "the menu above" rather than "here"
+/// because of that: the tip sits below the control it's pointing at, not beside it.
 struct EditCardTip: Tip {
-    static let body = "Switch what a tap does here, then tap any card to edit its condition, "
-        + "what you paid, or its photos."
+    static let body = "Switch what a tap does in the menu above, then tap any card to edit its "
+        + "condition, what you paid, or its photos."
     var title: Text { Text("Editing a card you own") }
     var message: Text? { Text(Self.body) }
     var image: Image? { Image(systemName: "pencil") }
