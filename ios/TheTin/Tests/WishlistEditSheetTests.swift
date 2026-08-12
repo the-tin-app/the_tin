@@ -18,10 +18,15 @@ final class WishlistEditSheetTests: XCTestCase {
         XCTAssertEqual(WishlistEditSheet.seedBudget(marketUsd: 0), "")
     }
 
-    /// The seed must survive the sheet's own parser, or arming produces a hunt that cannot save.
+    /// The seed must survive the sheet's own parser **on the default locale path**, which is the
+    /// one production uses (`WishlistEditSheet.swift`'s `budget` calls `parseBudget(targetText)`
+    /// with no separator argument). Passing an explicit "." here would skip the locale
+    /// resolution that is the only part able to break: `seedBudget` formats with a plain
+    /// `%.2f` while `parseBudget` normalises against `Locale.current.decimalSeparator`, and it
+    /// is the symmetry between those two that this test exists to defend.
     func testTheSeedParsesBackToAPositiveBudget() throws {
         let seed = WishlistEditSheet.seedBudget(marketUsd: 24.5)
-        let parsed = try XCTUnwrap(WishlistEditSheet.parseBudget(seed, separator: "."))
+        let parsed = try XCTUnwrap(WishlistEditSheet.parseBudget(seed))
         XCTAssertEqual(parsed, 24.5, accuracy: 0.001)
     }
 }
