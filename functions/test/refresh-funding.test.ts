@@ -93,7 +93,7 @@ describe("writeManifestBlocks", () => {
 
 describe("refreshFunding", () => {
   const respond = (org: unknown): FetchLike => async () => ({
-    ok: true, status: 200, json: async () => ({ data: { organization: org } }),
+    ok: true, status: 200, json: async () => ({ data: { repositoryOwner: org } }),
   });
 
   it("fetches GitHub, computes, and writes the block", async () => {

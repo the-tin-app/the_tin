@@ -72,7 +72,9 @@ enum AppConfig {
     /// nothing is unlocked by them, which is what keeps the "Support" affordance App Store-
     /// compliant. Whatever links here must be *named* correctly wherever it's linked from: a
     /// button naming one platform that opens another reads as a scam.
-    static let supportURL = URL(string: "https://github.com/sponsors/the-tin-app")!
+    // Personal listing, not the org one: GitHub refuses an ORGANISATION payout to an individual
+    // Stripe account, which left `sponsors/the-tin-app` pending indefinitely (2026-08-12).
+    static let supportURL = URL(string: "https://github.com/sponsors/treyes133")!
 
     /// Self-hosted `catalog-server` (Cloudflare Tunnel hostname). Non-nil ⇒ the failover composite
     /// tries the NAS first and falls back to the R2 backup origin; a wrong/undeployed host just
