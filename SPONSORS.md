@@ -13,7 +13,7 @@ The people below pay for that, so nobody has to pay to use it. Thank you.
 
 ## Secret Rare
 
-*$25 / month. A handful of people here covers the app's entire running cost.*
+*$20 / month. A handful of people here covers the app's entire running cost.*
 
 <!-- No sponsors at this tier yet. -->
 
