@@ -23,8 +23,6 @@ struct SettingsView: View {
     @State private var restoreError: String?
     @State private var exportDoc: CSVDocument?
     @State private var importing = false
-    /// Highest `AppModel.importPickerToken` this screen has already acted on.
-    @State private var consumedImportPicker = 0
     @State private var importSummary: ImportSummary?
     @State private var importError: String?
     @State private var importInFlight = false
@@ -166,20 +164,20 @@ struct SettingsView: View {
             //
             // `pendingImportURL` first: it carries a file somebody already chose, so it outranks a
             // bare request to go choose one.
-            .task(id: "\(app.importRouteToken)|\(app.importPickerToken)") {
+            .task(id: app.importRouteToken) {
                 if let url = app.pendingImportURL {
                     app.pendingImportURL = nil
                     await runImport(.success(url))
                     return
                 }
-                // The empty tin's "Import a list" — no file picked yet, so put the picker up.
-                //
-                // Consumed-token pattern (as `RootView` uses), NOT a bare `guard token > 0`:
-                // `.task(id:)` fires on every appearance, so once the token had ever been bumped,
-                // opening Settings to change the appearance would throw the file picker in your face.
-                guard app.importPickerToken > consumedImportPicker else { return }
-                consumedImportPicker = app.importPickerToken
-                importing = true
+                // The empty tin's "Import a list" — no file picked yet, so put the picker up, then
+                // clear the request. Clearing it on the MODEL is the whole fix: a `@State` counter
+                // here resets every time this sheet is rebuilt, so it re-fired on every visit to
+                // Settings. See `AppModel.wantsImportPicker`.
+                if app.wantsImportPicker {
+                    app.wantsImportPicker = false
+                    importing = true
+                }
             }
             .sheet(item: $importSummary) { ImportResultSheet(summary: $0) }
             // ⚠️ Attached HERE, on the List, not on the Section that owns the row. A `Section` is

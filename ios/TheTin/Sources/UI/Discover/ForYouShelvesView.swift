@@ -10,15 +10,6 @@ struct ForYouShelvesView: View {
     let store: CatalogStore
     var wants: WantsModel?
     var collection: CollectionModel?
-    /// The price picker has never been answered. Asked here rather than at launch — see the note
-    /// at this view's call site in `DiscoverView`.
-    var needsSeed: Bool = false
-    /// Tells Discover to rebuild with the new tiers; a sheet on a pushed screen writing UserDefaults
-    /// doesn't invalidate the view that reads them.
-    var onSeeded: () -> Void = {}
-
-    @State private var showSeed = false
-
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
@@ -30,15 +21,6 @@ struct ForYouShelvesView: View {
         }
         .navigationTitle("For You")
         .navigationBarTitleDisplayMode(.inline)
-        // `.task`, not `.onAppear`: coming BACK from a shelf's deck re-runs onAppear, and the
-        // picker would present again for anyone who reached a deck without answering.
-        .task { showSeed = needsSeed }
-        .sheet(isPresented: $showSeed) {
-            ForYouSeedView {
-                showSeed = false
-                onSeeded()
-            }
-        }
     }
 }
 
