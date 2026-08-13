@@ -161,9 +161,7 @@ private struct MainTabView: View {
                                // here as a second `.toolbar` is what lost it on iPadOS 18.
                                onOpenSettings: { showingSettings = true })
                     .sheet(isPresented: $showingSettings) { SettingsView(app: model, pack: pack) }
-                    // The one tab that carries the support bar — this is where the collection the
-                    // project exists to serve actually lives.
-                    .statusBanners(model: model, store: store, showsFunding: true)
+                    .statusBanners(model: model, store: store)
             }
             .appToasts(model: model, pack: pack)
             .tabItem { Label("The Tin", systemImage: "square.stack.3d.up") }
@@ -299,11 +297,10 @@ private struct MainTabView: View {
 /// Must live INSIDE the NavigationStack: a TabView-level `safeAreaInset` lets the child nav bars
 /// draw over it (it was covering the Discover section headers).
 private extension View {
-    /// The strips above a tab's content: at most one honesty banner, plus — on The Tin only — the
-    /// support bar. `pack` used to be threaded through here and was never read.
-    func statusBanners(model: AppModel, store: CatalogStore,
-                       showsFunding: Bool = false) -> some View {
-        modifier(StatusBanners(model: model, store: store, showsFunding: showsFunding))
+    /// The one honesty banner above a tab's content. The support bar is NOT here — it scrolls
+    /// with the tin's own list (see `CollectionView.fundingRow`).
+    func statusBanners(model: AppModel, store: CatalogStore) -> some View {
+        modifier(StatusBanners(model: model, store: store))
     }
 
     /// Attach to the tab's `NavigationStack`, never to its root view — see `AppToasts`.
@@ -335,18 +332,14 @@ private extension View {
 private struct StatusBanners: ViewModifier {
     let model: AppModel
     let store: CatalogStore
-    let showsFunding: Bool
 
     func body(content: Content) -> some View {
         content
             .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    if model.network.isOffline {
-                        OfflineBanner(asOf: model.catalogState?.priceAsOf ?? (try? store.priceAsOf()) ?? nil)
-                    } else if model.reducedData {
-                        ReducedDataBanner(installedTier: model.catalogState?.tier)
-                    }
-                    if showsFunding { FundingBar(funding: model.funding) }
+                if model.network.isOffline {
+                    OfflineBanner(asOf: model.catalogState?.priceAsOf ?? (try? store.priceAsOf()) ?? nil)
+                } else if model.reducedData {
+                    ReducedDataBanner(installedTier: model.catalogState?.tier)
                 }
             }
     }

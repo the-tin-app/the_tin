@@ -214,11 +214,17 @@ default, expanding to a capsule progress meter + small prominent "Support" butto
 Nothing in the app is gated by it, and its copy must never imply a donation unlocks
 anything.
 
-**The Tin tab only.** It was on all five tabs and every screen pushed from them, which
-spent ~24pt off the top of the entire app — including the scanner viewfinder and search
-results, where the relationship it asks about is not what the user is doing. It lives
-where the collection lives; Settings carries the full Support section for everywhere
+**The Tin tab only, and it scrolls.** It was on all five tabs and every screen pushed from
+them, which spent ~24pt off the top of the entire app — including the scanner viewfinder
+and search results, where the relationship it asks about is not what the user is doing. It
+lives where the collection lives; Settings carries the full Support section for everywhere
 else. Generosity is visible in the design, not repeated on every screen.
+
+It is a **row of the tin's list, not chrome pinned above it**. On `safeAreaInset` it was
+cemented to the top of the screen: scroll your collection and the ask stayed, permanently
+holding the line above your tin's value. An ask that gates nothing should be visible when
+you arrive and gone while you're working. As a row it scrolls away and comes back when you
+scroll home.
 
 **One banner above content, never a stack.** The offline and reduced-data notices could
 both render, with the scanner-pack prompt above them as a third. Offline wins — it is the

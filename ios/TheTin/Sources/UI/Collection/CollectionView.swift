@@ -855,6 +855,7 @@ struct CollectionView: View {
     var body: some View {
         List {
             if searchText.isEmpty {
+                fundingRow
                 if model.catalogUnavailable { catalogNotice.tinRow() }
                 if model.isAwaitingFirstLoad {
                     // NOT `emptyTin`: until the stream delivers we don't know the tin is empty,
@@ -1328,6 +1329,25 @@ struct CollectionView: View {
     /// Honest degraded state when the catalog store can't be read: without it, names fall
     /// back to raw card ids and prices just vanish, which reads as data loss. Same visual
     /// pattern as PortfolioView's history notice.
+    /// The support strip, as the first ROW of the tin rather than chrome pinned above it.
+    ///
+    /// It used to ride on `safeAreaInset(edge: .top)`, which cements it to the top of the screen:
+    /// scroll the tin and it stays, permanently occupying the line above your collection's value.
+    /// That is the wrong weight for an ask that nothing in the app depends on — it should be
+    /// visible when you arrive and gone the moment you're doing something else. As a list row it
+    /// scrolls away with everything above the fold and comes back when you scroll home.
+    ///
+    /// Only when `searchText.isEmpty`: mid-search the list is results, and a donation ask is not
+    /// one of them.
+    @ViewBuilder private var fundingRow: some View {
+        if let funding = app?.funding {
+            FundingBar(funding: funding)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
+        }
+    }
+
     private var catalogNotice: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Couldn't read the card catalog", systemImage: "exclamationmark.triangle")
