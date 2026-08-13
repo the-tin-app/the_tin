@@ -81,12 +81,26 @@ stores blobs under a meaningless label. Zero PII by construction. The cost: a de
 request cannot be authenticated by login, so the client proves possession by signing a
 challenge.
 
-### Photos — separate opt-in, hard quota
+### Photos — user-owned storage, never ours
 
-Photos are ~2 MB against a ~500 KB tin — roughly **100× the payload**, accumulating
-forever, and the most sensitive content we would hold. They get their own toggle *inside*
-the sync opt-in, and a hard per-user cap. Egress being free keeps this affordable; the
-quota is what bounds the worst case.
+**We host no user-generated images.** Photos stay in the user's own cloud: the iCloud
+container on iOS, as they already do today, and a Google Drive app folder on Android.
+Only tins pass through R2.
+
+This reverses an earlier decision (separate opt-in behind a quota) and the reason is not
+cost — at the quota it was a few dollars a month. It is that **hosting user-generated
+images from a user base that skews young is the one part of this design that would have
+warranted legal review**, and there is no budget for one on a free app funded personally.
+Removing the category is cheaper than advising on it, and it is the only item here where
+"we couldn't afford advice" would not have been much of a defence.
+
+The cost: photos do not cross ecosystems — an iPhone → Android move brings the tin, not
+the pictures. Accepted, and it should be stated plainly in the UI rather than engineered
+around. They are photographs of cards the user still owns.
+
+Knock-on effects, all of them simplifications: no UGC in the privacy policy, none in the
+App Store privacy labels, no image-storage quota to enforce, and no moderation question
+to answer.
 
 ### Residency — EU-jurisdiction bucket from day one
 
@@ -113,8 +127,9 @@ Assumptions: ~500 KB ciphertext per tin, photos excluded, debounced writes.
 | 10k | ~5 GB (inside free tier) | **~$2–5** |
 | 100k | ~50 GB | **~$25–70** |
 
-The 100k spread is almost entirely write frequency. Photos, at the quota, are additive
-storage — cheap per GB, but monotonically growing, which is the reason for the cap.
+The 100k spread is almost entirely write frequency. Photos are absent from this table by
+design, not omission — they never reach our storage at all, so the largest and
+fastest-growing payload is simply not on the bill.
 
 ### The real cost risk is abuse, not growth
 
@@ -123,10 +138,29 @@ is already enforced in the Worker; it needs per-id storage quota, an object-size
 rate limiting. **This is the difference between a predictable bill and an unbounded one**,
 and it should ship with the first byte of sync, not after.
 
-## Legal
+## Legal — scoped to stay self-serviceable
 
-Encryption at rest does **not** remove GDPR obligations: pseudonymous ciphertext is still
-personal data. What changes:
+**Constraint, 2026-08-13: there is no budget for legal review.** This is a free app funded
+out of pocket with zero donors, so the design is shaped to stay inside what a solo
+developer can responsibly self-serve, rather than shaped first and reviewed after.
+
+What that actually requires is separating the obligations that need advice from the ones
+that don't:
+
+| | Needs a lawyer? |
+|---|---|
+| Cloudflare DPA | No — click-through, not negotiated |
+| EU-jurisdiction bucket | No — a config flag |
+| Privacy policy for no-accounts, ciphertext-only | No — the less held, the more it is genuinely boilerplate |
+| **Hosting user-generated images from a young user base** | **Yes — so it was removed** |
+
+Dropping cloud photo hosting (above) is what takes this from "should be reviewed" to
+"self-serviceable". What remains is ciphertext we cannot read, under ids that map to no
+person, in a chosen region, with a deletion path.
+
+This is not a certification that no advice is needed — it is a deliberate narrowing of the
+surface so the remaining obligations are the ordinary kind. Encryption at rest does **not**
+remove GDPR obligations: pseudonymous ciphertext is still personal data. What changes:
 
 - **Lawful basis** becomes consent, which the opt-in design supports directly.
 - **A Cloudflare DPA** is required, as they become a processor.
@@ -136,10 +170,14 @@ personal data. What changes:
 
 ### The privacy policy is not updated yet, deliberately
 
-`site/privacy/index.html` needs material edits to **What we collect**, **What we don't
-collect** (which currently claims more than will remain true), **Third-party services**,
-**Data deletion**, and **Children**. That last one matters more than usual: a Pokémon app
-skews young, and this is the first feature where we host user-generated content.
+`site/privacy/index.html` needs edits to **What we collect**, **What we don't collect**
+(which currently claims more than will remain true), **Third-party services** (Cloudflare
+R2 joins it as a processor), and **Data deletion**.
+
+**Children** needs re-reading but probably not rewriting: with photos staying in
+user-owned storage, no account, and no readable content, this feature adds no
+child-specific collection. Had we hosted the images, that section — and the App Store
+privacy labels — would have needed real work.
 
 Those edits should land **with the feature, not before it**. Publishing a policy that
 describes collection which is not yet happening is its own inaccuracy.
@@ -148,9 +186,15 @@ describes collection which is not yet happening is its own inaccuracy.
 
 1. The recovery-code format and exactly where it is shown — once at opt-in is decided;
    whether it can be re-displayed later is not.
-2. Quota numbers: per-user storage cap, object-size cap, rate limit.
+2. Quota numbers: per-id storage cap, object-size cap, rate limit. These are abuse
+   controls now, not photo controls.
 3. Whether sharing rides this transport at 1.0.4 or stays on the existing share-link
    surface. Sharing needs a fresh per-share key in the URL **fragment** (never sent to the
    server) and lifecycle-rule expiry, but it does not otherwise depend on sync landing.
-4. Whether a second reviewer — legal, not engineering — is warranted before launch given
-   the residency and children questions.
+4. The Google Drive app-folder path for Android photos — the iOS side already exists as
+   the iCloud container, but the Android half is unbuilt and unscoped.
+
+**Closed:** whether legal review is warranted. There is no budget for it, so the design
+was narrowed until the answer is no — see the Legal section. If a later change puts
+user-generated content back on our storage, that question reopens with it, and this is the
+line to cite.
