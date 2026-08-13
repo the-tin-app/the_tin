@@ -19,9 +19,12 @@ struct FundingBar: View {
 
     private var fundedPctText: String { "\(Int((min(max(funding.fundedPct, 0), 1) * 100).rounded()))% funded" }
 
-    private var collapsedText: String {
-        FundingModel.isLive ? "Support the project — \(fundedPctText)" : "Support the project — coming soon!"
-    }
+    /// Deliberately neutral, and deliberately NOT the funded percentage. This bar is always on
+    /// screen in the app's chrome, and an app whose whole pitch is "no ads" cannot carry a
+    /// permanent donation prompt there — Settings carries the actual ask. Expanding is an opt-in
+    /// act, so the button lives one tap in. (It also can't say "0% funded" to every user on day
+    /// one, which is the other half of why the old copy was wrong.)
+    private var collapsedText: String { "Support the project" }
 
     var body: some View {
         Group {
@@ -52,10 +55,19 @@ struct FundingBar: View {
         HStack(spacing: 12) {
             if FundingModel.isLive {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Support the project — \(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents))/mo")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    FundedMeter(fundedPct: funding.fundedPct)
+                    // The meter is gated on money actually raised, NOT on `isLive` — see that
+                    // flag's doc comment. At zero there is no bar to draw and "0% funded" would
+                    // undersell the ask; the sentence carries it until the first sponsorship.
+                    if funding.raisedCents > 0 {
+                        Text("Support the project — \(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents))/mo")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        FundedMeter(fundedPct: funding.fundedPct)
+                    } else {
+                        Text("The Tin is free and nothing is ever locked. Sponsorship covers what it costs to run.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 8)
                 Button("Support") { openURL(AppConfig.supportURL) }
