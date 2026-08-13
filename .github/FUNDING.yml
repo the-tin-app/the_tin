@@ -1,7 +1,9 @@
-# Adds a "Sponsor" button to the repo. Left dormant on purpose: The Tin's stance
-# is no funding pitch until the channel is actually live (matches the in-app
-# "coming soon" support bar). Uncomment a line below the moment it's approved.
-
-# github: the-tin-app          # ← uncomment when GitHub Sponsors for the org is approved
-# open_collective: the-tin     # ← uncomment when the Open Collective is live
-# custom: ["https://thetinapp.com/support"]
+# Adds a "Sponsor" button to the repo, pointing at the GitHub Sponsors listing.
+#
+# The listing is PERSONAL (`treyes133`), not the `the-tin-app` org: GitHub refuses an
+# organisation payout to an individual Stripe account, so the org listing never published.
+# The repo stays in the org — only the funding listing moved. Don't "correct" this back.
+#
+# Open Collective is deliberately absent: Open Source Collective rejected the project on
+# 2026-07-25, so there is no collective to link and this must not be re-added.
+github: treyes133
