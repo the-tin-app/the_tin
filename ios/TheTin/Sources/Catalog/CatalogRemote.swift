@@ -121,7 +121,9 @@ enum AppConfig {
         }
         set { UserDefaults.standard.set(newValue, forKey: catalogTierKey) }
     }
-    private static let catalogTierKey = "catalogTier"
+    // A persisted defaults key, never shown. Renaming it resets every user's chosen catalog size
+    // to average — same reason `wantedScope` keeps its retired name.
+    private static let catalogTierKey = "catalogTier"  // vocab-ok: storage key, not user copy
 
     /// The two price lines from the For You first-run picker.
     ///

@@ -212,7 +212,7 @@ struct PortfolioView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Price history isn't in the Small catalog", systemImage: "chart.line.uptrend.xyaxis")
                 .font(.subheadline.weight(.medium))
-            Text("Choose the Standard or Complete catalog in Settings to chart your collection's value over time. Every option is free.")
+            Text("Choose the Standard or Complete catalog in Settings to chart your tin's value over time. Every option is free.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
