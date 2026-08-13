@@ -1070,7 +1070,8 @@ struct CollectionView: View {
                     EntryFormView(card: card, groups: model.groups, existing: entry,
                                   variants: model.variantsByCard[entry.cardId] ?? [],
                                   conditions: model.conditionsByCard[entry.cardId] ?? [],
-                                  matrix: model.matrixByCard[entry.cardId] ?? []) { updated in
+                                  matrix: model.matrixByCard[entry.cardId] ?? [],
+                                  onDelete: { await model.deleteEntry(id: $0.id) }) { updated in
                         await model.saveEntry(updated)
                     }
                 }

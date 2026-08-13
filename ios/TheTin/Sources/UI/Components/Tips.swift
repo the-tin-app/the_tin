@@ -43,7 +43,9 @@ struct HuntingTip: Tip {
 struct WatchingTip: Tip {
     static let body = "Not another list — it's what the cards on your Wishlist have been doing "
         + "lately, so a card you're after that's dropped turns up here."
-    var title: Text { Text("Watching is the news") }
+    // Just the name. "Watching is the news" was trying to be clever, and the first user to read
+    // it said so — the body already carries the explanation, so the title only has to label.
+    var title: Text { Text("Watching") }
     var message: Text? { Text(Self.body) }
     var image: Image? { Image(systemName: "binoculars") }
 }

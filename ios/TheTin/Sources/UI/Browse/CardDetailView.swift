@@ -601,7 +601,8 @@ struct CardDetailView: View {
                     NavigationStack {
                         EntryFormView(card: model.card, groups: collection.groups, existing: entry,
                                       variants: model.variants, conditions: model.conditions,
-                                      matrix: model.matrix) { updated in
+                                      matrix: model.matrix,
+                                      onDelete: { await collection.deleteEntry(id: $0.id) }) { updated in
                             await collection.saveEntry(updated)
                         }
                     }
