@@ -3,7 +3,7 @@ import { fetchSponsorsStats, FetchLike } from "../src/upstream/githubSponsors";
 
 const ok = (body: unknown): FetchLike => async () => ({ ok: true, status: 200, json: async () => body });
 
-const payload = (org: unknown) => ({ data: { organization: org } });
+const payload = (owner: unknown) => ({ data: { repositoryOwner: owner } });
 
 describe("fetchSponsorsStats", () => {
   it("posts an authed GraphQL query to GitHub", async () => {
@@ -51,7 +51,21 @@ describe("fetchSponsorsStats", () => {
     await expect(fetchSponsorsStats("the-tin-app", "tok", fetchFn)).rejects.toThrow("GitHub API error: 401");
   });
 
-  it("throws when the org has no sponsors presence at all", async () => {
+  it("throws when the login has no sponsors presence at all", async () => {
     await expect(fetchSponsorsStats("nope", "tok", ok(payload(null)))).rejects.toThrow("not found: nope");
+  });
+
+  // `organization(login:)` returns null for a USER login, so the org-only query threw "not found"
+  // against a personal listing and the meter could never populate. Guard the owner-agnostic shape.
+  it("queries repositoryOwner, not organization — a personal listing must resolve", async () => {
+    let body = "";
+    const fetchFn: FetchLike = async (_url, init) => {
+      body = init?.body ?? "";
+      return { ok: true, status: 200, json: async () => payload({ monthlyEstimatedSponsorsIncomeInCents: 4200 }) };
+    };
+    const stats = await fetchSponsorsStats("treyes133", "tok", fetchFn);
+    expect(body).toContain("repositoryOwner");
+    expect(body).not.toContain("organization(");
+    expect(stats.monthlyIncomeCents).toBe(4200);
   });
 });
