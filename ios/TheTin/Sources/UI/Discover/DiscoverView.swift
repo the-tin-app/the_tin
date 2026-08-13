@@ -7,9 +7,12 @@ struct DiscoverView: View {
     var goals: SetGoalsModel? = nil
     var signals: DiscoverSignalsModel? = nil
     @State private var model: DiscoverModel?
-    /// Shown once, when nothing has ever been asked or answered. `.skipped` is a stored answer, so
-    /// a skip is remembered and this stays false thereafter.
-    @State private var showSeed = AppConfig.priceTiers == nil
+    /// Bumped when the seed is answered from the shelves screen — purely to invalidate this view.
+    /// `inputs` reads `AppConfig.priceTiers` straight from UserDefaults, and a sheet presented on a
+    /// PUSHED screen writing that key is invisible to SwiftUI on its own, so without this the three
+    /// price-tier rows wouldn't appear until something else happened to re-render Discover. That is
+    /// the exact failure `Inputs.recomputeKey`'s doc comment describes, moved one screen along.
+    @State private var seedRevision = 0
 
     var body: some View {
         // One view, loaded or not. This used to be `Group { if isLoaded { home } else { TinLoadingView } }`,
@@ -30,8 +33,19 @@ struct DiscoverView: View {
                 // For You's "See all" opens the shelves screen, where the reason is the row header.
                 // Full-art and Chase keep their existing decks.
                 if route.kind == .forYou {
+                    // The seed rides HERE, not on first launch. Presented from `DiscoverView`
+                    // itself it was a `.interactiveDismissDisabled` sheet over the launch tab —
+                    // so the first screen of the app, and the first screen an App Review reviewer
+                    // sees, was a form asking your card budget before a single card had been
+                    // shown. Nothing needs it that early: `ShelfBuilder` skips the three buying
+                    // rows when `tiers` is nil and `admitsToBuyingRow` stops filtering, so For You
+                    // is complete without them. This is the screen the answer is ABOUT ("These
+                    // fill your Easy adds row"), reached by a deliberate tap, and it stays
+                    // once-only because Skip stores the defaults.
                     ForYouShelvesView(shelves: model.shelves, store: store,
-                                      wants: wants, collection: collection)
+                                      wants: wants, collection: collection,
+                                      needsSeed: AppConfig.priceTiers == nil,
+                                      onSeeded: { seedRevision += 1 })
                 } else {
                     StreamView(title: route.kind.title,
                                stream: model.makeStream(route.kind),
@@ -61,12 +75,6 @@ struct DiscoverView: View {
             let m = model ?? DiscoverModel(store: store)
             await m.load(inputs)
             model = m
-        }
-        // A `.sheet` modifier rather than a branch in the body: swapping the surface for a picker
-        // would be a second `_ConditionalContent` identity, which destroys and rebuilds the whole
-        // Discover layout underneath it.
-        .sheet(isPresented: $showSeed) {
-            ForYouSeedView { showSeed = false }
         }
     }
 

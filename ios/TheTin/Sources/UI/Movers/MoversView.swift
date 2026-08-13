@@ -13,7 +13,13 @@ struct MoversView: View {
     @AppStorage("deltaPeriod") private var periodRaw: String = DeltaPeriod.d1.rawValue
     /// Your holdings, or the whole catalog. Persisted: which question you're asking tends to hold
     /// for a session ("what did my tin do" vs "what should I be chasing").
-    @AppStorage("moversScope") private var scopeRaw: String = Scope.mine.rawValue
+    ///
+    /// Empty means never chosen, which is NOT the same as choosing "My Cards" — and the difference
+    /// is the whole first run. Defaulted to `.mine`, this tab opened on "Nothing in your tin yet"
+    /// while the Market segment beside it was full of exactly the price data the app exists to
+    /// show. Three of five tabs were empty or blocked on day one and this was the cheapest of them
+    /// to fix. Touching the picker writes a real value and the fallback stops applying forever.
+    @AppStorage("moversScope") private var scopeRaw: String = ""
     /// Catalog movers for the current period; reloaded when the period changes, not per body pass.
     @State private var market: [Movers.MarketRow] = []
 
@@ -23,7 +29,16 @@ struct MoversView: View {
     }
 
     private var period: DeltaPeriod { DeltaPeriod(rawValue: periodRaw) ?? .d1 }
-    private var scope: Scope { Scope(rawValue: scopeRaw) ?? .mine }
+    /// The stored choice, or — before one has been made — whichever segment has something in it.
+    private var scope: Scope {
+        Scope(rawValue: scopeRaw) ?? (model.entries.isEmpty ? .market : .mine)
+    }
+    /// Reads the RESOLVED scope and writes a real one, so the segmented control always shows a
+    /// selection (a `""` selection matches no tag and renders as nothing selected) and the first
+    /// tap is what turns the fallback off.
+    private var scopeSelection: Binding<String> {
+        Binding(get: { scope.rawValue }, set: { scopeRaw = $0 })
+    }
     private var tier: CatalogTier { CatalogTier(rawValue: AppConfig.catalogTier) ?? .average }
 
     /// Cheap enough to compute in `body`: it's arithmetic over dictionaries `CollectionModel`
@@ -73,7 +88,10 @@ struct MoversView: View {
         }
         .listStyle(.plain)
         .overlay { emptyState(summary) }
-        .task(id: "\(periodRaw)|\(scopeRaw)|\(model.catalogGeneration)") { await loadMarket() }
+        // Keyed on the RESOLVED scope, not `scopeRaw`: unset, `scopeRaw` is "" and never changes
+        // until the picker is touched, so the market load this fallback exists to trigger would
+        // never run and the segment would open empty — the same bug in a new place.
+        .task(id: "\(periodRaw)|\(scope.rawValue)|\(model.catalogGeneration)") { await loadMarket() }
         .navigationTitle("Movers")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: CardID.self) { cardID in
@@ -89,7 +107,7 @@ struct MoversView: View {
 
     @ViewBuilder private func header(_ summary: Movers.Summary) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Picker("Scope", selection: $scopeRaw) {
+            Picker("Scope", selection: scopeSelection) {
                 ForEach(Scope.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
             }
             .pickerStyle(.segmented)

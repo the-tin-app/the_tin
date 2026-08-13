@@ -181,6 +181,16 @@ final class AppModel {
     /// request — a plain `onChange` on the URL wouldn't fire the second time.
     private(set) var importRouteToken = 0
 
+    /// "Open Settings AND put the file picker up", for the empty tin's Import option.
+    ///
+    /// Distinct from `importRouteToken` above, which carries a URL somebody already chose. This one
+    /// carries no file: the user has said they want to import and hasn't picked anything yet.
+    /// Landing them at the top of a ten-section Settings list and hoping they scroll to Data is how
+    /// the importer stayed invisible to the people who needed it most.
+    private(set) var importPickerToken = 0
+
+    func requestImportPicker() { importPickerToken += 1 }
+
     /// Someone's shared trade list, opened in the app instead of in a browser — the cards they
     /// said they'll part with, ready to become the other column of a trade.
     ///
