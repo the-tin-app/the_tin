@@ -568,7 +568,7 @@ final class AppModel {
                 tierChange = .done
             }
         } catch {
-            tierChange = .failed("Couldn't switch tier. Check your connection and try again.")
+            tierChange = .failed("Couldn't change the catalog size. Check your connection and try again.")
         }
     }
 

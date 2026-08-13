@@ -1352,7 +1352,7 @@ struct CollectionView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Couldn't read the card catalog", systemImage: "exclamationmark.triangle")
                 .font(.subheadline.weight(.medium))
-            Text("Card names and prices can't be shown right now — your collection itself is safe. Restart the app, or re-download the catalog in Settings.")
+            Text("Card names and prices can't be shown right now — your tin itself is safe. Restart the app, or re-download the catalog in Settings.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

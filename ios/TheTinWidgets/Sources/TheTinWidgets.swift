@@ -47,7 +47,7 @@ struct CollectionValueWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
         }
         .configurationDisplayName("Tin value")
-        .description("Your collection's total value at a glance.")
+        .description("Your tin's total value at a glance.")
         .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular, .accessoryInline])
     }
 }

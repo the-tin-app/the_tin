@@ -54,7 +54,7 @@ struct EntryPhotosSection: View {
         } header: {
             Text("Photos")
         } footer: {
-            Text("Your own photographs of this copy. They're printed in the collection report as an evidence appendix, and backed up to your iCloud alongside your collection.")
+            Text("Your own photographs of this copy. They're printed in the report as an evidence appendix, and backed up to your iCloud alongside your tin.")
         }
     }
 

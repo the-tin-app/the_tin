@@ -63,7 +63,7 @@ struct SearchCardsIntent: AppIntent {
 /// does, so Siri never opens SQLite — and can never disagree with the widget.
 struct TinValueIntent: AppIntent {
     static var title: LocalizedStringResource = "Tin Value"
-    static var description = IntentDescription("How much your collection is worth.")
+    static var description = IntentDescription("How much your tin is worth.")
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<Double> {
@@ -71,7 +71,7 @@ struct TinValueIntent: AppIntent {
             // Never answer "$0" — an app that has never run and an empty collection are not the
             // same thing, and only one of them is the user's fault.
             return .result(value: 0,
-                           dialog: "Open The Tin once and it'll work out what your collection is worth.")
+                           dialog: "Open The Tin once and it'll work out what your tin is worth.")
         }
         let amount = snapshot.totalValue.formatted(WidgetShared.tinCurrency(snapshot.totalValue))
         let cards = "\(snapshot.cardCount) \(snapshot.cardCount == 1 ? "card" : "cards")"

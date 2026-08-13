@@ -98,7 +98,7 @@ struct SettingsView: View {
             } message: {
                 // Naming what is NOT lost matters more than naming what is: people assume
                 // deleting anything in a collection app deletes their collection.
-                Text("Camera scanning stops working until you download it again. Your collection isn't affected.")
+                Text("Camera scanning stops working until you download it again. Your tin isn't affected.")
             }
             .confirmationDialog("Download over cellular?", isPresented: $confirmingPackCellular,
                                 titleVisibility: .visible) {
@@ -115,7 +115,7 @@ struct SettingsView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Your collection, wishlist, set goals and scanner pack aren't affected.")
+                Text("Your tin, wishlist and scanner pack aren't affected.")
             }
             .confirmationDialog("Pretend the installed scanner pack is one version older?",
                                 isPresented: $confirmingPackRewind, titleVisibility: .visible) {
@@ -283,7 +283,7 @@ struct SettingsView: View {
             }
         } footer: {
             if onBackupSource {
-                Text("The backup source carries the same catalog as the self-hosted one, including your chosen data tier.")
+                Text("The backup source carries the same catalog as the self-hosted one, including your chosen size.")
             }
         }
     }
@@ -366,7 +366,7 @@ struct SettingsView: View {
             Text(msg).foregroundStyle(Color.statusNegative)
         case .idle:
             if onBackupSource {
-                Text("The backup source carries your chosen tier too.\(installedTierNote)")
+                Text("The backup source carries your chosen size too.\(installedTierNote)")
             } else {
                 Text("Just a download-size choice — every option is free. Change it anytime.")
             }
@@ -435,7 +435,7 @@ struct SettingsView: View {
         case .ready where pack.updateAvailable:
             Text("A newer scanner pack is available. The one you have keeps working until you update.")
         case .ready:
-            Text("Used to identify cards from the camera. Deleting it frees the space and leaves your collection untouched.")
+            Text("Used to identify cards from the camera. Deleting it frees the space and leaves your tin untouched.")
         case .paused(_, .cellular):
             Text("Paused automatically because you're not on Wi-Fi. Your progress is saved either way.")
         default:
