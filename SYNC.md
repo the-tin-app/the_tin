@@ -1,122 +1,156 @@
-# Sync — options and a recommendation
+# Sync, sharing and backup — 1.0.4 design
 
-**Status:** proposal, 2026-08-13. No code. **Deferred to a 1.0.4 concept** by Tomas, who
-has not read it yet — so nothing below is agreed. Written because there was no design doc
-at all, and the last conversation produced constraints rather than a decision. The
-recommendation at the bottom is one opinion.
+**Status:** design, 2026-08-13. No code. Targets **1.0.4, alongside the Android build**.
 
-1.0.3 is unaffected either way: it is a live TestFlight train and the store version has
-not been created, so no sync work was ever going to reach it.
+The first version of this doc presented a trilemma — cross-platform reach, hosting
+nothing, automatic sync, pick two. **Android at 1.0.4 settles it:** cross-platform is a
+requirement, so hosting nothing is off the table and CloudKit is out permanently. What
+follows is the design for the remaining option, and the decisions taken on 2026-08-13.
 
-## What ships today is a backup, not a sync
+## The guarantee
 
-`BackupService` + `ICloudBackupStore` write **one snapshot file** to the user's own
-iCloud, and `workers/tin-backup` serves the catalog side. The snapshot is
-**last-writer-wins over the whole file**.
+> Someone with full access to the storage bucket — including the operator — cannot read
+> anyone's collection.
 
-That has already destroyed data: two devices, each holding a valid tin, and the second
-write silently discarded the first one's cards. A conflict guard and a
-"newer backup from another device" banner now exist in Settings, which turns silent loss
-into a prompt — it does not make the file mergeable.
+Everything below follows from taking that literally. The consequence, stated once here
+because it cannot be engineered away: **a user who loses their recovery code and all
+their devices has lost their data permanently, and we cannot help them.** That must be
+said in the opt-in flow and in the privacy policy, not buried.
 
-Three failures are known and recorded, and they are all *merge* failures, not transport
-failures:
+## Why this also answers the cost question
 
-- **Deletions need two paths.** The change feed is once-only, so a delete that is missed
-  is missed forever. Reconciliation belongs on *pull*, not on foreground.
-- **Seeding is seed-only.** Anything predating sync is never uploaded, so a
-  newly-syncing type strands every existing record. This is universal, not a one-off.
-- **The no-op-write skip needs `.sortedKeys`.** Without deterministic encoding, every
-  write looks like a change and the skip never fires.
+Because the payload is end-to-end encrypted, the server can only ever hold **opaque
+blobs**. Ciphertext cannot be queried, indexed or filtered. So any per-document database
+bills database prices for functionality the encryption has already made unusable.
 
-## Constraints
+That eliminates Firestore on cost *and* on fit: a 3,000-card tin is 3,000 document reads
+per full sync, against one object read for a blob. It is also the concrete answer to
+"I am against firebase if the cost is too crazy" — the objection was right, for a more
+fundamental reason than price.
 
-From Tomas, 2026-08-12 — these are hard, not preferences:
+| | R2 (chosen) | Firestore | S3 |
+|---|---|---|---|
+| Egress | **$0** | charged | charged |
+| Pricing unit | bytes + ops | **per document** | bytes + ops + egress |
+| Cost scales with | data size, write rate | **record count** | size + reads + egress |
+| Already in the stack | ✅ `tin-artifacts` | partly (App Check) | ✗ |
 
-1. **Cost is the limit.** Zero funding, zero sponsors, paid personally. "I am against
-   firebase if the cost is too crazy."
-2. **He must not be able to read anyone's collection** without something specific from
-   them — a key. Encrypted in transit and at rest.
-3. **He does not want to host user data**, explicitly because of data-privacy
-   obligations including deletion requests.
-4. **Sharing is key-gated**, and opt-in sharing is acceptable.
+## Architecture
 
-## The trilemma
+Reuses what exists: the `tin-backup` Worker on `backupthetin.reyes.ai`, the `tin-artifacts`
+R2 bucket, and Firebase **App Check** attestation, which the Worker already verifies
+against Google's JWKS. The new build is the crypto and the merge format — not the
+platform.
 
-This is not a tiebreak between otherwise-equal designs — it *is* the decision, and
-everything else follows from it. Three properties, and only two are available at once:
-**cross-platform reach**, **hosting nothing**, and **automatic sync**.
+- **Per-device append-only segments.** Each device writes its own encrypted segments; no
+  device ever overwrites another's. This is what ends the last-writer-wins data loss,
+  and it needs no server-side coordination — which is just as well, because the server
+  cannot read enough to coordinate anything.
+- **Merge is client-side**, after decryption: per-entry ids with `modifiedAt`, tombstones
+  for deletes, reconcile on pull. Periodic compaction rewrites a snapshot and drops
+  superseded segments.
+- **The wire format is platform-neutral** and explicitly *not* the SQLite schema, or
+  Android cannot read it.
 
-|  | Cross-platform | Hosts nothing | Automatic | Cost scales with users? |
-|---|---|---|---|---|
-| **A. Mergeable iCloud document** | ✗ (export/import only) | ✓ | ✓ (iCloud speed) | **No** — £0 flat, it's the user's iCloud |
-| **B. CloudKit private database** | ✗ (permanent) | ✓ | ✓ (best polish) | **No** — Apple's quota, not ours |
-| **C. E2EE blob on the existing R2/Worker** | ✓ | ✗ (hosts ciphertext) | ✓ | **Yes** — storage + egress per user |
+The three known failures from the backup era are all merge failures and are all fixed
+here rather than carried forward: deletions need two paths; the seed-only fold must fold
+*everything*, not just post-opt-in records; the no-op-write skip needs deterministic
+encoding (`.sortedKeys`) to fire at all.
 
-That last column is the one to read against constraint 1. **A and B cost the same at ten
-users and at ten thousand; C does not.** C is the only design here whose bill grows with
-success, which is exactly the property to be suspicious of when the money is personal and
-there is no funding — it is the same shape as the Firebase objection, even though the
-per-user amount is much smaller.
+## Decisions taken 2026-08-13
 
-CloudKit buys polish and costs Android permanently. The user's-own-file design keeps a
-cross-platform escape hatch and costs automatic-ness across ecosystems. There is no
-option that gives all three.
+### Keys — device key + one-time recovery code
 
-Encryption narrows constraint 3 but does not delete it: ciphertext tied to a device is
-still personal data, so a deletion request still has to be honoured. What it *does* buy
-is that honouring it is `DELETE <object>` and there is no account to unwind — with no
-sign-in, the key is the only identity, and there is nothing else to erase.
+A random 256-bit key in the iOS Keychain / Android Keystore, propagated within an
+ecosystem by iCloud Keychain and Google Block Store, plus a **printable one-time recovery
+code**. The code is not only for disaster: it is the mechanism for crossing ecosystems,
+which 1.0.4 needs anyway the moment someone moves iPhone → Android.
 
-Worth stating plainly: **C is the only option that reaches Android**, and B is already
-parked (2026-07-31) for exactly that reason.
+Rejected: a server-wrapped key, which has the best UX and breaks the guarantee outright —
+whoever holds the wrapping key can decrypt. Rejected: passphrase-only, which needs no
+platform support but makes forgotten passphrases the most common support request.
 
-## Recommendation: build the merge layer, defer the transport
+Use vetted primitives — CryptoKit on iOS, Tink or libsodium on Android. AEAD with a
+per-object nonce, HKDF for subkey derivation. Encrypt names and metadata too; object keys
+leak structure otherwise.
 
-The merge semantics are identical in all three options, and the merge layer is what the
-data-loss bug actually needs. It is also the only part that can be built without
-answering the hosting question. So build it first and let the transport decision wait
-for the Android decision, which is a product call and not an engineering one.
+### Identity — none
 
-**The merge layer** — turn the snapshot into a mergeable document:
+No accounts. The storage id is derived from the key, so the server issues no identity and
+stores blobs under a meaningless label. Zero PII by construction. The cost: a deletion
+request cannot be authenticated by login, so the client proves possession by signing a
+challenge.
 
-- Per-entry `id` + `modifiedAt`; last-writer-wins **per entry**, never per file. This
-  alone ends the two-device data loss.
-- **Tombstones** for deletes, with reconcile on pull. Both deletion paths, per above.
-- Seeding folds **everything**, not just records created after sync was switched on.
-- Deterministic encoding (`.sortedKeys`) so the no-op-write skip works at all.
+### Photos — separate opt-in, hard quota
 
-Once the file merges, option A is nearly free: the same document in the user's own iCloud
-*is* sync, at iCloud propagation speed, for £0, hosted by nobody, unreadable by Tomas,
-with no deletion obligation. It also degrades to a plain encrypted file a user can carry
-to another platform by hand — which is the honest Android answer until C is chosen.
+Photos are ~2 MB against a ~500 KB tin — roughly **100× the payload**, accumulating
+forever, and the most sensitive content we would hold. They get their own toggle *inside*
+the sync opt-in, and a hard per-user cap. Egress being free keeps this affordable; the
+quota is what bounds the worst case.
 
-**If Android becomes real**, C reuses infrastructure that already exists: a Cloudflare
-Worker, R2, and App Check are all in the repo and already paid for. A tin is small JSON;
-at current user counts the marginal cost is very likely negligible, but **that number
-should be measured before it is promised** — the cost constraint is the hard one and this
-doc should not hand-wave it. Per the table above, C is also the one option whose bill
-scales with adoption, so the figure that matters is not today's but the one at 10× the
-current install base.
+### Residency — EU-jurisdiction bucket from day one
 
-## Sharing
+R2 supports jurisdiction-pinned buckets. Chosen now rather than later because migrating
+objects after launch is real work and this is the cleanest answer when an EU user asks
+where their data lives. Slightly higher latency for non-EU users, accepted.
 
-Opt-in and key-gated, per constraint 4. Sharing does not need the sync transport: a
-shared list is already a separate surface with its own vocabulary (see `DESIGN.md §6` —
-the shared page writes for a stranger, not a cardholder). Keep it that way; do not let
-sharing and sync become one feature.
+### Write frequency — debounced
 
-## Testing note
+Sync-on-every-change is what makes these systems expensive. Coalesce and flush on a timer
+and on background, not per keystroke. This is the single biggest lever on the bill, and it
+costs no user-facing promise — per `DESIGN.md §6`, nothing may promise speed anyway.
 
-The iPad on iOS 18 cannot verify *any* iCloud feature — iCloud Drive and iMessage are
-wedged on it too, so it is a device-level fault and not evidence about our code. Any
-two-device sync test needs a second real device or two simulators, not that iPad.
+## Cost model
 
-## Open questions for Tomas
+**Verify against current published pricing before committing.** The shape is the reliable
+part: R2 bills bytes and operations with zero egress, so **the bill tracks write frequency,
+not user count.**
 
-1. **Does Android matter within the next two releases?** This is the whole decision. Yes
-   → C. No → A.
-2. Is hosting *ciphertext* acceptable, given a deletion request is one object delete and
-   there is no account behind it?
-3. If C: what is the actual monthly ceiling you will accept, so it can be measured
-   against a real number rather than argued about?
+Assumptions: ~500 KB ciphertext per tin, photos excluded, debounced writes.
+
+| Users | Storage | Est. monthly |
+|---|---|---|
+| 10k | ~5 GB (inside free tier) | **~$2–5** |
+| 100k | ~50 GB | **~$25–70** |
+
+The 100k spread is almost entirely write frequency. Photos, at the quota, are additive
+storage — cheap per GB, but monotonically growing, which is the reason for the cap.
+
+### The real cost risk is abuse, not growth
+
+Without accounts, nothing inherently stops scripted uploads running up the bill. App Check
+is already enforced in the Worker; it needs per-id storage quota, an object-size cap, and
+rate limiting. **This is the difference between a predictable bill and an unbounded one**,
+and it should ship with the first byte of sync, not after.
+
+## Legal
+
+Encryption at rest does **not** remove GDPR obligations: pseudonymous ciphertext is still
+personal data. What changes:
+
+- **Lawful basis** becomes consent, which the opt-in design supports directly.
+- **A Cloudflare DPA** is required, as they become a processor.
+- **Deletion** must be a real path: an in-app "delete my cloud data", plus a documented
+  route for a request arriving by email against an opaque id.
+- **Residency** is answered by the EU bucket above.
+
+### The privacy policy is not updated yet, deliberately
+
+`site/privacy/index.html` needs material edits to **What we collect**, **What we don't
+collect** (which currently claims more than will remain true), **Third-party services**,
+**Data deletion**, and **Children**. That last one matters more than usual: a Pokémon app
+skews young, and this is the first feature where we host user-generated content.
+
+Those edits should land **with the feature, not before it**. Publishing a policy that
+describes collection which is not yet happening is its own inaccuracy.
+
+## Still open
+
+1. The recovery-code format and exactly where it is shown — once at opt-in is decided;
+   whether it can be re-displayed later is not.
+2. Quota numbers: per-user storage cap, object-size cap, rate limit.
+3. Whether sharing rides this transport at 1.0.4 or stays on the existing share-link
+   surface. Sharing needs a fresh per-share key in the URL **fragment** (never sent to the
+   server) and lifecycle-rule expiry, but it does not otherwise depend on sync landing.
+4. Whether a second reviewer — legal, not engineering — is warranted before launch given
+   the residency and children questions.
