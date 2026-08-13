@@ -7,7 +7,7 @@ developer account renews every year.
 
 The people below pay for that, so nobody has to pay to use it. Thank you.
 
-**[Sponsor The Tin →](https://github.com/sponsors/the-tin-app)**
+**[Sponsor The Tin →](https://github.com/sponsors/treyes133)**
 
 ---
 
@@ -67,4 +67,4 @@ Running costs, in rough order of size:
 | Apple Developer Program | $99/year, required to ship on the App Store |
 
 The current monthly goal and how close it is are shown in the app under Settings → Support, and
-on the [sponsors page](https://github.com/sponsors/the-tin-app).
+on the [sponsors page](https://github.com/sponsors/treyes133).
