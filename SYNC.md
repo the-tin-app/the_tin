@@ -94,13 +94,46 @@ warranted legal review**, and there is no budget for one on a free app funded pe
 Removing the category is cheaper than advising on it, and it is the only item here where
 "we couldn't afford advice" would not have been much of a defence.
 
-The cost: photos do not cross ecosystems — an iPhone → Android move brings the tin, not
-the pictures. Accepted, and it should be stated plainly in the UI rather than engineered
-around. They are photographs of cards the user still owns.
-
 Knock-on effects, all of them simplifications: no UGC in the privacy policy, none in the
 App Store privacy labels, no image-storage quota to enforce, and no moderation question
 to answer.
+
+### …and a portable archive covers the gap
+
+Not hosting photos would otherwise mean they never cross ecosystems. Instead the app
+**exports them as a plain zip and the user decides where it goes** — another device, a
+drive, their own cloud. Same category as the existing CSV export: we write a file, we
+host nothing, and the legal position above is unchanged.
+
+**The mapping already exists.** Photos are stored at
+`Application Support/CardPhotos/<entryId>/<uuid>.jpg`, and `PhotoStore.needed(from:)`
+already returns exactly `entryId → [filename]`. The archive is that directory plus a
+manifest serialised from a function we already have — there is no new data model here.
+
+    manifest.json   { version, exportedAt, entries: { <entryId>: [<file>, …] } }
+    photos/<entryId>/<uuid>.jpg
+
+**Import attaches by entry id, and does not guess.** Entry ids survive sync, so the clean
+path is: sync the tin first, then import the archive on the second device and the ids line
+up. Where an id has no match — a tin built independently, an entry deleted since export —
+the photos are held aside and reported, **not** fuzzy-matched on card + condition + grade.
+Several copies of one card are common, and a photo silently attached to the wrong copy is
+worse than one that arrives unattached.
+
+**No new dependency.** `NSFileCoordinator(readingItemAt:options:.forUploading)` zips a
+directory on iOS; `java.util.zip` is standard on Android. GzipSwift is already in the
+project and is *not* a zip library — don't reach for it here. Photos are downscaled on
+save, so archives stay modest, but the write should stream rather than build in memory.
+
+**This replaces the Google Drive app-folder integration**, which is no longer needed on
+either side: the system share sheet and Android's storage-access framework already put the
+file wherever the user wants, without an SDK.
+
+⚠️ **The reopening condition, stated precisely.** "Store the zip in the cloud" is fine when
+*the user's* cloud is meant. If it ever means *our* storage, we are hosting
+user-generated images again and the legal-review question from the Legal section reopens
+with it. The distinction is who chose the destination, not whether the bytes are
+encrypted.
 
 ### Residency — EU-jurisdiction bucket from day one
 
@@ -191,8 +224,9 @@ describes collection which is not yet happening is its own inaccuracy.
 3. Whether sharing rides this transport at 1.0.4 or stays on the existing share-link
    surface. Sharing needs a fresh per-share key in the URL **fragment** (never sent to the
    server) and lifecycle-rule expiry, but it does not otherwise depend on sync landing.
-4. The Google Drive app-folder path for Android photos — the iOS side already exists as
-   the iCloud container, but the Android half is unbuilt and unscoped.
+4. Whether the photo archive is also the *within-ecosystem* mechanism on Android, or
+   whether Android additionally mirrors photos to a Drive app folder the way iOS already
+   uses its iCloud container. The archive alone is the smaller answer and probably enough.
 
 **Closed:** whether legal review is warranted. There is no budget for it, so the design
 was narrowed until the answer is no — see the Legal section. If a later change puts
