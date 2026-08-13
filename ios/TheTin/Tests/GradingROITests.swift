@@ -129,6 +129,22 @@ final class GradingROITests: XCTestCase {
         XCTAssertEqual(roi.gemRate!, 0.25, accuracy: 1e-9)   // no feed gemRate → count-based
     }
 
+    /// The feed value and the computed fallback must be the SAME UNIT.
+    ///
+    /// `compute` picks between them in one expression — `psaRows.first?.gemRate ?? counts[10] /
+    /// total` — so if the feed side is a percentage and the fallback a fraction, the meaning of
+    /// `roi.gemRate` depends on which branch ran, and only one of them renders correctly. It
+    /// shipped that way: `CatalogStore` handed the raw 0–100 column straight through, and the
+    /// card screen showed "2740% gem". Both branches now yield a fraction; a card whose feed says
+    /// 42% and whose counts say 25% must report 0.42, not 42.0 and not 0.25.
+    func testFeedGemRateIsAFractionLikeTheFallback() {
+        let rows = [pop("10", 250, gemRate: 0.42), pop("9", 750, gemRate: 0.42)]
+        let roi = GradingROI.compute(population: rows, price: price(), baseline: 30, fee: 20)!
+        XCTAssertEqual(roi.gemRate!, 0.42, accuracy: 1e-9)
+        XCTAssertLessThanOrEqual(roi.gemRate!, 1.0,
+                                 "a gem rate above 1.0 renders as >100% wherever .percent formats it")
+    }
+
     func testPlayedConditionWarningTrigger() {
         let rows = [pop("10", 500), pop("9", 500)]
         func warns(_ cond: CardCondition?) -> Bool {

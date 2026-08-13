@@ -160,8 +160,23 @@ final class CatalogStore {
     }
 
     private static func populationRow(_ row: Row) -> PopulationRow {
-        PopulationRow(grader: row["grader"], grade: row["grade"], count: row["count"] ?? 0,
-                      gemRate: row["gem_rate"], totalPopulation: row["total_population"])
+        // ⚠️ `gem_rate` arrives as a PERCENTAGE (0–100), and `PopulationRow.gemRate` is a
+        // FRACTION. Measured on the served average-tier catalog: 665,643 non-null rows spanning
+        // 0.0–100.0, mean 27.4 — a fraction column would top out at 1.0.
+        //
+        // Both display sites format it with `.percent`, which multiplies by 100, so the raw value
+        // rendered as "2740% gem" on a typical card and "240%" on a thin one (reported 2026-08-12).
+        // `GradingROI` made it worse by mixing units in one expression: the feed value 0–100 with
+        // `?? counts[10] / total`, a real fraction — the same field meaning two different things
+        // depending on which branch ran.
+        //
+        // Converted HERE, at the single boundary every consumer reads through, rather than at the
+        // two call sites — that is what makes the ROI fallback agree with the feed instead of
+        // being off by 100× from it.
+        let gemRatePercent: Double? = row["gem_rate"]
+        return PopulationRow(grader: row["grader"], grade: row["grade"], count: row["count"] ?? 0,
+                             gemRate: gemRatePercent.map { $0 / 100 },
+                             totalPopulation: row["total_population"])
     }
 
     private static func sealedProduct(_ row: Row) -> SealedProduct {
