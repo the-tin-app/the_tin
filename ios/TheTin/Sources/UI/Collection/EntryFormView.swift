@@ -10,6 +10,14 @@ struct EntryFormView: View {
     var conditions: [ConditionPrice] = []   // per-condition prices, for the inline picker labels
     var matrix: [MatrixPrice] = []      // printing×condition cells, for printing-aware labels
     var onCreateGroup: ((String) async -> String)? = nil
+    /// Remove this card from the tin. Optional: the add sheet passes nothing, because a card that
+    /// isn't saved yet has nothing to remove. Callers route this to `CollectionModel.deleteEntry`,
+    /// which raises the undo offer — this form does not need its own.
+    ///
+    /// ⚠️ Declared BEFORE `onSave` deliberately. Every call site passes `onSave` as a trailing
+    /// closure, and a trailing closure binds to the LAST parameter — putting this after `onSave`
+    /// silently rebinds all five of them to the wrong one.
+    var onDelete: ((CollectionEntry) async -> Void)? = nil
     /// Returns whether the entry was actually persisted; the form only dismisses on true, so a
     /// failed write never silently discards what the user typed.
     let onSave: (CollectionEntry) async -> Bool
@@ -49,6 +57,7 @@ struct EntryFormView: View {
     /// from untouched (only dirty forms earn a discard confirmation).
     @State private var baseline: [String] = []
     @State private var confirmingDiscard = false
+    @State private var confirmingRemove = false
 
     private var snapshot: [String] {
         [groupId, newGroupName, String(qty), condition.rawValue, variant.rawValue,
@@ -132,6 +141,27 @@ struct EntryFormView: View {
                     Label("Save & print label", systemImage: "qrcode")
                 }
             }
+            // ⚠️ **Removing a card was only reachable by swiping its row.** The first user asked
+            // "how do I delete a card" (2026-08-12) — after #152 taught her that tapping a card
+            // opens this form. We fixed EDIT's discoverability and left DELETE where edit used to
+            // be, so the one screen she now knows how to reach couldn't do it. Same defect class,
+            // one door over.
+            //
+            // Only for an entry that exists, and only where the caller can actually delete it —
+            // the add sheet has nothing to remove.
+            if let existing, onDelete != nil {
+                Section {
+                    Button(role: .destructive) { confirmingRemove = true } label: {
+                        Label("Remove from tin", systemImage: "trash")
+                    }
+                } footer: {
+                    // `deleteEntry` raises a 6-second undo toast, so say so rather than making
+                    // the dialog carry all the reassurance.
+                    Text(existing.qty > 1
+                         ? "Removes all \(existing.qty) copies on this row. You can undo straight after."
+                         : "You can undo straight after.")
+                }
+            }
         }
         // ⚠️ On the Form, NOT on the section above. Attached to the Section this presented and
         // instantly dismissed itself, closing the whole entry sheet with it (device, 2026-08-10).
@@ -156,6 +186,20 @@ struct EntryFormView: View {
                             titleVisibility: .visible) {
             Button("Discard", role: .destructive) { dismiss() }
             Button("Keep Editing", role: .cancel) {}
+        }
+        // A dialog here, unlike the swipe path — that one's reveal-then-tap IS its confirmation
+        // (see `GroupPagerView`), while this is a single tap on a row in a form.
+        .confirmationDialog("Remove this card from your tin?", isPresented: $confirmingRemove,
+                            titleVisibility: .visible) {
+            Button("Remove", role: .destructive) {
+                guard let existing, let onDelete else { return }
+                // Dismiss FIRST, then delete: the undo toast lives at the tab's NavigationStack,
+                // so raising it while this sheet is still up would put it behind the sheet — the
+                // same trap `confirmAfterDismiss` exists for.
+                dismiss()
+                Task { await onDelete(existing) }
+            }
+            Button("Cancel", role: .cancel) {}
         }
         // ⚠️ ONCE. `onAppear` fires again every time something presented over this form goes
         // away — the camera cover, the photo picker, the discard dialog — and `populate()` resets
