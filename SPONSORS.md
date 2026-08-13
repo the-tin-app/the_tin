@@ -37,7 +37,7 @@ The people below pay for that, so nobody has to pay to use it. Thank you.
 
 ## One-time
 
-*Anyone who's chipped in without a subscription.*
+*$25 and up, given once. Listed permanently — a one-off gift doesn't lapse.*
 
 <!-- No one-time sponsors yet. -->
 
@@ -51,8 +51,9 @@ The people below pay for that, so nobody has to pay to use it. Thank you.
 - **Anonymity is always available.** Reply to your welcome message and you'll be left off this
   list entirely, or listed under whatever name or handle you prefer. Sponsoring a hobby project
   from a work GitHub account is a reasonable thing to want kept quiet.
-- **Names stay for the month they were given.** If a sponsorship ends, the entry comes out at the
-  next update — no hard feelings, and thank you for the time you did.
+- **Monthly names stay for the month they were given.** If a monthly sponsorship ends, the entry
+  comes out at the next update — no hard feelings, and thank you for the time you did.
+  **One-time entries never come out.** There's nothing to lapse, so they stay.
 - **Sponsorship buys no influence.** Sponsors get a room to argue about the roadmap in; they don't
   get features other people don't, and nothing in the app is ever gated behind paying for it.
 
