@@ -568,11 +568,13 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("The Tin is free and works offline. Chip in to help cover the price-data and hosting costs — nothing is locked either way.")
                     .font(.footnote).foregroundStyle(.secondary)
-                if FundingModel.isLive {
+                // Meter gated on money raised, not on `isLive` — see that flag's doc comment.
+                // It appears on its own the day the first sponsorship lands, no build needed.
+                if funding.raisedCents > 0 {
                     FundedMeter(fundedPct: funding.fundedPct)
                     Text("\(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents)) per month")
                         .font(.caption).foregroundStyle(.secondary)
-                } else {
+                } else if !FundingModel.isLive {
                     Text("Community funding is almost ready — coming soon!")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -583,10 +585,14 @@ struct SettingsView: View {
                 // and opening another reads as a scam. Both live in this one commit for that reason.
                 Link("Sponsor The Tin on GitHub", destination: AppConfig.supportURL)
             }
-            // Shown once the served list has names, or once funding is live. Data-driven on
-            // purpose: the first listed sponsor makes this appear with no app update, and until
-            // then nobody is sent to a guaranteed-empty screen.
-            if !app.supporters.isEmpty || FundingModel.isLive {
+            // Shown once the served list has names. Data-driven on purpose: the first listed
+            // sponsor makes this appear with no app update, and until then nobody is sent to a
+            // guaranteed-empty screen.
+            //
+            // ⚠️ This used to read `|| FundingModel.isLive`, which broke the very promise the
+            // comment makes the moment that flag went true — `supporters.json` is empty and is
+            // the resting state, so every user would have been offered a blank screen.
+            if !app.supporters.isEmpty {
                 NavigationLink("Supporters") { SupportersView(supporters: app.supporters) }
             }
         }
