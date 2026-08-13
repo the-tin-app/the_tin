@@ -296,7 +296,7 @@ struct TradeSessionView: View {
                         if !mine, wants?.isWanted(line.entry.cardId) == true {
                             Image(systemName: "heart.fill")
                                 .font(.caption2).foregroundStyle(.pink) // contrast-ok: glyph, not text
-                                .accessibilityLabel("On your wanted list")
+                                .accessibilityLabel("On your wishlist")
                         }
                     }
                     if mine { Text(subtitle(line)).font(.caption).foregroundStyle(.secondary) }

@@ -53,20 +53,25 @@ struct WatchingView: View {
 
     // MARK: Sections
 
+    /// A LINK to the hunt, not the hunt itself.
+    ///
+    /// This section used to render the same `HuntRow`s as the Hunting segment of Wishlist — so one
+    /// list existed twice, on two screens reached from two pinned rows stacked on top of each
+    /// other, and `WatchingTip` existed to explain that Watching "isn't another list" while its
+    /// first section was demonstrably the other list. Watching is the news; hunting is the doing.
+    /// The row says how many and gets out of the way.
     @ViewBuilder private var huntingSection: some View {
         if !model.hunting.isEmpty {
             Section {
-                ForEach(model.hunting) { item in
-                    HuntRow(card: item.card, entry: item.entry, setName: item.setName,
-                            printedTotal: item.printedTotal, marketUsd: item.marketUsd,
-                            delta7d: item.delta7d)
+                NavigationLink(value: WantedRoute(scope: .hunting)) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "binoculars").foregroundStyle(.tint)
+                        Text("^[\(model.hunting.count) card](inflect: true) on the hunt")
+                        Spacer()
+                    }
                 }
             } header: {
                 Text("Hunting")
-            } footer: {
-                // ⚠️ "once a day" is load-bearing and verified: eBay's saved-search alert is a
-                // daily email, there is no faster free route, and no copy may imply otherwise.
-                Text("Save the search in eBay and it'll keep an eye out — eBay emails once a day.")
             }
         }
     }

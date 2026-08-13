@@ -17,6 +17,29 @@ import XCTest
 ///
 /// Deliberate exceptions carry `// vocab-ok:` on the same line.
 final class VocabularyTests: XCTestCase {
+    /// The lexicon, as the only thing that can actually enforce one: banned spelling → what to say
+    /// instead. Documented for humans in DESIGN.md §6.
+    ///
+    /// Every entry here is a name that once shipped and was replaced. "Wanted" is the original
+    /// (#159). "Want List" was found later in the same sweep, still titling the printed wishlist
+    /// PDF months after the door itself had been renamed — which is the point: renaming a screen
+    /// does not rename the eleven other places that quote it, and only a test notices.
+    ///
+    /// ⚠️ **`caseSensitive` is load-bearing, and matching everything loosely is wrong.** The
+    /// literal splitter below is a `split(on: "\"")`, so it cannot tell a string from the *code
+    /// inside an interpolation*. Lowercase `wanted` is a perfectly good local variable — `LensMatcher`
+    /// logs `wanted=\(wanted.count)`, `MoversView` builds an accessibility label from `wanted ? …`,
+    /// and `WantedView` stores its segment under the `wantedScope` key it must never rename.
+    /// Matching "Wanted" case-insensitively flagged all three. Capitalised is how the retired word
+    /// appeared in copy; the lowercase forms that matter are phrases, and a phrase can't collide
+    /// with an identifier.
+    static let banned: [(term: String, instead: String, caseSensitive: Bool)] = [
+        ("Wanted", "Wishlist — the pinned row and the screen it opens must agree", true),
+        ("wanted list", "Wishlist — e.g. “On your wishlist”", false),
+        ("Want List", "Wishlist", false),
+        ("Wantlist", "Wishlist", false),
+    ]
+
     func testNoUserFacingWantedLabelSurvives() throws {
         let sources = URL(fileURLWithPath: #filePath)   // …/TheTin/Tests/VocabularyTests.swift
             .deletingLastPathComponent()                // …/TheTin/Tests
@@ -40,12 +63,17 @@ final class VocabularyTests: XCTestCase {
                 // Odd-indexed components of a split on `"` are the string literals.
                 let literals = line.split(separator: "\"", omittingEmptySubsequences: false)
                     .enumerated().filter { $0.offset % 2 == 1 }.map(\.element)
-                for literal in literals where literal.contains("Wanted") {
-                    offences.append("\(file.lastPathComponent):\(n + 1) — “\(literal)”")
+                for literal in literals {
+                    for entry in Self.banned {
+                        let options: String.CompareOptions = entry.caseSensitive ? [] : [.caseInsensitive]
+                        guard literal.range(of: entry.term, options: options) != nil else { continue }
+                        offences.append("\(file.lastPathComponent):\(n + 1) — “\(literal)” "
+                                        + "(say: \(entry.instead))")
+                    }
                 }
             }
         }
-        XCTAssertEqual(offences, [], "user-facing “Wanted” survives — the row and its screen "
-                       + "must agree:\n" + offences.joined(separator: "\n"))
+        XCTAssertEqual(offences, [], "a retired name survives in user-facing copy — every concept "
+                       + "gets ONE spelling (DESIGN.md §6):\n" + offences.joined(separator: "\n"))
     }
 }

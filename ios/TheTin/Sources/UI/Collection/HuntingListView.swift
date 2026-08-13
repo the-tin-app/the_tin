@@ -53,18 +53,30 @@ struct HuntingListView: View {
 
     private func list(_ hunting: [CardRecord], rawUsd: [String: Double],
                       setsById: [String: SetRecord]) -> some View {
-        List(hunting) { card in
-            HuntRow(card: card, entry: wants.entry(card.id),
-                    setName: setsById[card.setId]?.name,
-                    printedTotal: printedTotalBySet[card.setId],
-                    marketUsd: rawUsd[card.id])
-                .contentShape(Rectangle())
-                .onTapGesture { editing = card }
-                // `.onTapGesture` alone is silent to VoiceOver — a `Button` wrapping a row that
-                // itself contains a `Link` (the eBay button) is the awkward alternative, so the
-                // tap gesture stays and picks up the traits/action a real control would carry.
-                .accessibilityAddTraits(.isButton)
-                .accessibilityAction { editing = card }
+        List {
+            ForEach(hunting) { card in
+                HuntRow(card: card, entry: wants.entry(card.id),
+                        setName: setsById[card.setId]?.name,
+                        printedTotal: printedTotalBySet[card.setId],
+                        marketUsd: rawUsd[card.id])
+                    .contentShape(Rectangle())
+                    .onTapGesture { editing = card }
+                    // `.onTapGesture` alone is silent to VoiceOver — a `Button` wrapping a row that
+                    // itself contains a `Link` (the eBay button) is the awkward alternative, so the
+                    // tap gesture stays and picks up the traits/action a real control would carry.
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { editing = card }
+            }
+            // Moved here from `WatchingView`'s hunting footer, which is gone — this is the screen
+            // that owns hunts, so it is where how-a-hunt-reaches-you belongs.
+            //
+            // ⚠️ "once a day" is load-bearing and verified: eBay's saved-search alert is a daily
+            // email, there is no faster free route, and no copy may imply otherwise. `HuntRow`
+            // deliberately says nothing about speed at all; this is the only place that explains
+            // the mechanism, so it must not be dropped again.
+            Section {} footer: {
+                Text("Save the search in eBay and it'll keep an eye out — eBay emails once a day.")
+            }
         }
         .listStyle(.plain)
     }

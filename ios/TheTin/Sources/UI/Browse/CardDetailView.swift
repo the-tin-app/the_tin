@@ -458,6 +458,12 @@ struct CardDetailView: View {
         // against optionals and empty arrays, so no spinner and no gating is needed.
         .task { await model.load() }
         .task(id: "\(model.overlayCondition?.rawValue ?? "-")|\(model.overlayGrade?.rawValue ?? "-")") {
+            // Folded into the existing task rather than given a `.task` of its own: this view's
+            // toolbar and sheet chain is already split out of `body` to stay inside the type
+            // checker's budget, and `SettingsView` failed the build outright this week for adding
+            // exactly one modifier too many. Opening a card IS viewing it, so this is the honest
+            // moment; re-running on an overlay change is harmless, the id de-duplicates.
+            AppConfig.recordRecentCard(model.card.id)
             await model.loadHistory()
         }
         .toolbar { detailToolbar }

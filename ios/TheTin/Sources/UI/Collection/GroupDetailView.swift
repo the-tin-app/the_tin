@@ -567,6 +567,11 @@ struct GroupDetailView: View {
         }
         .contextMenu {
             Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
+            // The one edit common enough to deserve skipping the form entirely: pulling a second
+            // identical card out of a pack cost a tap, a mode switch, a sheet, a stepper and Save.
+            Button { Task { await model.addCopy(entry) } } label: {
+                Label("Add another copy", systemImage: "plus")
+            }
             Button { printLabel(for: entry) } label: { Label("Print label", systemImage: "qrcode") }
             Button { sellingEntry = entry } label: { Label("Sold or traded…", systemImage: "bag") }
         }

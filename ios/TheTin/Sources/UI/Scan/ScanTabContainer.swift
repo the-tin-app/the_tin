@@ -19,6 +19,10 @@ struct ScanTabContainer: View {
     /// rather than pushed from here, so a label read in this tab, one read from the Tin's toolbar
     /// and one read by the system Camera all land in the same place.
     var onOpenLabel: ((String, CardHighlight?) -> Void)? = nil
+    /// Switches to the Search tab from the pack-setup screen — the way out of this tab for someone
+    /// who isn't going to download half a gigabyte on the strength of a first impression. The host
+    /// owns tab selection, so it comes in as a closure.
+    var onSearchInstead: (() -> Void)? = nil
     @State private var source = AVCaptureFrameSource()
     /// Owned by `MainTabView`, not here: a trade's incoming cards land in the same tray, and two
     /// `persisted()` instances over one file would each erase the other's cards.
@@ -163,7 +167,8 @@ struct ScanTabContainer: View {
         case .checking:
             TinLoadingView(label: "Preparing scanner…").task { await pack.refresh() }
         case .notInstalled:
-            ScannerPackSetupView(pack: pack, isExpensive: network.isExpensive)
+            ScannerPackSetupView(pack: pack, isExpensive: network.isExpensive,
+                                 onSearchInstead: onSearchInstead)
         // Scanning stops for the duration of an update (Tomas, 2026-08-03: acceptable). Keeping
         // the viewfinder alive across the transfer meant crossing `switch` branches — SwiftUI
         // treats each case as its own identity, so `.ready` -> `.downloading` tore ScanView down
@@ -296,6 +301,11 @@ struct ScanTabContainer: View {
 struct ScannerPackSetupView: View {
     let pack: ScannerPackModel
     let isExpensive: Bool
+    /// Leaves for the Search tab. The Scan tab is one of five, and until the pack is installed it
+    /// is a wall: a first-run user who taps it is asked for a half-gigabyte download before the
+    /// app has shown them it's worth one, with no other way forward from this screen. Searching is
+    /// the way to add a card that costs nothing and works offline already.
+    var onSearchInstead: (() -> Void)? = nil
     @State private var confirmingCellular = false
 
     var body: some View {
@@ -317,6 +327,12 @@ struct ScannerPackSetupView: View {
             Text(sizeCaption)
                 .font(.footnote).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+
+            if let onSearchInstead {
+                Button("Add a card by searching instead", action: onSearchInstead)
+                    .font(.footnote)
+                    .padding(.top, 2)
+            }
         }
         .padding(28)
         .confirmationDialog("Download over cellular?", isPresented: $confirmingCellular,
