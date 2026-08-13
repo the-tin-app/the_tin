@@ -20,10 +20,14 @@ import Gzip
 /// post would unfurl as a blank grey box. Since posting to those is the whole point, the payload
 /// goes where the crawler can see it. It still names nobody, and the route is `noindex`.
 enum ShareList {
+    /// The wire discriminator, encoded as `k`. Nothing more: the shared page builds its own
+    /// headline from this letter (`site/functions/l.js`), so a display name here would be a second
+    /// copy of the vocabulary that no screen reads. There was one — `var title` returning
+    /// "Want List" — with zero call sites in the app or its tests, still spelling a name #159
+    /// retired months ago. Deleted rather than renamed; the string the recipient actually sees
+    /// lives in `l.js`.
     enum Kind: String, Codable, Hashable {
         case want, trade
-
-        var title: String { self == .want ? "Want List" : "For Trade" }
     }
 
     /// Field names are single letters because they're repeated per card. Gzip would squeeze long

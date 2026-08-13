@@ -263,9 +263,15 @@ email, which is daily. No copy — tip, footer, button, or notification — may 
 `TipsTests.testNoTipPromisesSpeed` guards the tips; `HuntingListView`'s footer is the one
 place that explains the mechanism.
 
-**Known exception:** `ShareList.Kind.title` still renders "Want List" on the shared web
-page. That string is the *recipient's* view, they don't have the app, and the site may key
-on it — left alone deliberately rather than changed unverified.
+**The shared page is the one surface outside this table.** `site/functions/l.js` writes its
+own copy for a recipient who does not have the app — "2 cards wanted", not "Wishlist" —
+and that is correct: a stranger is reading a list, not using your tin. It is also asserted
+by `site/tests/shared-list.test.mjs`. The app's lexicon stops at the app.
+
+`ShareList.Kind` carries no display name for that reason; it is the wire discriminator and
+nothing else. It did carry one — `var title` returning "Want List", with no call sites at
+all — and that is the shape this rule is really about: a retired name survives longest
+where nothing reads it.
 
 ## 7. Do's and Don'ts
 
