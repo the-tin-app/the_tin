@@ -7,16 +7,38 @@ struct DiscoverView: View {
     var goals: SetGoalsModel? = nil
     var signals: DiscoverSignalsModel? = nil
     @State private var model: DiscoverModel?
-    /// Shown once, when nothing has ever been asked or answered. `.skipped` is a stored answer, so
-    /// a skip is remembered and this stays false thereafter.
-    @State private var showSeed = AppConfig.priceTiers == nil
+    /// The price picker, opened from a row on this screen. NOT presented automatically.
+    ///
+    /// Three placements now. As an `.interactiveDismissDisabled` sheet at launch it was the first
+    /// screen of the app — a budget form before a single card. Moved to the For You shelves screen,
+    /// it became **unreachable**: with no tiers, no owned cards and no wants, `ShelfBuilder` emits
+    /// no shelves, `DiscoverHomeView` drops an empty row, and the "See all" that opens the shelves
+    /// screen does not exist — so on a true first run there was no door to the question at all
+    /// (found on the simulator, 2026-08-12; the earlier "it works" reading came from a rig whose
+    /// tiers were already set). Discover's home is the one surface a new user is guaranteed to
+    /// land on, so the offer lives here and opens on a tap.
+    @State private var showSeed = false
+
+    /// The answered price lines, held as real view state rather than read from `AppConfig` inside
+    /// `body`.
+    ///
+    /// ⚠️ **`AppConfig.priceTiers` is UserDefaults, and SwiftUI cannot observe UserDefaults.** Read
+    /// straight from `body`, answering the picker wrote the value and changed nothing on screen:
+    /// the prompt row stayed, and For You never appeared, because nothing invalidated this view and
+    /// so `inputs.recomputeKey` was never recalculated. Dismissing the sheet is not a reliable
+    /// invalidation either — the binding is already `false` by the time `onDone` sets it. Assigning
+    /// here is a state change SwiftUI is guaranteed to see, which re-renders AND re-keys `.task`.
+    /// (Observed on the simulator, 2026-08-12: tiers written to the plist, screen unchanged.)
+    @State private var tiers = AppConfig.priceTiers
 
     var body: some View {
         // One view, loaded or not. This used to be `Group { if isLoaded { home } else { TinLoadingView } }`,
         // which is two `_ConditionalContent` identities — so `isLoaded` flipping DESTROYED the layout and
         // rebuilt it, and the centred loading tin was replaced by a top-anchored scroll view. On an A10
         // iPad that reads as the whole screen popping to the top. The home renders its own skeletons now.
-        DiscoverHomeView(model: model, store: store, collection: collection, wants: wants)
+        DiscoverHomeView(model: model, store: store, collection: collection, wants: wants,
+                         needsSeed: tiers == nil,
+                         onTapSeed: { showSeed = true })
         .navigationTitle("Discover")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: CardID.self) { cardID in
@@ -62,11 +84,17 @@ struct DiscoverView: View {
             await m.load(inputs)
             model = m
         }
-        // A `.sheet` modifier rather than a branch in the body: swapping the surface for a picker
-        // would be a second `_ConditionalContent` identity, which destroys and rebuilds the whole
-        // Discover layout underneath it.
-        .sheet(isPresented: $showSeed) {
-            ForYouSeedView { showSeed = false }
+        .sheet(isPresented: $showSeed) { seedSheet }
+        // Settings can edit the same value, and this view's `@State` copy would otherwise stay
+        // stale until the app relaunched. Cheap: one UserDefaults read per appearance.
+        .onAppear { tiers = AppConfig.priceTiers }
+    }
+
+    @ViewBuilder private var seedSheet: some View {
+        ForYouSeedView(initial: tiers) {
+            // Pull the saved value back into state — this assignment is what rebuilds Discover.
+            tiers = AppConfig.priceTiers
+            showSeed = false
         }
     }
 
@@ -78,7 +106,7 @@ struct DiscoverView: View {
               reasons: signals?.reasons ?? [:],
               at: signals?.at ?? [:],
               signalsRevision: signals?.revision ?? 0,
-              tiers: AppConfig.priceTiers)
+              tiers: tiers)
     }
 
 }
@@ -90,6 +118,9 @@ private struct DiscoverHomeView: View {
     let store: CatalogStore
     var collection: CollectionModel?
     var wants: WantsModel?
+    /// The price picker has never been answered.
+    var needsSeed: Bool = false
+    var onTapSeed: () -> Void = {}
 
     private var isLoaded: Bool { model?.isLoaded ?? false }
 
@@ -108,6 +139,10 @@ private struct DiscoverHomeView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal)
+                // Only until it's answered. Placed above the rows because on a first run it is
+                // the one thing here that CHANGES what's below it — answering adds the three
+                // price-banded For You rows, which without it don't exist to be discovered.
+                if needsSeed { seedPrompt }
                 ForEach(DiscoverModel.StreamKind.allCases, id: \.self) { kind in
                     let cards = model?.previews[kind] ?? []
                     // Every row is present while loading; only a row that is genuinely empty
@@ -124,6 +159,34 @@ private struct DiscoverHomeView: View {
             }
             .padding(.vertical)
         }
+    }
+
+    /// The price question as a row, shown until it's answered.
+    ///
+    /// Not a modal. It was one at launch, and being the first screen of the app is exactly what
+    /// this whole change set removed. A row states the offer and costs a new user nothing to
+    /// ignore — and unlike the sheet, ignoring it doesn't count as answering: Skip stores the
+    /// defaults and never asks again, whereas this stays put until someone actually decides.
+    private var seedPrompt: some View {
+        Button(action: onTapSeed) {
+            HStack(spacing: 12) {
+                Image(systemName: "slider.horizontal.3").foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tune Discover to your budget")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    Text("Two questions about price, and you get rows you'd actually buy from.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal)
     }
 }
 

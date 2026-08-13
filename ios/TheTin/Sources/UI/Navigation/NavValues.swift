@@ -36,7 +36,14 @@ extension CardID: Identifiable { var id: String { raw } }
 
 /// Marker route for the pinned virtual "Wishlist" group (distinct from the String group-ids
 /// used by real collection groups, to avoid a navigationDestination type collision).
-struct WantedRoute: Hashable {}
+///
+/// `scope` opens the screen on a specific segment instead of whatever was last used. Carried on
+/// the ROUTE rather than written into `@AppStorage` by the caller before navigating: the stored
+/// value is the user's own last choice, and a link that silently rewrites it would change what
+/// their pinned Wishlist row opens on next time — which is the class of bug #159 fixed.
+struct WantedRoute: Hashable {
+    var scope: WantedView.Scope? = nil
+}
 
 /// Route to the Watching screen: what the cards you said you care about have been doing.
 struct WatchingRoute: Hashable {}

@@ -181,6 +181,24 @@ final class AppModel {
     /// request — a plain `onChange` on the URL wouldn't fire the second time.
     private(set) var importRouteToken = 0
 
+    /// "Open Settings AND put the file picker up", for the empty tin's Import option.
+    ///
+    /// Distinct from `importRouteToken` above, which carries a URL somebody already chose. This one
+    /// carries no file: the user has said they want to import and hasn't picked anything yet.
+    /// Landing them at the top of a ten-section Settings list and hoping they scroll to Data is how
+    /// the importer stayed invisible to the people who needed it most.
+    ///
+    /// ⚠️ **A flag consumed by the reader, NOT a monotonic token.** This shipped first as a token
+    /// with a `consumedImportPickerToken` counter in `SettingsView`, copying `RootView`'s pattern —
+    /// and that pattern does not transfer, because `RootView`'s `MainTabView` lives for the whole
+    /// session while **Settings is a `.sheet`**: it is destroyed and rebuilt on every open, so its
+    /// `@State` counter reset to 0 each time and `1 > 0` fired the file picker again on every
+    /// visit, forever (reported on device 2026-08-12). The "have we handled this?" bit has to
+    /// outlive the view that handles it, so it lives here and Settings clears it.
+    var wantsImportPicker = false
+
+    func requestImportPicker() { wantsImportPicker = true }
+
     /// Someone's shared trade list, opened in the app instead of in a browser — the cards they
     /// said they'll part with, ready to become the other column of a trade.
     ///

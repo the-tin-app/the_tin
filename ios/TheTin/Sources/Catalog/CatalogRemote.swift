@@ -167,6 +167,39 @@ enum AppConfig {
     /// available from Settings and the Scan tab — dismissing silences the nudge, not the feature.
     static let scannerPromptDismissedKey = "scannerPromptDismissed"
 
+    /// The FAQ and contact page. The app had no route to help of any kind: no FAQ, no contact, no
+    /// explanation of how scanning or the catalog tiers work, in a product whose own vocabulary
+    /// (dividers, tiers, the pack) has to be learned.
+    static let helpURL = URL(string: "https://thetinapp.com/support/")!
+
+    /// Cards opened recently, newest first, capped at `recentCardsLimit`.
+    ///
+    /// The card-shop loop is: look up five cards in a row, then want the second one back. Search
+    /// kept no history, nothing else in the app did either, and the back stack is gone the moment
+    /// you change tab — so the only way back was to remember the name and retype it.
+    ///
+    /// Card ids only. This is a list of catalog rows, not behaviour: it says nothing about what
+    /// was bought, wanted or owned, it never leaves the device, and clearing it is a matter of
+    /// opening twenty other cards.
+    static var recentCardIds: [String] {
+        get { UserDefaults.standard.stringArray(forKey: recentCardsKey) ?? [] }
+        set {
+            UserDefaults.standard.set(Array(newValue.prefix(recentCardsLimit)), forKey: recentCardsKey)
+        }
+    }
+
+    /// Move a card to the front of the recents list, de-duplicating it. Re-opening the same card
+    /// must not fill the list with one id.
+    static func recordRecentCard(_ id: String) {
+        var ids = recentCardIds
+        ids.removeAll { $0 == id }
+        ids.insert(id, at: 0)
+        recentCardIds = ids
+    }
+
+    static let recentCardsLimit = 20
+    private static let recentCardsKey = "recentCardIds"
+
     /// The catalog price date (`yyyy-MM-dd`) the user last saw on the Watching screen. Drives
     /// the Tin row's dot via `WatchingModel.hasUnseen`; written when the screen loads, so
     /// visiting is what clears it. A date rather than a count because, with no event log, a

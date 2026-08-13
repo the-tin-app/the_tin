@@ -181,7 +181,7 @@ struct TradeCatalogPicker: View {
                             if wants?.isWanted(card.id) == true {
                                 Image(systemName: "heart.fill")
                                     .font(.caption2).foregroundStyle(.pink) // contrast-ok: glyph, not text
-                                    .accessibilityLabel("On your wanted list")
+                                    .accessibilityLabel("On your wishlist")
                             }
                         }
                         Text(model.caption(for: card))

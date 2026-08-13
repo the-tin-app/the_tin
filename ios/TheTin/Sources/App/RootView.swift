@@ -90,7 +90,7 @@ private struct MainTabView: View {
                             selection = .scan
                         }
                     }
-                    .fundingBanner(model: model, store: store, pack: pack)
+                    .statusBanners(model: model, store: store)
             }
             .appToasts(model: model, pack: pack)
             .tabItem { Label("Discover", systemImage: "sparkles") }
@@ -98,7 +98,7 @@ private struct MainTabView: View {
 
             NavigationStack {
                 MoversView(model: collection, store: store, wants: model.wants)
-                    .fundingBanner(model: model, store: store, pack: pack)
+                    .statusBanners(model: model, store: store)
             }
             .appToasts(model: model, pack: pack)
             .tabItem { Label("Movers", systemImage: "chart.line.uptrend.xyaxis") }
@@ -112,7 +112,7 @@ private struct MainTabView: View {
                         TinLoadingView()
                     }
                 }
-                .fundingBanner(model: model, store: store, pack: pack)
+                .statusBanners(model: model, store: store)
             }
             .appToasts(model: model, pack: pack)
             .tabItem { Label("Search", systemImage: "magnifyingglass") }
@@ -128,6 +128,13 @@ private struct MainTabView: View {
                                    case .browse:
                                        discoverPath.append(BrowseRoute())
                                        selection = .discover
+                                   // Settings owns the whole import flow (picker, progress,
+                                   // result sheet, skipped-rows export), so it is the honest
+                                   // destination — but opened at the file picker, not at the top
+                                   // of the list with Data eight sections down.
+                                   case .importCSV:
+                                       model.requestImportPicker()
+                                       showingSettings = true
                                    }
                                },
                                scannerReady: pack.phase == .ready,
@@ -154,7 +161,9 @@ private struct MainTabView: View {
                                // here as a second `.toolbar` is what lost it on iPadOS 18.
                                onOpenSettings: { showingSettings = true })
                     .sheet(isPresented: $showingSettings) { SettingsView(app: model, pack: pack) }
-                    .fundingBanner(model: model, store: store, pack: pack)
+                    // The one tab that carries the support bar — this is where the collection the
+                    // project exists to serve actually lives.
+                    .statusBanners(model: model, store: store, showsFunding: true)
             }
             .appToasts(model: model, pack: pack)
             .tabItem { Label("The Tin", systemImage: "square.stack.3d.up") }
@@ -166,8 +175,9 @@ private struct MainTabView: View {
                                  onOpenLabel: { id, highlight in
                                      model.openCard(id: id, highlight: highlight)
                                  },
+                                 onSearchInstead: { selection = .search },
                                  staging: staging)
-                    .fundingBanner(model: model, store: store, pack: pack)
+                    .statusBanners(model: model, store: store)
             }
             // The Scan tab shows the full-screen progress view for the whole transfer, so a
             // toast here would say the same thing twice. It appears on every other tab — the
@@ -289,8 +299,11 @@ private struct MainTabView: View {
 /// Must live INSIDE the NavigationStack: a TabView-level `safeAreaInset` lets the child nav bars
 /// draw over it (it was covering the Discover section headers).
 private extension View {
-    func fundingBanner(model: AppModel, store: CatalogStore, pack: ScannerPackModel) -> some View {
-        modifier(FundingBanner(model: model, store: store, pack: pack))
+    /// The strips above a tab's content: at most one honesty banner, plus — on The Tin only — the
+    /// support bar. `pack` used to be threaded through here and was never read.
+    func statusBanners(model: AppModel, store: CatalogStore,
+                       showsFunding: Bool = false) -> some View {
+        modifier(StatusBanners(model: model, store: store, showsFunding: showsFunding))
     }
 
     /// Attach to the tab's `NavigationStack`, never to its root view — see `AppToasts`.
@@ -304,10 +317,25 @@ private extension View {
     }
 }
 
-private struct FundingBanner: ViewModifier {
+/// Anchors the honesty banners — and, on The Tin, the support bar — under a tab's navigation bar.
+/// Must live INSIDE the `NavigationStack`: a TabView-level `safeAreaInset` lets the child nav bars
+/// draw over it (it was covering the Discover section headers).
+///
+/// **One banner, not a stack.** Offline and reduced-data could both render, and on Discover the
+/// scanner-pack prompt sat above them as a third — so a first run, on cellular, with a backup-tier
+/// catalog opened on four strips of chrome before a single card. They also say overlapping things:
+/// both mean "these prices are not today's". Offline wins, because it is the one the user can't
+/// act on and it dates the prices explicitly.
+///
+/// **The support bar is The Tin's alone.** DESIGN.md called it always-on and it was, on all five
+/// tabs and every screen pushed from them — including the scanner viewfinder and search results,
+/// where the relationship it asks about is not what the user is doing. It costs ~24pt of the top
+/// of every screen in the app to say something one screen can say. Settings still carries the full
+/// Support section, so the ask is never more than a tab away.
+private struct StatusBanners: ViewModifier {
     let model: AppModel
     let store: CatalogStore
-    let pack: ScannerPackModel
+    let showsFunding: Bool
 
     func body(content: Content) -> some View {
         content
@@ -315,11 +343,10 @@ private struct FundingBanner: ViewModifier {
                 VStack(spacing: 0) {
                     if model.network.isOffline {
                         OfflineBanner(asOf: model.catalogState?.priceAsOf ?? (try? store.priceAsOf()) ?? nil)
-                    }
-                    if model.reducedData {
+                    } else if model.reducedData {
                         ReducedDataBanner(installedTier: model.catalogState?.tier)
                     }
-                    FundingBar(funding: model.funding)
+                    if showsFunding { FundingBar(funding: model.funding) }
                 }
             }
     }

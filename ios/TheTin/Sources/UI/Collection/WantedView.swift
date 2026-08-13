@@ -10,8 +10,15 @@ struct WantedView: View {
     let wants: WantsModel
     var collection: CollectionModel? = nil
     var goals: SetGoalsModel? = nil
+    /// Open on this segment rather than the last-used one. Set by links that mean a specific
+    /// segment — Watching's "on the hunt" row — and deliberately NOT written back to
+    /// `@AppStorage`, so arriving that way doesn't change what the pinned Wishlist row opens on.
+    var initialScope: Scope? = nil
 
     @AppStorage(Scope.storageKey) private var scopeRaw: String = Scope.sets.rawValue
+    /// The segment this visit is showing: `initialScope` for one that was navigated to
+    /// deliberately, otherwise the stored choice.
+    @State private var overrideScope: Scope?
 
     enum Scope: String, CaseIterable {
         case sets, singles, hunting
@@ -28,7 +35,14 @@ struct WantedView: View {
         }
     }
 
-    private var scope: Scope { Scope(rawValue: scopeRaw) ?? .sets }
+    private var scope: Scope { overrideScope ?? Scope(rawValue: scopeRaw) ?? .sets }
+
+    /// Reads the resolved segment and, on a tap, commits it: touching the picker is the user
+    /// choosing, and from then on this visit follows them rather than the link that opened it.
+    private var scopeSelection: Binding<String> {
+        Binding(get: { scope.rawValue },
+                set: { scopeRaw = $0; overrideScope = nil })
+    }
 
     var body: some View {
         Group {
@@ -50,8 +64,9 @@ struct WantedView: View {
         // child it applied only to the Singles segment, so the bar still changed size when the
         // segment changed. The grep test can't see this one — it scans string literals.
         .navigationBarTitleDisplayMode(.inline)
+        .task { overrideScope = initialScope }
         .safeAreaInset(edge: .top) {
-            Picker("Wishlist", selection: $scopeRaw) {
+            Picker("Wishlist", selection: scopeSelection) {
                 ForEach(Scope.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
             }
             .pickerStyle(.segmented)

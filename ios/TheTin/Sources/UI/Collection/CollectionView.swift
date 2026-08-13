@@ -464,6 +464,18 @@ final class CollectionModel {
         await write("import the cards") { try await repository.addEntries(entries) }
     }
 
+    /// One more of exactly this copy — same printing, condition, grade and cost basis.
+    ///
+    /// Pulling a second identical card out of a pack is the most ordinary thing that happens to a
+    /// collection, and it cost a row tap, a mode switch or a swipe, a sheet, a stepper and a Save.
+    /// Goes through `saveEntry`, so the id is known and it takes the update path rather than
+    /// minting a second row that can't be told apart from the first.
+    func addCopy(_ entry: CollectionEntry) async {
+        var bumped = entry
+        bumped.qty += 1
+        await saveEntry(bumped)
+    }
+
     func moveEntry(_ entry: CollectionEntry, toGroup groupId: String) async {
         var moved = entry
         moved.groupId = groupId
@@ -761,7 +773,10 @@ enum DividerPalette {
 /// it; long-press for rename/delete/list; the reorder toolbar button turns on drag handles.
 struct CollectionView: View {
     /// Where the empty-tin call-to-action routes; the host (MainTabView) switches tabs.
-    enum GetStartedTab { case scan, browse }
+    /// `importCSV` is not a tab — it opens Settings with the file picker already up. It rides on
+    /// this enum anyway because the host is the only thing that can present Settings, and inventing
+    /// a second callback for one case would be two ways to say "leave this screen".
+    enum GetStartedTab { case scan, browse, importCSV }
 
     @Bindable var model: CollectionModel
     let store: CatalogStore
@@ -1043,9 +1058,10 @@ struct CollectionView: View {
                 GroupDetailView(model: model, group: group, store: store, onGetStarted: onGetStarted)
             }
         }
-        .navigationDestination(for: WantedRoute.self) { _ in
+        .navigationDestination(for: WantedRoute.self) { route in
             if let wants {
-                WantedView(store: store, wants: wants, collection: model, goals: goals)
+                WantedView(store: store, wants: wants, collection: model, goals: goals,
+                           initialScope: route.scope)
             }
         }
         .navigationDestination(for: WatchingRoute.self) { _ in
@@ -1194,6 +1210,16 @@ struct CollectionView: View {
                     title: "Browse sets",
                     caption: "Pick a set, find the card, add it by hand.",
                     prominent: false) { onGetStarted?(.browse) }
+                // The option for everyone who did NOT start collecting today. Both choices above
+                // assume an empty collection and a card in your hand; someone arriving with 3,000
+                // cards in another app or a spreadsheet had nothing here, and the importer that
+                // would have taken them — multi-format, and it restores our own export's dividers —
+                // was three levels down in Settings. Formats are named because the answer to "will
+                // it take mine?" decides whether this is worth tapping.
+                getStartedOption(
+                    title: "Import a list",
+                    caption: "Bring a collection in from a CSV — ours, or an export from another app.",
+                    prominent: false) { onGetStarted?(.importCSV) }
             }
             .padding(.top, 4)
         }

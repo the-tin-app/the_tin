@@ -10,7 +10,6 @@ struct ForYouShelvesView: View {
     let store: CatalogStore
     var wants: WantsModel?
     var collection: CollectionModel?
-
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {

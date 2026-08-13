@@ -51,26 +51,33 @@ struct SearchView: View {
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
 
+    /// Cards opened recently, resolved once per appearance. `AppConfig.recentCardIds` is a plain
+    /// UserDefaults array, so this is where it becomes catalog rows.
+    @State private var recents: [CardRecord] = []
+
+    /// Recents earn the screen only when there is no query to answer.
+    private var showsRecents: Bool { model.text.isEmpty && !recents.isEmpty }
+
     var body: some View {
-        List(model.results) { card in
-            NavigationLink(value: CardID(raw: card.id)) {
-                HStack(spacing: 12) {
-                    CardImageView(card: card, quality: "low").frame(width: 44)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(card.name).lineLimit(1)
-                        Text(model.caption(for: card))
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        if let hp = card.hp {
-                            Text("HP \(hp)").font(.caption2).foregroundStyle(.tertiary)
-                        }
+        // Hoisted out of the row: built per row it would be an O(entries) map and Set build for
+        // every visible cell, on a screen that re-renders per keystroke.
+        let owned = Set((collection?.entries ?? []).map(\.cardId))
+        List {
+            if showsRecents {
+                Section("Recently viewed") {
+                    ForEach(recents) { card in
+                        row(card, owned: owned, price: nil)
                     }
-                    Spacer()
-                    PriceLabel(value: model.prices[card.id]?.rawUsd)
                 }
+            }
+            ForEach(model.results) { card in
+                row(card, owned: owned, price: model.prices[card.id]?.rawUsd)
             }
         }
         .overlay {
-            if model.results.isEmpty {
+            // Not while recents are showing — the whole point is that the landing has something
+            // on it, and an overlay would cover what it just gained.
+            if model.results.isEmpty, !showsRecents {
                 ContentUnavailableView(
                     model.text.isEmpty ? "Search the catalog" : "No matches",
                     systemImage: "magnifyingglass",
@@ -78,6 +85,7 @@ struct SearchView: View {
             }
         }
         .searchable(text: $model.text, prompt: "Name, move, hp:…, 58/112")
+        .task { recents = orderedRecents() }
         .navigationTitle("Search")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: CardID.self) { cardID in
@@ -86,5 +94,51 @@ struct SearchView: View {
                                store: store, collection: collection, wants: wants)
             }
         }
+    }
+
+    /// One result. Shared by the results list and the recents section so the two can never drift
+    /// into looking like different kinds of thing — they are the same card, found two ways.
+    ///
+    /// `price` is passed in rather than read from `model.prices`: that dictionary only covers the
+    /// current query's results, and a recents row would silently show no price at all.
+    private func row(_ card: CardRecord, owned: Set<String>, price: Double?) -> some View {
+        NavigationLink(value: CardID(raw: card.id)) {
+            HStack(spacing: 12) {
+                CardImageView(card: card, quality: "low").frame(width: 44)
+                    // Search was the ONE card surface in the app without these — the set grids,
+                    // Discover tiles, Movers rows, the scan tray and the wishlist all badge
+                    // ownership, and the screen built for "do I already own this?" made you tap
+                    // through to find out. Same 44pt thumbnail and 0.85 scale as `MarketMoverRow`,
+                    // the precedent for this row size.
+                    .overlay(alignment: .topTrailing) {
+                        let wanted = wants?.isWanted(card.id) ?? false
+                        if owned.contains(card.id) || wanted {
+                            CardBadges(owned: owned.contains(card.id), wanted: wanted)
+                                .scaleEffect(0.85)
+                        }
+                    }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(card.name).lineLimit(1)
+                    Text(model.caption(for: card))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if let hp = card.hp {
+                        Text("HP \(hp)").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+                Spacer()
+                PriceLabel(value: price)
+            }
+        }
+    }
+
+    /// Recents in the order they were viewed. `cards(ids:)` answers a SET — it neither preserves
+    /// the id order nor returns a row for an id the catalog has since dropped — so the list is
+    /// rebuilt from the id order and anything missing simply falls out.
+    private func orderedRecents() -> [CardRecord] {
+        let ids = AppConfig.recentCardIds
+        guard !ids.isEmpty else { return [] }
+        let byId = Dictionary(uniqueKeysWithValues:
+            ((try? store.cards(ids: ids)) ?? []).map { ($0.id, $0) })
+        return ids.compactMap { byId[$0] }
     }
 }

@@ -156,10 +156,28 @@ struct SettingsView: View {
             // A CSV opened in The Tin from Files / AirDrop lands here rather than in the picker:
             // RootView presents Settings on the route token, and this runs the same import the
             // button does, so the result sheet and skipped-rows export behave identically.
+            // BOTH import routes share one `.task`, and that is a type-checker constraint, not a
+            // style choice: adding a second `.task` here failed the build outright with "unable to
+            // type-check this expression in reasonable time" — the same budget this file's
+            // `sections` property was already split out of `body` to stay inside. One more
+            // modifier on this chain is genuinely not affordable.
+            //
+            // `pendingImportURL` first: it carries a file somebody already chose, so it outranks a
+            // bare request to go choose one.
             .task(id: app.importRouteToken) {
-                guard let url = app.pendingImportURL else { return }
-                app.pendingImportURL = nil
-                await runImport(.success(url))
+                if let url = app.pendingImportURL {
+                    app.pendingImportURL = nil
+                    await runImport(.success(url))
+                    return
+                }
+                // The empty tin's "Import a list" — no file picked yet, so put the picker up, then
+                // clear the request. Clearing it on the MODEL is the whole fix: a `@State` counter
+                // here resets every time this sheet is rebuilt, so it re-fired on every visit to
+                // Settings. See `AppModel.wantsImportPicker`.
+                if app.wantsImportPicker {
+                    app.wantsImportPicker = false
+                    importing = true
+                }
             }
             .sheet(item: $importSummary) { ImportResultSheet(summary: $0) }
             // ⚠️ Attached HERE, on the List, not on the Section that owns the row. A `Section` is
@@ -221,6 +239,16 @@ struct SettingsView: View {
         Section("App") {
             Picker("Appearance", selection: $appearance) {
                 ForEach(Appearance.allCases, id: \.self) { Text($0.label) }
+            }
+            // The app had no route to help of any kind — no FAQ, no contact, nothing explaining
+            // dividers, catalog tiers or the scanner pack, in a product whose own vocabulary has
+            // to be learned. The page already exists; nothing in the app pointed at it.
+            Link(destination: AppConfig.helpURL) {
+                HStack {
+                    Text("Help & FAQ")
+                    Spacer()
+                    Image(systemName: "arrow.up.right").font(.caption2).foregroundStyle(.tertiary)
+                }
             }
             LabeledContent("Version", value: Self.appVersion)
         }
@@ -683,7 +711,7 @@ struct SettingsView: View {
         } header: {
             Text("Printout contact line")
         } footer: {
-            Text("Shown in the header of printed trade sheets, want lists, and collection reports. Leave empty to omit.")
+            Text("Shown in the header of printed trade sheets, wishlists, and collection reports. Leave empty to omit.")
         }
     }
 
