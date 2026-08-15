@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales, parseRawLow } from "../src/pipeline/ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales, parseRawLow, parsePrimaryRaw } from "../src/pipeline/ppt-history";
 
 describe("parseWeeklyHistory", () => {
   it("normalizes an array shape, dedups exact dates (latest wins), thins to >=6-day spacing", () => {
@@ -192,6 +192,52 @@ describe("parseLatestByVariant", () => {
     expect(parseLatestByVariant({ variants: { Normal: { "Near Mint": { price: 0 } } } })).toEqual([]);
     expect(parseLatestByVariant(null)).toEqual([]);
     expect(parseLatestByVariant({ variants: "nope" })).toEqual([]);
+  });
+});
+
+describe("parsePrimaryRaw", () => {
+  it("returns primaryPrinting and a price IDENTICAL to that printing's price_by_variant row", () => {
+    const prices = {
+      primaryPrinting: "Normal",
+      low: 40,
+      variants: {
+        Normal: { "Near Mint": { price: 99 }, Damaged: { price: 12 } },
+        Holofoil: { "Near Mint": { price: 575.22 } },
+      },
+    };
+    const primary = parsePrimaryRaw(prices);
+    expect(primary).toEqual({ printing: "Normal", usd: 99, low: 40 });
+    // The invariant the whole change exists for: raw_usd IS the variant row, not a second opinion.
+    const row = parseLatestByVariant(prices).find((v) => v.printing === primary!.printing);
+    expect(primary!.usd).toBe(row!.usd);
+  });
+
+  it("picks the only printing a holo-only card has, in PPT's vocabulary", () => {
+    // hgss3-89 Rayquaza & Deoxys LEGEND: TCGdex types it `normal`, so the old tcgcsv path labelled
+    // it "Normal" — a printing it has no row for — against a raw of $40. PPT calls it Holofoil.
+    const prices = { primaryPrinting: "Holofoil", variants: { Holofoil: { "Near Mint": { price: 199.69 } } } };
+    expect(parsePrimaryRaw(prices)).toEqual({ printing: "Holofoil", usd: 199.69, low: null });
+  });
+
+  it("falls back to the first variant key when primaryPrinting names a printing that isn't there", () => {
+    const prices = { primaryPrinting: "Cosmos Holo", variants: { Normal: { "Near Mint": { price: 5 } } } };
+    expect(parsePrimaryRaw(prices)).toEqual({ printing: "Normal", usd: 5, low: null });
+  });
+
+  it("drops a low more than 2x the raw, keeps one that merely exceeds it", () => {
+    // ex6-104 shape: low $100 against a raw the old split put at $33.40. Against PPT's own $99
+    // the same low is only a thin-market listing above an average of recent sales — publishable.
+    const over = { variants: { Normal: { "Near Mint": { price: 33.4 } } }, low: 100 };
+    expect(parsePrimaryRaw(over)!.low).toBeNull();
+    const near = { variants: { Normal: { "Near Mint": { price: 99 } } }, low: 100 };
+    expect(parsePrimaryRaw(near)!.low).toBe(100);
+  });
+
+  it("returns null when no printing has a usable price, so callers leave price_latest alone", () => {
+    expect(parsePrimaryRaw({ variants: { Normal: { "Near Mint": { price: 0 } } } })).toBeNull();
+    expect(parsePrimaryRaw({ variants: {} })).toBeNull();
+    expect(parsePrimaryRaw({ variants: "nope" })).toBeNull();
+    expect(parsePrimaryRaw(null)).toBeNull();
   });
 });
 

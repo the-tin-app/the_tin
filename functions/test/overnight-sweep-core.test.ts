@@ -58,12 +58,14 @@ const opts = { populationEnabled: true, asOf: "2026-07-08" };
 const never = () => false;
 
 describe("runOvernightSweep", () => {
-  it("writes history + graded (preserving raw) + population, idempotently", async () => {
+  it("writes history + graded + population, rebasing raw onto PPT's primary printing, idempotently", async () => {
     const db = freshDb();
     const s = await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
     expect(s.historyRows).toBe(2);
     const row = db.prepare("SELECT raw_usd, raw_eur, psa8, psa10 FROM price_latest WHERE card_id='base-4'").get() as any;
-    expect(row).toEqual({ raw_usd: 100, raw_eur: 90, psa8: 33, psa10: 450 }); // raw preserved, all PSA grades added (cgc dropped)
+    // raw REBASED 100 -> 95: the seeded 100 is the tcgcsv export's number, 95 is PPT's own
+    // Holofoil (= primaryPrinting) row. All PSA grades added (cgc dropped).
+    expect(row).toEqual({ raw_usd: 95, raw_eur: 90, psa8: 33, psa10: 450 });
     expect(db.prepare("SELECT count FROM population WHERE card_id='base-4' AND grade='g10'").pluck().get()).toBe(5);
     // idempotent re-run of the same set (fresh ledger) does not duplicate history
     await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
@@ -109,8 +111,10 @@ describe("runOvernightSweep", () => {
     ]);
     // untouched: NM-only legacy tables preserved exactly as before
     expect(s.historyRows).toBe(2);
-    const nmRow = db.prepare("SELECT raw_usd FROM price_latest WHERE card_id='base-4'").get() as any;
-    expect(nmRow.raw_usd).toBe(100); // price_latest NM raw_usd untouched by condition writes
+    const nmRow = db.prepare("SELECT raw_usd, raw_printing FROM price_latest WHERE card_id='base-4'").get() as any;
+    // The condition writes still don't touch raw; the primary-printing rebase does, and it lands
+    // on exactly the price_by_variant/price_by_condition NM figure above.
+    expect(nmRow).toEqual({ raw_usd: 95, raw_printing: "Holofoil" });
     // idempotent re-run does not duplicate condition rows
     await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
     expect(db.prepare("SELECT COUNT(*) FROM price_history_cond").pluck().get()).toBe(3);
@@ -188,7 +192,7 @@ describe("runOvernightSweep", () => {
     expect(s.liquidityRows).toBe(1);
     expect(s.gradedSalesRows).toBe(2);
     const row = db.prepare("SELECT raw_usd, sellers, listings FROM price_latest WHERE card_id='base-4'").get() as any;
-    expect(row).toEqual({ raw_usd: 100, sellers: 7, listings: 31 }); // raw preserved
+    expect(row).toEqual({ raw_usd: 95, sellers: 7, listings: 31 }); // raw rebased onto PPT
     expect(db.prepare("SELECT grade, sales_count, confidence FROM graded_sales ORDER BY grade").all()).toEqual([
       { grade: "cgc9", sales_count: 2, confidence: null },
       { grade: "psa10", sales_count: 14, confidence: "high" },
@@ -212,12 +216,29 @@ describe("runOvernightSweep", () => {
     expect(db.prepare("SELECT COUNT(*) FROM graded_sales").pluck().get()).toBe(0);
   });
 
-  it("writes prices.low into price_latest.low_usd", async () => {
+  it("writes prices.low into price_latest.low_usd, paired with the raw it was checked against", async () => {
     const db = freshDb();
     const s = await runOvernightSweep(db as any, client as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
-    expect(s.liquidityRows).toBeGreaterThan(0);
-    const low = db.prepare("SELECT low_usd FROM price_latest WHERE card_id='base-4'").pluck().get();
-    expect(low).toBe(77);
+    // The low now rides along with the raw write, not the liquidity one — that is what stops the
+    // two from describing different subjects (762 cards published low_usd > raw_usd otherwise).
+    expect(s.rawRows).toBe(1);
+    const row = db.prepare("SELECT low_usd, raw_usd FROM price_latest WHERE card_id='base-4'").get() as any;
+    expect(row).toEqual({ low_usd: 77, raw_usd: 95 });
+    expect(row.low_usd).toBeLessThanOrEqual(row.raw_usd);
+  });
+
+  it("leaves the export's raw alone when PPT has no usable printing price", async () => {
+    // The degradation rule: a sweep that cannot price a card must not blank a row build-catalog
+    // already filled. Seeded raw is 100; PPT offers nothing usable.
+    const db = freshDb();
+    const c = { ...client, getSetEnrichment: async () => {
+      const [row] = await client.getSetEnrichment();
+      return [{ ...row, pricesRaw: { primaryPrinting: "Holofoil", variants: { Holofoil: { "Near Mint": { price: 0 } } } } }];
+    } };
+    const s = await runOvernightSweep(db as any, c as any, [{ setId: "base", pptName: "Base" }], ledger(), opts, never);
+    expect(s.rawRows).toBe(0);
+    const row = db.prepare("SELECT raw_usd, raw_printing FROM price_latest WHERE card_id='base-4'").get() as any;
+    expect(row).toEqual({ raw_usd: 100, raw_printing: null });
   });
 
   it("rolls up per-condition volume into price_by_condition.sales_count", async () => {
