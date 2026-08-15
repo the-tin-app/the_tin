@@ -257,3 +257,50 @@ export function parseRawLow(prices: unknown): number | null {
   const n = typeof v === "string" ? Number(v) : (v as number);
   return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : null;
 }
+
+export interface PrimaryRaw { printing: string; usd: number; low: number | null }
+
+/**
+ * The card's headline raw price in PPT's OWN vocabulary: `prices.primaryPrinting`, that
+ * printing's price, and the top-level `prices.low`.
+ *
+ * **Why this exists.** `price_latest.raw_usd`/`raw_printing` came from the tcgcsv product feed
+ * while every other price table came from PPT, and on served expert v44 the two disagreed three
+ * ways:
+ *
+ * - `raw_printing` named a printing the card had no `price_by_variant` row for — 1,126 cards.
+ *   It was `pptPrintingName(tcgdexVariantType)`, a TCGdex-DERIVED label, so a LEGEND (TCGdex type
+ *   `normal`) came out "Normal" while PPT calls the only printing it has "Holofoil".
+ * - `raw_usd` disagreed with the row for its own recorded printing by >=2x on 246 cards
+ *   (`ex6-104` Blastoise ex: raw $33.40 against its own Normal row at $99.00).
+ * - `low_usd` exceeded `raw_usd` on 762, the low coming from PPT and the market from tcgcsv.
+ *
+ * The price is taken THROUGH `parseLatestByVariant` rather than read out separately, so `raw_usd`
+ * is literally the same number as the card's `price_by_variant` row for `raw_printing`. The
+ * disagreement is not narrowed, it is made unrepresentable.
+ *
+ * `primaryPrinting` is trusted only when it actually keys `variants` — PPT naming a printing it
+ * then omits falls back to the first key. null when no printing has a usable price: callers must
+ * then leave `price_latest` alone rather than blank a row the export already filled.
+ */
+export function parsePrimaryRaw(prices: unknown): PrimaryRaw | null {
+  if (!prices || typeof prices !== "object" || Array.isArray(prices)) return null;
+  const p = prices as Record<string, unknown>;
+  const variants = p.variants;
+  if (!variants || typeof variants !== "object" || Array.isArray(variants)) return null;
+  const map = variants as Record<string, unknown>;
+  const printing = typeof p.primaryPrinting === "string" && p.primaryPrinting in map
+    ? p.primaryPrinting
+    : Object.keys(map)[0];
+  if (printing == null) return null;
+  const usd = parseLatestByVariant(prices).find((v) => v.printing === printing)?.usd;
+  if (usd == null) return null;
+  // A card-wide low above the primary printing's market price is not automatically wrong: `low`
+  // is the cheapest live LISTING, `usd` an average of recent sales, and a thin market can put the
+  // listing higher. It was only nonsense at the magnitudes the two-source split produced ($100
+  // against $33.40). Publish it when the two are the same order, drop it when they are not.
+  // ponytail: a flat 2x. The upgrade is a per-printing low, if PPT exposes one under
+  // `variants[printing]` — unverified, and not worth a live probe for a display-only caption.
+  const low = parseRawLow(prices);
+  return { printing, usd, low: low != null && low > usd * 2 ? null : low };
+}
