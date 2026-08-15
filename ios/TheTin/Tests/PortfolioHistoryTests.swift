@@ -44,17 +44,105 @@ final class PortfolioHistoryTests: XCTestCase {
     }
 
     func testConditionScalingProjectsTodaysPremiumBackwards() {
-        // Today: DMG $5 vs raw $10 → scale 0.5. History point $40 → $20 on a PAST bucket; the
-        // final "now" bucket prices at today's actual value ($5), not the stale history point.
+        // Today: DMG $5 against the card's latest history point of $10 → scale 0.5. The card
+        // halved over the window ($20 → $10), so the DMG copy reads $10 → $5, and the final
+        // "now" bucket prices at today's actual value ($5).
         let price = PriceRecord(cardId: "A", rawUsd: 10, rawEur: nil, psa3: nil, psa7: nil,
                                 psa9: nil, psa10: nil, asOf: "2026-07-14")
         let entries = [entry("a", card: "A", added: day(0), condition: "DMG")]
-        let s = PortfolioHistory.series(entries: entries,
-                                        histories: ["A": [PricePoint(date: day(0), value: 40)]],
+        let histories = ["A": [PricePoint(date: day(0), value: 20), PricePoint(date: day(7), value: 10)]]
+        let s = PortfolioHistory.series(entries: entries, histories: histories,
                                         prices: ["A": price], variantsByCard: [:],
                                         conditionsByCard: ["A": [ConditionPrice(condition: .damaged, usd: 5)]],
-                                        now: day(7))
-        XCTAssertEqual(s.points.map(\.value), [20, 5])
+                                        now: day(14))
+        XCTAssertEqual(s.points.map(\.value), [10, 5, 5])
+    }
+
+    func testHistoryOnADifferentBasisThanRawUsdDoesNotCliffAtToday() {
+        // `price_history` carries no basis column; `price_latest.raw_usd` carries `raw_printing`.
+        // When they quote different subjects the old scale (÷ raw_usd) built the whole curve out
+        // of a ratio of two unrelated numbers while the last bucket priced off `price_latest`
+        // alone — a vertical drop at today's edge that no holding actually took.
+        //
+        // Shape of the real report (sv01-085 Kirlia, served expert v44): history sitting near
+        // $1,100 while raw_usd is $0.15. Old math: past buckets 1100 × (0.15/0.15) = $1,100 each,
+        // "now" $0.15 — a 7,000× cliff. Anchored on the series' own last point the curve is flat,
+        // which is what a flat history means.
+        let price = PriceRecord(cardId: "A", rawUsd: 0.15, rawEur: nil, psa3: nil, psa7: nil,
+                                psa9: nil, psa10: nil, asOf: "2026-08-15")
+        let entries = [entry("a", card: "A", added: day(0))]
+        let s = PortfolioHistory.series(entries: entries, histories: ["A": flat(1100, days: [0, 7])],
+                                        prices: ["A": price], variantsByCard: [:], conditionsByCard: [:],
+                                        now: day(14))
+        XCTAssertEqual(s.points.map(\.value), [0.15, 0.15, 0.15])
+        // The invariant that was violated: the last historical bucket must join the "now" bucket.
+        let last = s.points.map(\.value).suffix(2)
+        XCTAssertEqual(last.first!, last.last!, accuracy: 0.0001)
+    }
+
+    func testImplausibleTrailingPointIsTrimmedNotUsedAsTheAnchor() {
+        // The failure mode anchoring ALONE introduces, and the only thing the trim exists for.
+        // A real $100 card with months of honest history and one $2,000 point: dividing by
+        // raw_usd puts a $2,000 spike in the second-to-last bucket, and anchoring on the $2,000
+        // instead reads $5/bucket ramping to $100 — a phantom cliff traded for a phantom ramp.
+        // The bad point goes; the honest months stay and still count as coverage.
+        let price = PriceRecord(cardId: "A", rawUsd: 100, rawEur: nil, psa3: nil, psa7: nil,
+                                psa9: nil, psa10: nil, asOf: "2026-08-15")
+        let entries = [entry("a", card: "A", added: day(0))]
+        let histories = ["A": flat(100, days: [0, 7]) + [PricePoint(date: day(14), value: 2000)]]
+        let s = PortfolioHistory.series(entries: entries, histories: histories, prices: ["A": price],
+                                        variantsByCard: [:], conditionsByCard: [:], now: day(21))
+        XCTAssertEqual(s.points.map(\.value), [100, 100, 100, 100])
+        XCTAssertEqual(s.cardsWithHistory, 1)
+    }
+
+    func testWholeSeriesOnADifferentBasisThanRawUsdIsKept() {
+        // `hgss3-89` Rayquaza & Deoxys LEGEND, served average v44: raw_usd $40 against a $199.69
+        // history that the card's own `price_by_variant` Holofoil row — the row the app values it
+        // from — matches exactly. Here `raw_usd` is the wrong number, so a trust test keyed off it
+        // would discard the honest series. The trim only looks INSIDE the series, and a smooth
+        // series has no step to trim: the card keeps its shape and its coverage.
+        let price = PriceRecord(cardId: "A", rawUsd: 40, rawEur: nil, psa3: nil, psa7: nil,
+                                psa9: nil, psa10: nil, asOf: "2026-08-15")
+        let entries = [entry("a", card: "A", added: day(0))]
+        let histories = ["A": [PricePoint(date: day(0), value: 180), PricePoint(date: day(7), value: 199.69)]]
+        let s = PortfolioHistory.series(entries: entries, histories: histories, prices: ["A": price],
+                                        variantsByCard: [:], conditionsByCard: [:], now: day(14))
+        XCTAssertEqual(s.cardsWithHistory, 1)
+        // Anchored on its own last point, so the seam still closes: last bucket == "now".
+        let vals = s.points.map(\.value)
+        XCTAssertEqual(vals.count, 3)
+        XCTAssertEqual(vals[0], 36.06, accuracy: 0.01)   // 180 × (40 ÷ 199.69)
+        XCTAssertEqual(vals[1], 40, accuracy: 0.01)
+        XCTAssertEqual(vals[2], 40, accuracy: 0.01)
+    }
+
+    func testOrdinaryMovementIsNotTrimmed() {
+        // The trim must not swallow ordinary moves: $60 → $100 is a real 67% run and survives,
+        // anchored so the last bucket still joins "now".
+        let price = PriceRecord(cardId: "A", rawUsd: 100, rawEur: nil, psa3: nil, psa7: nil,
+                                psa9: nil, psa10: nil, asOf: "2026-08-15")
+        let entries = [entry("a", card: "A", added: day(0))]
+        let histories = ["A": [PricePoint(date: day(0), value: 60), PricePoint(date: day(7), value: 100)]]
+        let s = PortfolioHistory.series(entries: entries, histories: histories, prices: ["A": price],
+                                        variantsByCard: [:], conditionsByCard: [:], now: day(14))
+        XCTAssertEqual(s.points.map(\.value), [60, 100, 100])
+        XCTAssertEqual(s.cardsWithHistory, 1)
+    }
+
+    func testGradedEntryTracksHistoryShapeWithoutRawUsdAmplification() {
+        // A slab is valued off `psa10`, so the old scale was psa10 ÷ raw_usd — a ratio across two
+        // subjects that multiplied every history point by ~100 when the two disagreed. Anchored
+        // on the card's own last point, the slab tracks the history's SHAPE (halved) from today's
+        // $2,000, and the last historical bucket still joins "now".
+        let price = PriceRecord(cardId: "A", rawUsd: 5, rawEur: nil, psa3: nil, psa7: nil,
+                                psa9: nil, psa10: 2000, asOf: "2026-08-15")
+        var e = entry("a", card: "A", added: day(0))
+        e.grade = "psa10"
+        let histories = ["A": [PricePoint(date: day(0), value: 40), PricePoint(date: day(7), value: 20)]]
+        let s = PortfolioHistory.series(entries: [e], histories: histories, prices: ["A": price],
+                                        variantsByCard: [:], conditionsByCard: [:], now: day(14))
+        XCTAssertEqual(s.points.map(\.value), [4000, 2000, 2000])
     }
 
     func testNowBucketMatchesHeaderMathAndNoHistoryHoldsFlat() {
@@ -71,8 +159,16 @@ final class PortfolioHistoryTests: XCTestCase {
                                         histories: ["A": flat(8, days: [0, 7]), "B": []],
                                         prices: ["A": priceA, "B": priceB],
                                         variantsByCard: [:], conditionsByCard: [:], now: day(14))
-        // day 0 + 7: A at history×scale (8 × 10/10) + B flat at 2×$5. day 14 ("now"): header math.
-        XCTAssertEqual(s.points.map(\.value), [18, 18, 20])
+        // day 0 + 7: A anchored on its OWN last point (8 × 10/8 = $10) + B flat at 2×$5. day 14
+        // ("now"): header math, $20 — the same number, so the stale leg reads flat.
+        //
+        // It used to read [18, 18, 20]: A's history was divided by `raw_usd` instead of by its own
+        // anchor, so the week between A's last quote and today rendered as a step. That step is
+        // the same arithmetic that produced a −27% cliff on a real tin when the two tables quoted
+        // different subjects (see `testHistoryOnADifferentBasisThanRawUsdDoesNotCliffAtToday`),
+        // and it cannot be kept selectively — the client cannot tell a lagging quote from a
+        // mismatched one. Losing ≤7 days of real movement is the deliberate price.
+        XCTAssertEqual(s.points.map(\.value), [20, 20, 20])
         let header = GroupStats.totalValue(entries: entries, prices: ["A": priceA, "B": priceB])
         XCTAssertEqual(s.points.last?.value, header.total)
     }
