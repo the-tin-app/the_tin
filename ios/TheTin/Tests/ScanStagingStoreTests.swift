@@ -90,4 +90,36 @@ final class ScanStagingStoreTests: XCTestCase {
         store.reprice { _ in nil }
         XCTAssertNil(store.drafts.first?.priceUsdSnapshot)
     }
+
+    /// Every scan writes a ~100 KB plate and nothing but the draft points at it. Leave them behind
+    /// and Application Support grows by every card ever scanned — including the ones filed or
+    /// cleared thirty seconds later, which is most of them during a bulk session.
+    func testRemovingADraftDeletesItsPlate() {
+        let store = ScanStagingStore.inMemory()
+        var deleted: [String] = []
+        store.deletePlate = { deleted.append($0) }
+
+        var a = draft("a", price: 10); a.plateFile = "a.jpg"
+        var b = draft("b", price: 5); b.plateFile = "b.jpg"
+        let c = draft("c", price: 1)          // no plate — must not fabricate a delete
+        store.append(a); store.append(b); store.append(c)
+
+        store.remove(id: "a")
+        XCTAssertEqual(deleted, ["a.jpg"])
+
+        store.clear()
+        XCTAssertEqual(deleted, ["a.jpg", "b.jpg"], "clear deletes the rest, and only real plates")
+    }
+
+    /// The dragged measurement is the only centring value that ever reaches the row, so it has to
+    /// survive the persist that follows it.
+    func testUpdateCenteringStoresTheMeasurement() {
+        let store = ScanStagingStore.inMemory()
+        store.append(draft("a", price: 10))
+        XCTAssertNil(store.drafts.first?.centering)
+
+        store.updateCentering(id: "a", Centering(left: 40, right: 20, top: 30, bottom: 60))
+        XCTAssertEqual(store.drafts.first?.centering?.left, 40)
+        XCTAssertEqual(store.drafts.first?.centering?.summary, "67/33 L-R · 33/67 T-B")
+    }
 }

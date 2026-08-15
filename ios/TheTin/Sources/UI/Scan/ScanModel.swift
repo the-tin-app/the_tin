@@ -1,4 +1,5 @@
 import Observation
+import CoreImage
 import CoreVideo
 import Foundation
 import os
@@ -95,7 +96,20 @@ actor ScanPipeline {
     private func invalidateTextCache() {
         cachedFields = nil; cachedPool = nil
         detector.forgetOrientation()
+        // The picture describes the same thing the text cache and the orientation hint do — "the
+        // card in front of the camera right now" — so it expires with them, or a lock would be
+        // staged showing its predecessor.
+        lastPlate = nil
     }
+
+    /// The centring editor's picture for the card just locked — the card re-cropped with margin
+    /// (`EditorPlate`), as JPEG. Rendered ONLY on the frame that locks, never per frame: it is a
+    /// second perspective-correct plus a full-size render, and locks are rare while frames are not.
+    private var lastPlate: Data?
+    private let editorContext = CIContext()
+
+    /// The picture for the card currently in frame, or nil if it has left. Asked for once per lock.
+    func currentPlate() -> Data? { lastPlate }
 
     init(detector: CardDetector, textGate: TextGate, matcher: Matcher, narrowing: CandidateNarrowing,
          fingerThrottle: Int,
@@ -195,6 +209,15 @@ actor ScanPipeline {
             candidates: results.map { (id: $0.cardId, inliers: $0.inliers) },
             coverage: 1.0, cardPresent: true, gated: !pool.isEmpty, consistency: cons)
         let event = session.ingest(obs)
+        // Rendered here, on the locking frame, because this is the only place the source buffer,
+        // the quad and the resolved rotation all still exist together — and rendering it AFTER the
+        // pool-reuse invalidation above means it survives to be read by `currentPlate()`.
+        if case .lock = event, let quad = frame.quad {
+            lastPlate = timer.measure("editorPlate") {
+                EditorPlate.jpeg(pixelBuffer: pb, quad: quad, degrees: frame.degrees,
+                                 context: editorContext)
+            }
+        }
         #if DEBUG
         ScanDiag.dump(frame: frame, fields: fields, pool: pool, results: results, event: event,
                       stages: "\(timer.summary) [\(detector.lastDetectSummary)]",
@@ -388,8 +411,19 @@ final class ScanModel {
     /// single card — and since the wake-up frame then arrives at the idle rate, it cost up to half
     /// a second of dead viewfinder per card, in the one flow whose entire point is working through
     /// a pile without pause. The chooser stays modal in both worlds: it really is on screen.
+    /// True while the review sheet is up. Owned by the model rather than the view because the
+    /// frame loop is what has to know: `isModalPresented` is the whole "should the camera be
+    /// working" question, and a `@State` flag in `ScanView` was invisible to it.
+    var isReviewPresented = false
+
     var isModalPresented: Bool {
-        (lookedUpCardId != nil && !forcesLookUp) || !ambiguous.isEmpty
+        (lookedUpCardId != nil && !forcesLookUp) || !ambiguous.isEmpty || isReviewPresented
+    }
+
+    /// Writes a staged draft's scan plate and returns its file name. Injected so tests stage
+    /// drafts without touching Application Support.
+    var savePlate: (Data, String) -> String? = { jpeg, id in
+        ScanStagingStore.writePlate(jpeg, draftId: id)
     }
 
     init(matcher: Matcher, detector: CardDetector, textGate: TextGate, narrowing: CandidateNarrowing,
@@ -467,7 +501,7 @@ final class ScanModel {
         case .ambiguous(let ids):
             ambiguous = ids.map(chooserOption)
             guidance = "Scanning paused — pick your card"
-        case .lock(let cardId): stage(cardId: cardId)
+        case .lock(let cardId): await stage(cardId: cardId)
         }
     }
 
@@ -476,7 +510,7 @@ final class ScanModel {
     /// catalog rarity, blind-price snapshot from `price_latest.raw_usd`). Never writes an owned
     /// entry. Both lock paths — the automatic one and the ambiguity chooser — funnel through here,
     /// so the mode can't be honoured on one and missed on the other.
-    private func stage(cardId: String) {
+    private func stage(cardId: String) async {
         ambiguous = []
         let card = try? store.card(id: cardId)
         guard !isLookingUp else {
@@ -496,10 +530,14 @@ final class ScanModel {
             variants: (try? store.variantPrices(cardId: cardId)) ?? [],
             conditions: (try? store.conditionPrices(cardId: cardId)) ?? [],
             matrix: (try? store.matrixPrices(cardId: cardId)) ?? [])
-        let draft = ScanDraft(id: UUID().uuidString, cardId: cardId,
+        // The plate is saved under the draft's own id, so the picture and the row can never be
+        // mismatched. Nil is normal: the card can leave the frame between the lock and here.
+        let id = UUID().uuidString
+        let plateFile = await pipeline.currentPlate().flatMap { savePlate($0, id) }
+        let draft = ScanDraft(id: id, cardId: cardId,
                               variant: variant, condition: stagingCondition,
                               qty: 1, addedAt: Date(), priceUsdSnapshot: price,
-                              acquiredVia: stagingVia)
+                              acquiredVia: stagingVia, plateFile: plateFile)
         staging.append(draft)
         // The card's name, not its catalog id — this line read "Added swsh7-215 — next card".
         guidance = "Added \(card?.name ?? cardId) — next card"
@@ -534,7 +572,7 @@ final class ScanModel {
     }
 
     func chooseAmbiguous(cardId: String) async {
-        stage(cardId: cardId)
+        await stage(cardId: cardId)
         await pipeline.acknowledgeChoice(cardId: cardId)
     }
 
