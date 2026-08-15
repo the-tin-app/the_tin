@@ -1,5 +1,6 @@
 import CoreImage
 import CoreVideo
+import UIKit
 import Vision
 
 enum PerspectiveCorrector {
@@ -25,6 +26,44 @@ enum PerspectiveCorrector {
     }
 }
 
+/// Renders the picture the centring editor draws on: the same card, cropped WIDER than the
+/// detected quad so there is background visible past every edge.
+///
+/// The editor's outer lines mark the card's cut edge, and the detected quad is not reliably that
+/// edge — it wanders inside the card or takes in background (`fingerprint/eval/centering_check.swift`,
+/// 2026-08-14). A tight crop therefore puts the true edge somewhere in the outermost pixels, or off
+/// the picture entirely, where no line can be placed on it. The margin is what makes the correction
+/// possible, which is what makes the measurement trustworthy.
+enum EditorPlate {
+    /// How far past the quad to crop. 1.25 leaves roughly an eighth of the card's width of
+    /// surroundings on each side — enough to see the cut edge and a shadow, without shrinking the
+    /// card so much that a one-pixel border is hard to hit.
+    static let margin: CGFloat = 1.25
+
+    /// Longest edge of the rendered picture. Bigger than the 660×920 recognition plate: this one
+    /// is looked at and dragged on, and the border being measured can be a couple of pixels wide.
+    static let maxDimension: CGFloat = 1400
+
+    static func jpeg(pixelBuffer: CVPixelBuffer, quad: CardQuad, degrees: Int,
+                     context: CIContext) -> Data? {
+        let ci = CIImage(cvPixelBuffer: pixelBuffer)
+        let wide = quad.expanded(by: margin)
+        guard let f = CIFilter(name: "CIPerspectiveCorrection") else { return nil }
+        f.setValue(ci, forKey: kCIInputImageKey)
+        f.setValue(CIVector(cgPoint: wide.topLeft), forKey: "inputTopLeft")
+        f.setValue(CIVector(cgPoint: wide.topRight), forKey: "inputTopRight")
+        f.setValue(CIVector(cgPoint: wide.bottomLeft), forKey: "inputBottomLeft")
+        f.setValue(CIVector(cgPoint: wide.bottomRight), forKey: "inputBottomRight")
+        guard let corrected = f.outputImage else { return nil }
+        // Same rotation the recognition plate resolved, so the card is the way up the user held it.
+        let upright = OrientationNormalizer.rotate(corrected, degrees: degrees)
+        let scale = min(1, maxDimension / max(upright.extent.width, upright.extent.height))
+        let sized = upright.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let cg = context.createCGImage(sized, from: sized.extent) else { return nil }
+        return UIImage(cgImage: cg).jpegData(compressionQuality: 0.85)
+    }
+}
+
 /// Detects a card-shaped quad — preferring `VNDetectDocumentSegmentationRequest` (robust to
 /// low contrast / glare / rounded toploader corners / full-art borders), falling back to
 /// `VNDetectRectanglesRequest` when doc-seg finds nothing — and perspective-corrects it to a
@@ -34,6 +73,12 @@ enum CardRectifier {
     struct Result {
         let corrected: CIImage   // natural aspect; orientation resolved later by OrientationNormalizer
         let confidence: Double
+        /// Squareness of the shot, from the quad BEFORE correction — see `CenteringMeter.skew`.
+        /// Correction throws this away (that is its job), so it has to be captured here.
+        let skew: Double
+        /// The pixel-space quad this was corrected from, kept so a lock can re-crop the same card
+        /// with margin for the centring editor without re-detecting it.
+        let quad: CardQuad
     }
 
     // Guide-window quad SELECTION (the binder fix). `ci`/`handler` run on the FULL frame —
@@ -124,7 +169,9 @@ enum CardRectifier {
             f.setValue(CIVector(cgPoint: bl), forKey: "inputBottomLeft")
             f.setValue(CIVector(cgPoint: br), forKey: "inputBottomRight")
             guard let out = f.outputImage else { return nil }
-            return Result(corrected: out, confidence: conf)
+            let quad = CardQuad(topLeft: tl, topRight: tr, bottomLeft: bl, bottomRight: br)
+            return Result(corrected: out, confidence: conf, skew: CenteringMeter.skew(quad),
+                          quad: quad)
         }
         func correct(_ o: VNRectangleObservation) -> Result? {
             correct(px(o.topLeft), px(o.topRight), px(o.bottomLeft), px(o.bottomRight), Double(o.confidence))
@@ -311,7 +358,8 @@ final class CardDetector {
         return CanonicalFrame(
             pixels: plate, width: w, height: h, bytesPerRow: stride,
             focus: quality.focus, glareCoverage: quality.glare,
-            quadConfidence: rectified.confidence)
+            quadConfidence: rectified.confidence, skew: rectified.skew,
+            quad: rectified.quad, degrees: oriented.degrees)
     }
 
     /// Cheap light-frame presence check (~5ms): doc-seg only — no rectification, no
@@ -340,6 +388,6 @@ final class CardDetector {
             pixels: plate, width: w, height: h, bytesPerRow: stride,
             focus: ImageQuality.focus(bgra: plate, width: w, height: h, bytesPerRow: stride),
             glareCoverage: ImageQuality.glareCoverage(bgra: plate, width: w, height: h, bytesPerRow: stride),
-            quadConfidence: 0)
+            quadConfidence: 0, skew: 0, quad: nil, degrees: 0)
     }
 }

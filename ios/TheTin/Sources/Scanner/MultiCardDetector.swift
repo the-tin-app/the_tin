@@ -153,8 +153,13 @@ enum MultiCardDetector {
             guard let oriented = orienter(corrected, context, rotationByClass[isLandscape])
             else { continue }
             rotationByClass[isLandscape] = oriented.degrees
+            // Real skew per cell, not 0: a binder page's outer pockets are genuinely off-axis to
+            // the lens even when the phone is square to the page, and that is exactly the tilt a
+            // centring measurement has to refuse.
             guard let plate = render(oriented.image, context: context,
-                                     quadConfidence: q.confidence) else { continue }
+                                     quadConfidence: q.confidence,
+                                     skew: CenteringMeter.skew(q.quad),
+                                     quad: q.quad, degrees: oriented.degrees) else { continue }
             // Handed over and released: the caller's `body` returns before the next plate is
             // rendered, so only one 2.4 MB plate is ever resident.
             body(DetectedCell(quad: q.quad, plate: plate, degrees: oriented.degrees))
@@ -182,7 +187,8 @@ enum MultiCardDetector {
               let oriented = OrientationNormalizer.orientUpright(corrected, context: context,
                                                                  preferred: degrees)
         else { return nil }
-        return render(oriented.image, context: context, quadConfidence: 0)
+        return render(oriented.image, context: context, quadConfidence: 0,
+                      skew: CenteringMeter.skew(quad), quad: quad, degrees: degrees)
     }
 
     /// Perspective-corrects `quad` out of `ci` to a natural-aspect image (orientation not yet
@@ -201,8 +207,8 @@ enum MultiCardDetector {
         return f.outputImage
     }
 
-    private static func render(_ image: CIImage, context: CIContext,
-                               quadConfidence: Double) -> CanonicalFrame? {
+    private static func render(_ image: CIImage, context: CIContext, quadConfidence: Double,
+                               skew: Double, quad: CardQuad, degrees: Int) -> CanonicalFrame? {
         let w = Int(kFPCanonW), h = Int(kFPCanonH), stride = w * 4
         var buf = [UInt8](repeating: 0, count: stride * h)
         buf.withUnsafeMutableBytes { raw in
@@ -217,6 +223,6 @@ enum MultiCardDetector {
             focus: ImageQuality.focus(bgra: plate, width: w, height: h, bytesPerRow: stride),
             glareCoverage: ImageQuality.glareCoverage(bgra: plate, width: w, height: h,
                                                       bytesPerRow: stride),
-            quadConfidence: quadConfidence)
+            quadConfidence: quadConfidence, skew: skew, quad: quad, degrees: degrees)
     }
 }

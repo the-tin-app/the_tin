@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// Reviews staged drafts before they become owned: per-card price, variant, condition,
 /// remove, and routing to a group / new group / the Tin. Editing here defers all per-scan
@@ -11,6 +12,9 @@ struct StagingReviewView: View {
     var wants: WantsModel? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var routing: ScanDraft?     // draft being routed
+    @State private var measuring: ScanDraft?   // draft whose centring is being placed
+    /// Where this tray's scan plates live. Injectable so tests and previews can point elsewhere.
+    var platesDir: URL = ScanStagingPaths.default().platesDir
     @State private var newGroupName = ""
     @State private var showingNewGroup: ScanDraft?
     @State private var showingClearConfirm = false
@@ -27,6 +31,9 @@ struct StagingReviewView: View {
 
     var body: some View {
         List {
+            // Answers the centring line rather than pointing at a control, so it sits above the
+            // rows that carry it. Suppressed on an empty tray — there is no line to explain yet.
+            if !staging.drafts.isEmpty { TipView(CenteringReviewTip()) }
             Section {
                 ForEach(staging.drafts) { draft in
                     DraftRow(draft: draft, store: store,
@@ -37,7 +44,8 @@ struct StagingReviewView: View {
                              onVariant: { staging.updateVariant(id: draft.id, $0); repriceAll() },
                              onCondition: { staging.updateCondition(id: draft.id, $0); repriceAll() },
                              onRemove: { staging.remove(id: draft.id) },
-                             onRoute: { routing = draft })
+                             onRoute: { routing = draft },
+                             onMeasure: { measuring = draft })
                 }
             } header: {
                 if !staging.drafts.isEmpty {
@@ -79,6 +87,21 @@ struct StagingReviewView: View {
         }
         .alert("New divider", isPresented: newGroupIsPresented) {
             newGroupAlertActions
+        }
+        .sheet(item: $measuring) { draft in
+            NavigationStack {
+                if let name = draft.plateFile,
+                   let image = UIImage(contentsOfFile: platesDir.appendingPathComponent(name).path) {
+                    CenteringEditorView(plate: image, initial: draft.centering) { measured in
+                        staging.updateCentering(id: draft.id, measured)
+                    }
+                } else {
+                    // The plate went missing under us — a purge, or a write that failed after the
+                    // draft was saved. Say so; an empty editor would read as a broken screen.
+                    ContentUnavailableView("Scan image missing", systemImage: "photo",
+                                           description: Text("Re-scan this card to measure it."))
+                }
+            }
         }
         .alert("Couldn't file that card", isPresented: $commitError) {
             commitErrorAlertActions
@@ -192,6 +215,7 @@ private struct DraftRow: View {
     let onCondition: (CardCondition) -> Void
     let onRemove: () -> Void
     let onRoute: () -> Void
+    let onMeasure: () -> Void
 
     private var card: CardRecord? { try? store.card(id: draft.cardId) }
     private var title: String { card?.name ?? draft.cardId }
@@ -219,6 +243,20 @@ private struct DraftRow: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(knowledge.wanted
                                          ? Color.statusWishlist : Color.statusPositive)
+                }
+                // Only ever shows a number a person has placed — see `Centering`. Without a plate
+                // there is nothing to drag lines on, so the row says nothing rather than offering
+                // a control that opens an empty screen.
+                if draft.plateFile != nil {
+                    Button(action: onMeasure) {
+                        Label(draft.centering.map { "Centering \($0.summary)" } ?? "Measure centering",
+                              systemImage: "square.dashed")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(draft.centering == nil ? Color.accentColor : .secondary)
+                    .accessibilityLabel(draft.centering?.spokenSummary ?? "Measure centering")
+                    .accessibilityHint("Opens the scan so you can place the border lines")
                 }
                 // Plain tinted menus (no borders/icons) so labels never hyphenate on
                 // narrow rows; approved mockup option A, CTA wording "File in…".

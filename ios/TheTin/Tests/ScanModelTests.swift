@@ -446,6 +446,31 @@ final class ScanModelTests: XCTestCase {
         XCTAssertTrue(model.isModalPresented, "a chooser is really presented, borrowed or not")
     }
 
+    /// The review sheet covers the whole viewfinder, and every frame decoded behind it is thrown
+    /// away on arrival — but the cascade ran anyway, because `showingReview` was `@State` on
+    /// `ScanView` and `isModalPresented` could not see it (Tomas, 2026-08-14). Reviewing a tray is
+    /// not a quick glance: it is the longest the scanner is ever open with nothing to scan.
+    func testTheReviewSheetPausesTheCascade() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let narrowing = CountingNarrowing(poolIds: ["card_a"])
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: try CandidateIndex(store: catalog)),
+                              narrowing: narrowing, staging: ScanStagingStore.inMemory(),
+                              store: catalog, fingerThrottle: 1)
+        model.isReviewPresented = true
+
+        let source = ThrottleSpySource(buffer: pb, count: 6)
+        await model.run(source: source)
+
+        XCTAssertTrue(model.isModalPresented, "the review sheet is on screen over the viewfinder")
+        XCTAssertEqual(narrowing.calls, 0, "no frame may be examined behind the review sheet")
+        XCTAssertTrue(source.idleStates.contains(true), "and the camera must drop to its idle rate")
+    }
+
     /// The hot-phone case: the scanner left open and face-up on a table between stacks. Nothing
     /// to look at, and at the capture default a segmentation network running against a tabletop
     /// ~22 times a second for as long as it takes to get the next cards ready.
