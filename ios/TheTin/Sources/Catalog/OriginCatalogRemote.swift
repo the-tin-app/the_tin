@@ -1,12 +1,13 @@
 import Foundation
 
-/// `CatalogRemote` backed by the self-hosted `catalog-server`. Adapts the server's tiered manifest
-/// to the single-artifact `CatalogManifest` by selecting the configured `tier`, so `CatalogUpdater`
-/// needs no changes. Every call carries an App Attest Bearer token; a 401 refreshes the token and
-/// retries the same request once.
-struct SelfHostedCatalogRemote: CatalogRemote {
+/// `CatalogRemote` for an origin serving our manifest contract — the self-hosted `catalog-server`
+/// (App Attest) or the R2 backup (App Check), which serve the same object layout and manifest
+/// shape and differ only in `authorize`. Adapts the tiered manifest to the single-artifact
+/// `CatalogManifest` by selecting the configured `tier`, so `CatalogUpdater` needs no changes.
+/// Every call is authorized; a 401 re-authorizes (with `refresh: true`) and retries once.
+struct OriginCatalogRemote: CatalogRemote {
     let baseURL: URL
-    let session: SessionProvider
+    let authorize: RequestAuthorizer
     var http: HTTPClient = URLSessionHTTPClient()
     var tier: String = AppConfig.catalogTier
 
@@ -39,27 +40,32 @@ struct SelfHostedCatalogRemote: CatalogRemote {
         return (m.version, m.tiers.mapValues { $0.sizeBytes })
     }
 
-    func fetchData(path: String) async throws -> Data { try await get(path) }
-
-    func fetchData(path: String, onBytes: @escaping @Sendable (Int) -> Void) async throws -> Data {
-        try await get(path, onBytes: onBytes)
+    /// ⚠️ Artifacts, unlike the manifest, get `artifactTimeout` — see its doc comment. Both
+    /// `fetchData` overloads are artifact paths; everything else here is the small manifest.
+    func fetchData(path: String) async throws -> Data {
+        try await get(path, timeout: AppConfig.artifactTimeout)
     }
 
-    /// GET `<baseURL>/catalog/<path>` with the Bearer token; on 401 refresh + retry once.
+    func fetchData(path: String, onBytes: @escaping @Sendable (Int) -> Void) async throws -> Data {
+        try await get(path, timeout: AppConfig.artifactTimeout, onBytes: onBytes)
+    }
+
+    /// GET `<baseURL>/catalog/<path>`; on 401 re-authorize once and retry.
     private func get(_ path: String,
+                     timeout: TimeInterval = AppConfig.selfHostTimeout,
                      onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
-        do { return try await send(path, token: try await session.authToken(), onBytes: onBytes) }
+        do { return try await send(path, refresh: false, timeout: timeout, onBytes: onBytes) }
         catch CatalogError.httpStatus(401) {
-            return try await send(path, token: try await session.refreshedToken(), onBytes: onBytes)
+            return try await send(path, refresh: true, timeout: timeout, onBytes: onBytes)
         }
     }
 
-    private func send(_ path: String, token: String,
+    private func send(_ path: String, refresh: Bool, timeout: TimeInterval,
                       onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
         let url = baseURL.appendingPathComponent("catalog").appendingPathComponent(path)
         var req = URLRequest(url: url)
-        req.timeoutInterval = AppConfig.selfHostTimeout
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = timeout
+        try await authorize(&req, refresh)
         let (data, response) = if let onBytes {
             try await http.send(req, onBytes: onBytes)
         } else {

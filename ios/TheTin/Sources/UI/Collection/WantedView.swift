@@ -10,15 +10,39 @@ struct WantedView: View {
     let wants: WantsModel
     var collection: CollectionModel? = nil
     var goals: SetGoalsModel? = nil
+    /// Open on this segment rather than the last-used one. Set by links that mean a specific
+    /// segment — Watching's "on the hunt" row — and deliberately NOT written back to
+    /// `@AppStorage`, so arriving that way doesn't change what the pinned Wishlist row opens on.
+    var initialScope: Scope? = nil
 
-    @AppStorage("wantedScope") private var scopeRaw: String = Scope.sets.rawValue
+    @AppStorage(Scope.storageKey) private var scopeRaw: String = Scope.sets.rawValue
+    /// The segment this visit is showing: `initialScope` for one that was navigated to
+    /// deliberately, otherwise the stored choice.
+    @State private var overrideScope: Scope?
 
     enum Scope: String, CaseIterable {
-        case sets, singles
-        var label: String { self == .sets ? "Sets" : "Singles" }
+        case sets, singles, hunting
+
+        /// One literal for the persisted segment choice. A second copy could desynchronise
+        /// silently with every test still green — so there is only ever one.
+        static let storageKey = "wantedScope"
+        var label: String {
+            switch self {
+            case .sets: return "Sets"
+            case .singles: return "Singles"
+            case .hunting: return "Hunting"
+            }
+        }
     }
 
-    private var scope: Scope { Scope(rawValue: scopeRaw) ?? .sets }
+    private var scope: Scope { overrideScope ?? Scope(rawValue: scopeRaw) ?? .sets }
+
+    /// Reads the resolved segment and, on a tap, commits it: touching the picker is the user
+    /// choosing, and from then on this visit follows them rather than the link that opened it.
+    private var scopeSelection: Binding<String> {
+        Binding(get: { scope.rawValue },
+                set: { scopeRaw = $0; overrideScope = nil })
+    }
 
     var body: some View {
         Group {
@@ -27,10 +51,22 @@ struct WantedView: View {
                 SetGoalsListView(store: store, goals: goals, collection: collection, wants: wants)
             case .singles:
                 WantedCardsView(store: store, wants: wants, collection: collection, goals: goals)
+            case .hunting:
+                HuntingListView(store: store, wants: wants)
             }
         }
+        // ⚠️ ONE title for all three segments, set HERE rather than in the children.
+        // The children each titled themselves ("Wishlist", "Hunting", and nothing for Sets), so
+        // the screen behind the pinned row was named by whichever segment was last used — a
+        // choice persisted in `@AppStorage("wantedScope")` and therefore sticky across launches.
+        .navigationTitle("Wishlist")
+        // Hoisted from WantedCardsView with the title, and for the same reason: left on one
+        // child it applied only to the Singles segment, so the bar still changed size when the
+        // segment changed. The grep test can't see this one — it scans string literals.
+        .navigationBarTitleDisplayMode(.inline)
+        .task { overrideScope = initialScope }
         .safeAreaInset(edge: .top) {
-            Picker("Wanted", selection: $scopeRaw) {
+            Picker("Wishlist", selection: scopeSelection) {
                 ForEach(Scope.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
             }
             .pickerStyle(.segmented)
@@ -136,7 +172,7 @@ private struct SetGoalRow: View {
                     Text("\(progress.owned)/\(progress.total)")
                         .monospacedDigit()
                     if progress.isComplete {
-                        Text("· complete").foregroundStyle(.green)
+                        Text("· complete").foregroundStyle(Color.statusPositive)
                     } else {
                         Text("· ^[\(progress.remaining) card](inflect: true) left")
                         if progress.gapValue > 0 {

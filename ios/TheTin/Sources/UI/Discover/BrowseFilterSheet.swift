@@ -66,6 +66,11 @@ struct BrowseFilterSheet: View {
                                 }
                             }
                         }
+                        // ⚠️ The checkmark is the ONLY signal that this preset is the applied one,
+                        // and a bare SF Symbol carries no state to VoiceOver — every row read
+                        // "<name>, Button" whether it was selected or not. Same fix on the two
+                        // multi-selects below and on the catalog-tier rows in Settings.
+                        .accessibilityAddTraits(preset.criteria == criteria ? .isSelected : [])
                     }
                     .onDelete { idx in idx.map { presets.presets[$0] }.forEach(presets.remove) }
                     HStack {
@@ -126,6 +131,7 @@ struct BrowseFilterSheet: View {
                         }
                     }
                 }
+                .accessibilityAddTraits(selection.wrappedValue.contains(option) ? .isSelected : [])
             }
         }
     }
@@ -147,6 +153,7 @@ struct BrowseFilterSheet: View {
                         }
                     }
                 }
+                .accessibilityAddTraits(criteria.regions.contains(region.gen) ? .isSelected : [])
             }
         }
     }

@@ -25,9 +25,12 @@ final class CatalogStoreBrowseTests: XCTestCase {
             INSERT INTO price_latest VALUES ('sv1-2',120.0,110.0,'2026-07-06');
             INSERT INTO price_latest VALUES ('sv1-3',NULL,NULL,'2026-07-06');
             INSERT INTO price_latest VALUES ('swsh1-1',25.0,20.0,'2026-07-06');
-            INSERT INTO price_delta VALUES ('sv1-2','raw','',-2.0,-12.0,-20.0); -- a deal (7d < -5)
-            INSERT INTO price_delta VALUES ('sv1-1','raw','',1.0,3.0,4.0);       -- not a deal
-            INSERT INTO price_delta VALUES ('swsh1-1','raw','',-1.0,NULL,-5.0); -- has raw delta row but NULL 7d
+            -- pct_* are FRACTIONS, the way the pipeline writes them: -0.12 is a 12% drop. These
+            -- were whole percent until 2026-08-01, which is exactly why dealsMaxPct7d could sit
+            -- wrong by 100x with this test green and the real Deals filter matching nothing.
+            INSERT INTO price_delta VALUES ('sv1-2','raw','',-0.02,-0.12,-0.20); -- a deal (7d < -0.05)
+            INSERT INTO price_delta VALUES ('sv1-1','raw','',0.01,0.03,0.04);     -- not a deal
+            INSERT INTO price_delta VALUES ('swsh1-1','raw','',-0.01,NULL,-0.05); -- raw delta row, NULL 7d
             INSERT INTO card_dex VALUES ('sv1-1',906); -- Sprigatito, Paldea (gen 9)
             INSERT INTO card_dex VALUES ('sv1-2',6);   -- Charizard, Kanto (gen 1)
             INSERT INTO card_dex VALUES ('sv1-2',906); -- 2nd species on same card → matches Kanto OR Paldea

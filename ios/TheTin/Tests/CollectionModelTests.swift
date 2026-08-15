@@ -8,17 +8,48 @@ final class CollectionModelTests: XCTestCase {
     private var model: CollectionModel!
 
     override func setUp() async throws {
+        // `entries.didSet` writes this, and `CollectionModel` reads it at init — so it outlives the
+        // process and would leak between runs if it weren't pinned at both ends.
+        UserDefaults.standard.set(false, forKey: "hasCards")
         store = try CatalogStore(path: try FixtureCatalog.copyToTemp())
         repo = InMemoryCollectionRepository()
         model = CollectionModel(repository: repo, store: store)
         await model.start()
     }
 
-    override func tearDownWithError() throws { try store?.close() }
+    override func tearDownWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "hasCards")
+        try store?.close()
+    }
 
     private func waitForStreams() async {
         // Streams hop through continuations; yield a few times to let them land.
         for _ in 0..<10 { await Task.yield() }
+    }
+
+    /// `entries` is empty for the frames before the stream delivers, so `entries.isEmpty` alone
+    /// would put a returning user on "Your tin is empty" — the one screen that reads as data loss.
+    func testEmptyEntriesBeforeTheFirstEmissionReadAsLoadingNotEmpty() async throws {
+        UserDefaults.standard.set(true, forKey: "hasCards")
+        let waiting = CollectionModel(repository: InMemoryCollectionRepository(), store: store)
+
+        XCTAssertTrue(waiting.entries.isEmpty)
+        XCTAssertTrue(waiting.isAwaitingFirstLoad)
+
+        await waiting.start()
+        await waitForStreams()
+
+        // Still empty — but now that's an answer rather than an absence.
+        XCTAssertTrue(waiting.entries.isEmpty)
+        XCTAssertFalse(waiting.isAwaitingFirstLoad)
+    }
+
+    /// The other half: a first run must NOT be held on a placeholder waiting for a tin it never had.
+    func testFirstRunFallsStraightThroughToTheEmptyTin() async throws {
+        UserDefaults.standard.set(false, forKey: "hasCards")
+        let fresh = CollectionModel(repository: InMemoryCollectionRepository(), store: store)
+
+        XCTAssertFalse(fresh.isAwaitingFirstLoad)
     }
 
     func testCreateGroupAndAddEntryComputesValue() async throws {
@@ -848,5 +879,79 @@ final class CollectionModelTests: XCTestCase {
                         condition: "NM", grade: nil, pricePaid: nil, acquiredAt: nil,
                         acquiredFrom: nil, addedAt: Date(), variant: "regular",
                         acquiredVia: acquiredVia)
+    }
+
+    // MARK: Photos
+
+    /// A bare entry with nothing recorded about the copy — the fixture the merge rules are about.
+    private func bareEntry(id: String) -> CollectionEntry {
+        CollectionEntry(id: id, cardId: "ex6-58", groupId: "", qty: 1,
+                        condition: "NM", grade: nil, pricePaid: nil,
+                        acquiredAt: nil, acquiredFrom: nil,
+                        addedAt: Date(timeIntervalSince1970: 0), variant: "regular")
+    }
+
+    func testTwoBareCopiesAreStillTheSameCopy() {
+        XCTAssertTrue(bareEntry(id: "a").isSameCopy(as: bareEntry(id: "b")))
+    }
+
+    func testAPhotographedCopyIsNotTheSameCopyAsABareOne() {
+        var photographed = bareEntry(id: "b")
+        photographed.photos = EntryPhotos(front: "f.jpg")
+        XCTAssertTrue(photographed.hasAcquisitionDetail)
+        XCTAssertFalse(bareEntry(id: "a").isSameCopy(as: photographed))
+    }
+
+    /// An EMPTY photo set is not a per-copy fact — only actual files are. Otherwise merely opening
+    /// the form and backing out would permanently split a stack.
+    func testAnEmptyPhotoSetDoesNotBlockMerging() {
+        var empty = bareEntry(id: "b")
+        empty.photos = EntryPhotos()
+        XCTAssertFalse(empty.hasAcquisitionDetail)
+        XCTAssertTrue(bareEntry(id: "a").isSameCopy(as: empty))
+    }
+
+    /// The trap this whole convention exists for: a collection.json written before `photos` existed
+    /// must still decode. A defaulted non-optional would fail here.
+    func testAnEntryWrittenBeforePhotosStillDecodes() throws {
+        let json = Data(#"{"id":"a","cardId":"ex6-58","groupId":"","qty":1,"addedAt":0}"#.utf8)
+        let entry = try JSONDecoder().decode(CollectionEntry.self, from: json)
+        XCTAssertNil(entry.photos)
+    }
+
+    func testLabelledNamesEachPhotoInPrintOrder() {
+        let p = EntryPhotos(front: "f.jpg", back: "b.jpg", details: ["d1.jpg", "d2.jpg"])
+        XCTAssertEqual(p.labelled.map(\.label), ["Front", "Back", "Detail 1", "Detail 2"])
+        XCTAssertEqual(p.all, ["f.jpg", "b.jpg", "d1.jpg", "d2.jpg"])
+    }
+
+    /// A missing front must not shift the labels: index 0 is the BACK here, not "Front".
+    func testLabelledSkipsAnEmptySlotWithoutRelabelling() {
+        let p = EntryPhotos(back: "b.jpg")
+        XCTAssertEqual(p.labelled.map(\.label), ["Back"])
+    }
+
+    func testSlotAccessReadsAndWritesTheRightSlot() {
+        var p = EntryPhotos()
+        p.set("f.jpg", .front)
+        p.set("d.jpg", .detail(0))
+        XCTAssertEqual(p.file(.front), "f.jpg")
+        XCTAssertNil(p.file(.back))
+        XCTAssertEqual(p.file(.detail(0)), "d.jpg")
+        XCTAssertNil(p.file(.detail(1)))
+    }
+
+    /// `details` stays DENSE: removing the first of two shifts the second down, so the form's tiles
+    /// never show a hole.
+    func testRemovingADetailShiftsTheRestDown() {
+        var p = EntryPhotos(details: ["d1.jpg", "d2.jpg"])
+        p.set(nil, .detail(0))
+        XCTAssertEqual(p.details, ["d2.jpg"])
+    }
+
+    func testDetailsNeverExceedTheCap() {
+        var p = EntryPhotos(details: ["d1.jpg", "d2.jpg"])
+        p.set("d3.jpg", .detail(2))
+        XCTAssertEqual(p.details, ["d1.jpg", "d2.jpg"])
     }
 }

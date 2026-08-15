@@ -44,6 +44,12 @@ private struct MainTabView: View {
     @State private var pack: ScannerPackModel
     @State private var searchModel: SearchModel?
     @State private var showingSettings = false
+    /// The scan tray, owned HERE rather than in the Scan tab.
+    ///
+    /// A trade's incoming cards land in it too, and `ScanStagingStore.persisted()` reads the same
+    /// file — so two instances would each hold half the tray and the last write would erase the
+    /// other's cards. One instance, two writers.
+    @State private var staging = ScanStagingStore.persisted()
 
     init(store: CatalogStore, collection: CollectionModel, wants: WantsModel?, model: AppModel) {
         self.store = store
@@ -60,21 +66,22 @@ private struct MainTabView: View {
     // an empty tin (first run) opens on Discover so there's something to see.
     @State private var selection: Tab =
         UserDefaults.standard.bool(forKey: "hasCards") ? .tin : .discover
-    /// Path for the Tin tab's stack, so a notification tap can push WantedRoute programmatically.
+    /// Path for the Tin tab's stack, so Siri and the Action button can push programmatically.
     @State private var tinPath = NavigationPath()
     /// Path for the Discover stack, so the empty tin's "Browse sets" CTA lands ON the catalog
     /// rather than on Discover's home with the catalog somewhere below the fold.
     @State private var discoverPath = NavigationPath()
-    @State private var consumedRouteToken = 0
     @State private var consumedCardToken = 0
+    @State private var consumedTradeToken = 0
     @State private var consumedIntentToken = 0
     @State private var consumedImportToken = 0
+    @State private var consumedPinnedToken = 0
 
     var body: some View {
         TabView(selection: $selection) {
             NavigationStack(path: $discoverPath) {
                 DiscoverView(store: store, collection: collection, wants: model.wants,
-                             goals: model.setGoals)
+                             goals: model.setGoals, signals: model.discoverSignals)
                     // Install day is when someone is most likely on home Wi-Fi — the right moment
                     // to mention the scanner. A dismissible banner, never a modal: stacking a
                     // second large download behind the catalog's would make first run worse.
@@ -83,7 +90,7 @@ private struct MainTabView: View {
                             selection = .scan
                         }
                     }
-                    .fundingBanner(model: model, store: store, pack: pack)
+                    .statusBanners(model: model, store: store)
             }
             .appToasts(model: model, pack: pack)
             .tabItem { Label("Discover", systemImage: "sparkles") }
@@ -91,7 +98,7 @@ private struct MainTabView: View {
 
             NavigationStack {
                 MoversView(model: collection, store: store, wants: model.wants)
-                    .fundingBanner(model: model, store: store, pack: pack)
+                    .statusBanners(model: model, store: store)
             }
             .appToasts(model: model, pack: pack)
             .tabItem { Label("Movers", systemImage: "chart.line.uptrend.xyaxis") }
@@ -105,7 +112,7 @@ private struct MainTabView: View {
                         TinLoadingView()
                     }
                 }
-                .fundingBanner(model: model, store: store, pack: pack)
+                .statusBanners(model: model, store: store)
             }
             .appToasts(model: model, pack: pack)
             .tabItem { Label("Search", systemImage: "magnifyingglass") }
@@ -121,9 +128,17 @@ private struct MainTabView: View {
                                    case .browse:
                                        discoverPath.append(BrowseRoute())
                                        selection = .discover
+                                   // Settings owns the whole import flow (picker, progress,
+                                   // result sheet, skipped-rows export), so it is the honest
+                                   // destination — but opened at the file picker, not at the top
+                                   // of the list with Data eight sections down.
+                                   case .importCSV:
+                                       model.requestImportPicker()
+                                       showingSettings = true
                                    }
                                },
                                scannerReady: pack.phase == .ready,
+                               pack: pack,
                                // Searching your tin used to dead-end in a note telling you to go
                                // to another tab. Now it takes you there, carrying the query.
                                onSearchCatalog: { query in
@@ -132,11 +147,21 @@ private struct MainTabView: View {
                                },
                                goals: model.setGoals,
                                openPager: { id in tinPath.append(TinPagerRoute(groupId: id)) },
+                               staging: staging,
+                               backup: model.backup,
+                               // Filing the cards you just took is the obvious next step, so land
+                               // on the tray rather than leaving it to be discovered later.
+                               onExecutedTrade: { selection = .scan },
+                               // A scanned label takes the same route a deep link does, so the
+                               // in-app scanner and the system Camera land in the same place.
+                               onOpenLabel: { id, highlight in
+                                   model.openCard(id: id, highlight: highlight)
+                               },
                                // The gear belongs to CollectionView's own toolbar. Applying it
                                // here as a second `.toolbar` is what lost it on iPadOS 18.
                                onOpenSettings: { showingSettings = true })
                     .sheet(isPresented: $showingSettings) { SettingsView(app: model, pack: pack) }
-                    .fundingBanner(model: model, store: store, pack: pack)
+                    .statusBanners(model: model, store: store)
             }
             .appToasts(model: model, pack: pack)
             .tabItem { Label("The Tin", systemImage: "square.stack.3d.up") }
@@ -144,24 +169,47 @@ private struct MainTabView: View {
 
             NavigationStack {
                 ScanTabContainer(store: store, collection: collection, wants: model.wants,
-                                 pack: pack, network: model.network)
-                    .fundingBanner(model: model, store: store, pack: pack)
+                                 pack: pack, network: model.network,
+                                 onOpenLabel: { id, highlight in
+                                     model.openCard(id: id, highlight: highlight)
+                                 },
+                                 onSearchInstead: { selection = .search },
+                                 staging: staging)
+                    .statusBanners(model: model, store: store)
             }
+            // The Scan tab shows the full-screen progress view for the whole transfer, so a
+            // toast here would say the same thing twice. It appears on every other tab — the
+            // point of hoisting the download is that you can walk away from it.
             .appToasts(model: model, pack: pack, showsScannerToast: false)
             .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
             .tag(Tab.scan)
         }
         .task {
             if searchModel == nil { searchModel = SearchModel(store: store) }
-            consumeWishlistRoute() // cold launch from a tap: token bumped before we appeared
             consumeCardRoute()
             consumeIntentRoute()   // …same for a cold launch from Siri or the Action button
             await pack.refresh()   // learn the pack's state once, for Settings and the prompt
         }
         .onChange(of: model.importRouteToken) { consumeImportRoute() }
-        .onChange(of: model.wishlistRouteToken) { consumeWishlistRoute() }
         .onChange(of: model.cardRouteToken) { consumeCardRoute() }
+        .onChange(of: model.tradeRouteToken) { consumeTradeRoute() }
+        .onChange(of: model.pinnedRouteToken) { consumePinnedRoute() }
+        // A shared WANT link belongs in the browser. `UIApplication.open` called from the app that
+        // owns the universal link opens Safari rather than bouncing back here — which is the whole
+        // point, since the association file cannot tell a want link from a trade link.
+        .onChange(of: model.externalURLToken) {
+            if let url = model.pendingExternalURL { UIApplication.shared.open(url) }
+        }
         .onChange(of: model.intentRouteToken) { consumeIntentRoute() }
+        // Labels are printed from the tin, from a card's detail screen (which lives under Search
+        // and Discover too) and from the entry form — and that last one is a sheet that dismisses
+        // itself, taking any flow it owned with it. Same reasoning as the alert below.
+        .labelPrintFlow($model.labelRequest, store: store)
+        // …and the screens that ask for one are four layers down, so they reach the model through
+        // the environment rather than having it threaded through every initialiser between here
+        // and them. Read as an OPTIONAL (`AppModel?`) everywhere — the non-optional form traps
+        // when it is absent, which would take out previews and the view tests.
+        .environment(model)
         // Collection writes can fail from any tab (card detail lives under Browse/Search too),
         // so the failure alert hangs off the TabView, not the Tin stack.
         .alert("Save failed", isPresented: Binding(
@@ -183,13 +231,6 @@ private struct MainTabView: View {
         showingSettings = true
     }
 
-    private func consumeWishlistRoute() {
-        guard model.wishlistRouteToken > consumedRouteToken else { return }
-        consumedRouteToken = model.wishlistRouteToken
-        selection = .tin
-        tinPath.append(WantedRoute())
-    }
-
     private func consumeIntentRoute() {
         guard model.intentRouteToken > consumedIntentToken,
               let route = model.pendingIntentRoute else { return }
@@ -206,14 +247,49 @@ private struct MainTabView: View {
     }
 
     private func consumeCardRoute() {
-        guard model.cardRouteToken > consumedCardToken, let id = model.pendingCardId else { return }
+        DeepLinkDiag.record("consumeCardRoute",
+                            "token=\(model.cardRouteToken) consumed=\(consumedCardToken) "
+                            + "pendingId=\(model.pendingCardId ?? "nil") tab=\(selection)")
+        guard model.cardRouteToken > consumedCardToken, let id = model.pendingCardId else {
+            DeepLinkDiag.record("dropped", "stale token or no pending id")
+            return
+        }
         consumedCardToken = model.cardRouteToken
         // A deep link can carry an unknown id (garbage link, or a card missing from an older
         // local catalog). The CardID destination has no not-found branch, so pushing it would
         // land on a blank screen — only navigate when the card actually resolves.
-        guard (try? store.card(id: id)) != nil else { return }
+        guard (try? store.card(id: id)) != nil else {
+            DeepLinkDiag.record("dropped", "catalog has no card '\(id)'")
+            return
+        }
         selection = .tin
-        tinPath.append(CardID(raw: id))
+        tinPath.append(CardID(raw: id, highlight: model.pendingCardHighlight))
+        DeepLinkDiag.record("pushed", "\(id) depth=\(tinPath.count)")
+    }
+
+    /// Someone's shared trade list, opened in the app: land on a live trade with their side
+    /// already filled in.
+    ///
+    /// The payload travels ON the route rather than being read out of `AppModel` by the screen, so
+    /// one destination serves both a deep link and a trade you started yourself with nothing in it.
+    private func consumeTradeRoute() {
+        guard model.tradeRouteToken > consumedTradeToken,
+              let offer = model.pendingTradeOffer else { return }
+        consumedTradeToken = model.tradeRouteToken
+        selection = .tin
+        tinPath.append(TradeSessionRoute(offer: offer))
+    }
+
+    /// The confirmation toast's "View": land on the pinned row the card just moved to.
+    private func consumePinnedRoute() {
+        guard model.pinnedRouteToken > consumedPinnedToken,
+              let route = model.pendingPinnedRoute else { return }
+        consumedPinnedToken = model.pinnedRouteToken
+        selection = .tin
+        switch route {
+        case .trade: tinPath.append(TradeRoute())
+        case .wishlist: tinPath.append(WantedRoute())
+        }
     }
 }
 
@@ -221,8 +297,10 @@ private struct MainTabView: View {
 /// Must live INSIDE the NavigationStack: a TabView-level `safeAreaInset` lets the child nav bars
 /// draw over it (it was covering the Discover section headers).
 private extension View {
-    func fundingBanner(model: AppModel, store: CatalogStore, pack: ScannerPackModel) -> some View {
-        modifier(FundingBanner(model: model, store: store, pack: pack))
+    /// The one honesty banner above a tab's content. The support bar is NOT here — it scrolls
+    /// with the tin's own list (see `CollectionView.fundingRow`).
+    func statusBanners(model: AppModel, store: CatalogStore) -> some View {
+        modifier(StatusBanners(model: model, store: store))
     }
 
     /// Attach to the tab's `NavigationStack`, never to its root view — see `AppToasts`.
@@ -236,22 +314,32 @@ private extension View {
     }
 }
 
-private struct FundingBanner: ViewModifier {
+/// Anchors the honesty banners — and, on The Tin, the support bar — under a tab's navigation bar.
+/// Must live INSIDE the `NavigationStack`: a TabView-level `safeAreaInset` lets the child nav bars
+/// draw over it (it was covering the Discover section headers).
+///
+/// **One banner, not a stack.** Offline and reduced-data could both render, and on Discover the
+/// scanner-pack prompt sat above them as a third — so a first run, on cellular, with a backup-tier
+/// catalog opened on four strips of chrome before a single card. They also say overlapping things:
+/// both mean "these prices are not today's". Offline wins, because it is the one the user can't
+/// act on and it dates the prices explicitly.
+///
+/// **The support bar is The Tin's alone.** DESIGN.md called it always-on and it was, on all five
+/// tabs and every screen pushed from them — including the scanner viewfinder and search results,
+/// where the relationship it asks about is not what the user is doing. It costs ~24pt of the top
+/// of every screen in the app to say something one screen can say. Settings still carries the full
+/// Support section, so the ask is never more than a tab away.
+private struct StatusBanners: ViewModifier {
     let model: AppModel
     let store: CatalogStore
-    let pack: ScannerPackModel
 
     func body(content: Content) -> some View {
         content
             .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    if model.network.isOffline {
-                        OfflineBanner(asOf: model.catalogState?.priceAsOf ?? (try? store.priceAsOf()) ?? nil)
-                    }
-                    if model.reducedData {
-                        ReducedDataBanner()
-                    }
-                    FundingBar(funding: model.funding)
+                if model.network.isOffline {
+                    OfflineBanner(asOf: model.catalogState?.priceAsOf ?? (try? store.priceAsOf()) ?? nil)
+                } else if model.reducedData {
+                    ReducedDataBanner(installedTier: model.catalogState?.tier)
                 }
             }
     }
@@ -283,6 +371,11 @@ private struct AppToasts: ViewModifier {
             // when a screen is pushed.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 6) {
+                    if let confirmation = model.confirmation {
+                        ConfirmToast(confirmation: confirmation) {
+                            model.openPinned(confirmation.route)
+                        }
+                    }
                     if let collection = model.collection, let undoable = collection.undoable {
                         UndoToast(undoable: undoable) {
                             Task { await collection.undoLastDelete() }
@@ -294,7 +387,9 @@ private struct AppToasts: ViewModifier {
                     // Follows the user out of the Scan tab — the whole point of hoisting the
                     // download is that they can walk away from it.
                     if showsScannerToast, case .downloading(let p) = pack.phase {
-                        UpdateToast(label: "Setting up scanner… \(p.byteSummary)",
+                        // "Setting up" is a lie once a pack is installed and scanning — that
+                        // transfer is an update running behind a scanner that already works.
+                        UpdateToast(label: "\(pack.isScannerUsable ? "Updating" : "Setting up") scanner… \(p.byteSummary)",
                                     progress: p.fraction)
                     }
                 }
@@ -359,17 +454,27 @@ private struct UpdateToast: View {
     let label: String
     let progress: Double
 
+    /// Nothing has landed yet. A determinate bar pinned at 0% reads as a stalled download, and on
+    /// a slow link the pack's first chunk is minutes away — so say "working" instead of "0%".
+    private var isIndeterminate: Bool { progress <= 0 }
+
     var body: some View {
         VStack(spacing: 7) {
             HStack {
                 Text(label)
                 Spacer()
-                Text(progress.formatted(.percent.precision(.fractionLength(0))))
-                    .monospacedDigit()
+                if isIndeterminate {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Text(progress.formatted(.percent.precision(.fractionLength(0))))
+                        .monospacedDigit()
+                }
             }
-            .font(.caption.weight(.semibold))
+            // Monospaced digits so the byte count doesn't shuffle sideways as it counts up.
+            .font(.caption.weight(.semibold).monospacedDigit())
             ProgressView(value: progress)
                 .animation(reduceMotion ? nil : .linear(duration: 0.2), value: progress)
+                .opacity(isIndeterminate ? 0.35 : 1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
@@ -436,17 +541,70 @@ private struct UndoToast: View {
     }
 }
 
-/// Shown while the installed catalog is a poorer tier than the one the user picked (the
-/// casual-only backup source bootstrapped it) — otherwise missing history/grades read as a bug.
+/// "On your trade list · View" — the follow-through after a state change that moves a card to a
+/// screen the user is not currently looking at.
+///
+/// No countdown bar, unlike `UndoToast`: there is no window to race, so a depleting bar would
+/// imply urgency that isn't there.
+private struct ConfirmToast: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let confirmation: AppModel.Confirmation
+    let onOpen: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(confirmation.message)
+                .font(.subheadline)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button("View", action: onOpen)
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        // Flat Tin Rule: chrome earns separation from a system material, never a shadow.
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: confirmation.id)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(confirmation.message). View available.")
+    }
+}
+
+/// Shown while the installed catalog is a poorer tier than the one the user picked — e.g. a tier
+/// switch that didn't finish, or a legacy install that predates the current choice. Every backup
+/// origin (R2 included) now carries all three tiers, so this is never a "which server answered"
+/// problem — otherwise missing history/grades would read as a bug rather than a state.
 private struct ReducedDataBanner: View {
+    /// `AppModel.catalogState?.tier`, the raw tier string of what's actually installed.
+    let installedTier: String?
+
+    private var tierTitle: String? {
+        installedTier.flatMap { CatalogTier(rawValue: $0)?.title }
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "externaldrive.badge.icloud")
-            Text("Backup card data — price history unavailable")
+            Text(tierTitle.map { "Showing \($0) card data — switch it in Settings" }
+                 ?? "Showing a smaller catalog than you chose — switch it in Settings")
         }
         .font(.caption.bold())
         .padding(.vertical, 6).frame(maxWidth: .infinity)
-        .background(.yellow.opacity(0.9))
+        // ⚠️ **`ignoresSafeAreaEdges: []` is load-bearing, and only on iPad.** `background(_:)`
+        // defaults to `.all`, so a view inside a top `safeAreaInset` paints the whole safe-area
+        // region above itself. On iPhone that region is already filled by the navigation bar and
+        // nothing showed — for the app's entire life. On **iPadOS 26 the tab bar floats at the top
+        // and there is no nav bar there**, so this banner painted the status bar and the area
+        // behind the floating tab pills: a full-bleed yellow header, on an app whose brief names
+        // "kiddie Pokémon kitsch — no Pikachu-yellow" as an anti-reference.
+        //
+        // Found by rendering on an iPadOS 26 simulator, which is the ONLY thing that surfaces it —
+        // the test iPad runs 18.7.9 and cannot. Do not delete this argument to tidy the call.
+        .background(.yellow.opacity(0.9), ignoresSafeAreaEdges: [])
         .foregroundStyle(.black)
     }
 }
@@ -461,7 +619,9 @@ private struct OfflineBanner: View {
         }
         .font(.caption.bold())
         .padding(.vertical, 6).frame(maxWidth: .infinity)
-        .background(.orange.opacity(0.9))
+        // Same safe-area bleed as `ReducedDataBanner` — this one is topmost whenever you're
+        // offline, which is exactly when it will be seen.
+        .background(.orange.opacity(0.9), ignoresSafeAreaEdges: [])
         .foregroundStyle(.black) // white-on-orange fails contrast; black is ~9.5:1
     }
 }

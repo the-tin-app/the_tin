@@ -18,7 +18,7 @@ enum Base64URL {
     }
 }
 
-/// Injectable `URLSession` seam so `SelfHostedCatalogRemote` and `AppAttestSessionProvider` are
+/// Injectable `URLSession` seam so `OriginCatalogRemote` and `AppAttestSessionProvider` are
 /// unit-testable without a live server (tests provide a fake conformance).
 protocol HTTPClient {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)

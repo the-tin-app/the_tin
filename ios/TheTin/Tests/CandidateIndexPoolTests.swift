@@ -90,6 +90,79 @@ final class CandidateIndexPoolTests: XCTestCase {
         }
     }
 
+    // MARK: - consistency(): the name leg, compared in a space Vision cannot break
+
+    /// ⚠️ **Both sides of the name comparison must be normalized the same way**, and for months only
+    /// one of them was: `baseName` stripped apostrophes, "mega " and mechanic suffixes off the
+    /// CATALOG name, then substring-tested it against the OCR text exactly as Vision returned it.
+    /// Vision decides word breaks and punctuation for itself, so three cards whose names it read
+    /// *perfectly* were refused a lock on Tomas's own binder pages on 2026-08-07 —
+    /// "GarchompEX" against `garchomp-ex`, "Team Rocket's Moltres(" against `team rockets moltres`,
+    /// "Ethan's Ho-Ohe" against `ethans ho-oh`. Squashing both sides to alphanumerics took the
+    /// held-out page measurement from 13 locks to 15 of 18 with zero wrong locks, the 85-cell
+    /// fixture set from 56 to 60, and `LabeledPhotoAccuracyTests` from 51/64 to 52/64.
+    ///
+    /// This is not a loosening: a genuinely garbled read still fails, which is the last assertion.
+    func testTheNameLegIgnoresWhereVisionPutTheSpacesAndPunctuation() throws {
+        let index = try CandidateIndex(store: try FixtureCatalog.makeWithPunctuatedName())
+        let id = FixtureCatalog.punctuatedNameCardId
+        func agrees(_ text: String) -> Bool {
+            index.consistency(cardId: id,
+                              fields: OcrFields(rawText: text, numerators: [], denominator: nil,
+                                                hp: nil),
+                              pool: [id]).nameAgrees
+        }
+        // Exactly what Vision returned off a 24.5 MP binder photograph.
+        XCTAssertTrue(agrees("BASIG Ethan's Ho-Ohe HP 230 Ability Golden Flame"))
+        // Same word, Vision's other favourite rendering: no spaces at all.
+        XCTAssertTrue(agrees("BASIC EthansHoOh HP230"))
+        // And a genuinely misread name is still refused — the leg still does its job.
+        XCTAssertFalse(agrees("BASIG Ethan's Ho-Ah HP 230"))
+    }
+
+    // MARK: - consistency(): the twin guard, read from `card_twin`
+
+    /// ⚠️ **The one link in the chain that was dead in production, and the only one nothing tested.**
+    /// Every consumer of `hasTwinInPool` — `ScanSession`'s F1 gate, `LensMatcher.verdict` — is tested
+    /// with a stub that simply asserts the flag. Nothing asserted that `CandidateIndex.consistency`
+    /// actually reads `card_twin` and sets it, and `card_twin` was 0 rows in every published catalog
+    /// for months (the pairs file was gitignored and outside the pipeline's Docker build context), so
+    /// the guard was inert the whole time and the tests were all green.
+    ///
+    /// The cost was a confident wrong answer in the measured fixture set: a Blastoise photographed off
+    /// a binder page came back as `cel25cc-CC001`, a third identical-art reprint, with nothing to
+    /// withhold the lock. ⚠️ That is the ONLY failure mode this guard addresses — wrong locks seen on a
+    /// real device were plainly wrong cards rather than paired art (Tomas, 2026-08-07), so do not read
+    /// a populated `card_twin` as a fix for those.
+    func testAWinnerWithATwinInThePoolIsReportedAsSuch() throws {
+        let index = try makeIndex()
+        let fields = OcrFields(rawText: "", numerators: [], denominator: nil, hp: nil)
+        let both = index.consistency(cardId: FixtureCatalog.twinA, fields: fields,
+                                     pool: [FixtureCatalog.twinA, FixtureCatalog.twinB])
+        XCTAssertTrue(both.hasTwinInPool, "card_twin is not being read")
+
+        // Symmetric: the table holds both directions, so it does not matter which one the matcher won.
+        XCTAssertTrue(index.consistency(cardId: FixtureCatalog.twinB, fields: fields,
+                                        pool: [FixtureCatalog.twinA, FixtureCatalog.twinB])
+                        .hasTwinInPool)
+    }
+
+    /// The guard is about the POOL, not about existing. A card with a twin the matcher never had to
+    /// choose between is not ambiguous, and flagging it would withhold locks for no reason.
+    func testATwinOutsideThePoolDoesNotWithholdAnything() throws {
+        let index = try makeIndex()
+        let fields = OcrFields(rawText: "", numerators: [], denominator: nil, hp: nil)
+        XCTAssertFalse(index.consistency(cardId: FixtureCatalog.twinA, fields: fields,
+                                          pool: [FixtureCatalog.twinA]).hasTwinInPool)
+    }
+
+    func testACardWithNoTwinsIsNeverFlagged() throws {
+        let index = try makeIndex()
+        let fields = OcrFields(rawText: "", numerators: [], denominator: nil, hp: nil)
+        XCTAssertFalse(index.consistency(cardId: "swsh7-215", fields: fields,
+                                          pool: ["swsh7-215", FixtureCatalog.twinA]).hasTwinInPool)
+    }
+
     // Cap: the pool never exceeds 160 ids (fixture is far smaller, so this just checks the
     // contract shape rather than exercising the cap directly).
     func testPoolNeverExceeds160() throws {

@@ -39,8 +39,13 @@ struct DeltaBadge: View {
             }
         }
         .font(.caption2.weight(.semibold)).monospacedDigit()
+        // ⚠️ `.statusPositive`/`.statusNegative`, not `.green`/`.red` — see `StatusColor`. At
+        // caption2 on a light background systemGreen measures 2.22:1 and systemRed 3.55:1, both
+        // under the 4.5:1 floor for text this size. The arrow and the spoken label already carry
+        // the meaning; this is about being able to READ the number.
         .foregroundStyle(abs(pct) < 0.0005 ? AnyShapeStyle(.secondary)
-                         : pct > 0 ? AnyShapeStyle(.green) : AnyShapeStyle(.red))
+                         : pct > 0 ? AnyShapeStyle(Color.statusPositive)
+                                   : AnyShapeStyle(Color.statusNegative))
     }
 
     private func accessibility(pct: Double) -> String {

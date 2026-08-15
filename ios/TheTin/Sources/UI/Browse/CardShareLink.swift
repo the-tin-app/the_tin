@@ -8,6 +8,12 @@ import Foundation
 enum CardShareLink {
     static let host = "thetinapp.com"
 
+    /// Stand-in for a list link that hasn't been built yet. Exists so a `ShareLink` never has to
+    /// be conditionally PRESENT — an absent toolbar item leaves a zero-size placeholder that the
+    /// iPad share popover then anchors to, which is what broke sharing on iPad entirely. The
+    /// button is disabled while this is what it holds, so it is never actually shared.
+    static let homeURL = URL(string: "https://\(host)")!
+
     static func url(card: CardRecord, setName: String?) -> URL {
         var c = URLComponents()
         c.scheme = "https"
@@ -15,13 +21,10 @@ enum CardShareLink {
         c.path = "/c/\(card.id)"
         var items = [URLQueryItem(name: "n", value: card.name)]
         if let setName { items.append(URLQueryItem(name: "set", value: setName)) }
-        // og:image must render in iMessage / WhatsApp previews — webp support there is spotty,
-        // so prefer a PNG (tcgdex serves high.png); the legacy imageUrl fallback is already a JPEG.
-        if let base = card.imageBase {
-            items.append(URLQueryItem(name: "img", value: "\(base)/high.png"))
-        } else if let img = card.imageUrl {
-            items.append(URLQueryItem(name: "img", value: img))
-        }
+        // See `CardRecord.webArtURL` for why this isn't `imageURL(quality:)`. It used to be
+        // inlined here as imageBase-then-imageUrl, which SKIPPED the TCGplayer-CDN branch — a card
+        // TCGdex has no art for shared with no preview image at all.
+        if let art = card.webArtURL { items.append(URLQueryItem(name: "img", value: art.absoluteString)) }
         c.queryItems = items
         // Components are all app-constructed from known-safe pieces; a nil url here is a
         // programming error, not user input.

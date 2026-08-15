@@ -107,4 +107,114 @@ final class InsuranceReportTests: XCTestCase {
         let doc = try XCTUnwrap(CGPDFDocument(try XCTUnwrap(CGDataProvider(data: data as CFData))))
         XCTAssertEqual(doc.numberOfPages, 5)   // cover + ⌈30/14⌉=3 table pages + 1 appendix
     }
+
+    // MARK: Sealed products
+
+    private func product(_ id: Int, name: String, market: Double?) -> SealedProduct {
+        SealedProduct(tcgplayerId: id, name: name, setId: "swsh7", productType: "Booster Box",
+                      marketUsd: market, lowUsd: nil, asOf: "2026-07-04")
+    }
+
+    /// An insurance inventory lists what you HOLD, so a sold box is excluded — and rows sort by
+    /// value, most valuable first, exactly as the card table does.
+    func testSealedRowsExcludeSoldAndSortByValue() throws {
+        let sealed = [
+            SealedEntry(id: "cheap", productId: 2, qty: 1, addedAt: Date()),
+            SealedEntry(id: "dear", productId: 1, qty: 2, pricePaid: 900,
+                        acquiredFrom: "card show", addedAt: Date()),
+            SealedEntry(id: "gone", productId: 1, qty: 1, addedAt: Date(), soldAt: Date()),
+        ]
+        let rows = InsuranceReport.sealedRows(sealed, products: [
+            1: product(1, name: "Booster Box", market: 500),
+            2: product(2, name: "Elite Trainer Box", market: 60),
+        ])
+
+        XCTAssertEqual(rows.map(\.id), ["dear", "cheap"])
+        XCTAssertEqual(rows.first?.currentValue, 1000)      // 500 × 2
+        XCTAssertEqual(rows.first?.pricePaid, 900)
+        XCTAssertEqual(rows.first?.acquiredFrom, "card show")
+    }
+
+    /// A box this catalog can't price still PRINTS, named by its id. An inventory that drops the
+    /// rows it can't value is exactly the wrong failure for an insurance document.
+    func testSealedRowsKeepUnpricedProducts() throws {
+        let sealed = [SealedEntry(id: "s1", productId: 999, qty: 1, pricePaid: 120, addedAt: Date())]
+        let rows = InsuranceReport.sealedRows(sealed, products: [:])
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].name, "Sealed product 999")
+        XCTAssertNil(rows[0].currentValue)
+        XCTAssertEqual(rows[0].pricePaid, 120)
+    }
+
+    /// Sealed adds its own page between the cards and the divider appendix — and adds none when
+    /// there is no sealed, so a report for a card-only collection is exactly what it always was.
+    @MainActor
+    func testSealedAddsItsOwnPageAndNoneWhenEmpty() async throws {
+        let entries = [entry("e1", card: "swsh7-215")]
+        let prices = ["swsh7-215": rayPrice]
+        let rows = InsuranceReport.rows(entries: entries, cards: ["swsh7-215": card("swsh7-215")],
+                                        setNames: [:], prices: prices,
+                                        variantsByCard: [:], conditionsByCard: [:])
+        let totals = InsuranceReport.totals(entries: entries, prices: prices,
+                                            variantsByCard: [:], conditionsByCard: [:])
+        func pageCount(sealed: [SealedReportRow]) async throws -> Int {
+            let pages = ReportPages.build(rows: rows, totals: totals, subtotals: [], images: [:],
+                                          asOf: nil, contact: nil, sealed: sealed)
+            let data = await SheetPDF.render(pages: pages)
+            let doc = try XCTUnwrap(CGPDFDocument(try XCTUnwrap(CGDataProvider(data: data as CFData))))
+            return doc.numberOfPages
+        }
+        let sealed = InsuranceReport.sealedRows(
+            [SealedEntry(id: "s1", productId: 1, qty: 1, addedAt: Date())],
+            products: [1: product(1, name: "Booster Box", market: 500)])
+
+        let without = try await pageCount(sealed: [])
+        let with = try await pageCount(sealed: sealed)
+        XCTAssertEqual(without, 3)      // cover + 1 table page + 1 appendix
+        XCTAssertEqual(with, without + 1)
+    }
+
+    // MARK: Photo exhibit paging
+
+    private func photoRow(_ id: String, photos: EntryPhotos?) -> ReportRow {
+        ReportRow(id: id, card: nil, name: "Feraligatr", setLine: "Neo Genesis · #5",
+                  detail: "Holo · NM", qty: 1, acquiredAt: nil, acquiredFrom: nil,
+                  pricePaid: nil, currentValue: 12, photos: photos)
+    }
+
+    /// Nothing photographed ⇒ no exhibit pages and no markers, so a report for a collection with no
+    /// photos is byte-identical to what it was before this feature.
+    func testNoPhotosMeansNoExhibitPagesAndNoMarkers() {
+        let rows = [photoRow("a", photos: nil), photoRow("b", photos: EntryPhotos())]
+        let index = ReportPages.photoPageIndex(rowPages: 2, sealedPages: 0,
+                                               photoRows: ReportPages.photoRows(rows))
+        XCTAssertTrue(index.isEmpty)
+        XCTAssertTrue(ReportPages.photoRows(rows).isEmpty)
+    }
+
+    /// Six photographed entries at `photosPerPage` = 3 exhibit pages, starting after
+    /// cover + rows + sealed. Written against the constant rather than a hard-coded 2, so
+    /// re-tuning the page density (see `ReportPhotoLayoutTests`) doesn't falsify this test —
+    /// what's asserted here is the OFFSET arithmetic, not how many blocks fit.
+    func testExhibitPagesFollowTheSealedSection() {
+        XCTAssertEqual(ReportPages.photosPerPage, 2, "update the expectations below if this moves")
+        let rows = (1...6).map { photoRow("e\($0)", photos: EntryPhotos(front: "f.jpg")) }
+        let index = ReportPages.photoPageIndex(rowPages: 2, sealedPages: 1,
+                                               photoRows: ReportPages.photoRows(rows))
+        // page 1 cover, pages 2-3 inventory, page 4 sealed ⇒ exhibits start at 5.
+        XCTAssertEqual(index["e1"], 5)
+        XCTAssertEqual(index["e2"], 5)
+        XCTAssertEqual(index["e3"], 6)
+        XCTAssertEqual(index["e4"], 6)
+        XCTAssertEqual(index["e5"], 7)
+        XCTAssertEqual(index["e6"], 7)
+    }
+
+    func testPhotoRowsKeepsOnlyEntriesThatActuallyHaveFiles() {
+        let rows = [photoRow("a", photos: EntryPhotos(front: "f.jpg")),
+                    photoRow("b", photos: EntryPhotos()),
+                    photoRow("c", photos: nil)]
+        XCTAssertEqual(ReportPages.photoRows(rows).map(\.id), ["a"])
+    }
 }

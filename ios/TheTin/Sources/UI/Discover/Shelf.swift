@@ -1,0 +1,397 @@
+import Foundation
+import OSLog
+
+/// One titled row of For You. The title carries the reason a card is there, which is the whole
+/// reason shelves exist: in the previous design the reason was a per-card caption, while the
+/// structure that actually decided the deck — `perGroupCap: 3` on set / artist / species — was
+/// invisible and unexplainable.
+struct Shelf: Identifiable, Equatable {
+    enum Kind: String, CaseIterable {
+        case setGoal, easyAdds, worthAThink, someday, historicLow, weeklyDrop, species, artist, explore
+    }
+    let id: String
+    let kind: Kind
+    /// What this shelf is about — a set name, a species, an artist, a price cap. `nil` where the
+    /// reason needs no subject ("Cheapest in 6 months" is about nothing but itself).
+    let subject: String?
+    /// A shelf-level fact for the row header only ("120 left").
+    let detail: String?
+    let cardIds: [String]
+
+    /// The row header on the shelves screen.
+    var title: String {
+        let base: String
+        switch kind {
+        case .setGoal:     base = subject.map { "Finish \($0)" } ?? "Finish a set you collect"
+        case .easyAdds:    base = subject.map { "Easy adds · under \($0)" } ?? "Easy adds"
+        case .worthAThink: base = subject.map { "Worth a think · \($0)" } ?? "Worth a think"
+        case .someday:     base = "Someday"
+        case .historicLow: base = "Cheapest in 6 months"
+        case .weeklyDrop:  base = "Down this week"
+        case .species:     base = subject.map { "Because you like \($0)" } ?? "A species you like"
+        case .artist:      base = subject.map { "More from \($0)" } ?? "An artist you like"
+        case .explore:     base = "Something new"
+        }
+        return detail.map { "\(base) · \($0)" } ?? base
+    }
+
+    /// Why **this card** is in front of you, shown under it in the deck.
+    ///
+    /// ⚠️ This replaces `DiscoverAffinity.forYouReason`, which answered a different question: it
+    /// ranked *properties of the card* (full-art first, then species, then artist, then set) and had
+    /// no idea why the card had been chosen. Verified on the simulator against real data, every card
+    /// in the round-robin read "✨ Full-art find" — including the two leading it, which were there
+    /// because they complete sets the collector is chasing. The card was being described instead of
+    /// explained.
+    ///
+    /// The shelf already knows the answer, so the caption is now a lookup rather than a re-derivation
+    /// — which also deletes three synchronous catalog reads per card render on the main actor.
+    ///
+    /// Shelf-level facts (`detail`) are deliberately dropped: how many cards remain in a set belongs
+    /// to the row header, not under the one card in your hand.
+    var caption: String {
+        switch kind {
+        case .setGoal:     return subject.map { "Finishing \($0)" } ?? "Finishing a set you collect"
+        case .easyAdds:    return "You wouldn't blink"
+        case .worthAThink: return "Worth a think"
+        case .someday:     return "Someday"
+        case .historicLow: return "Cheapest in 6 months"
+        case .weeklyDrop:  return "Down this week"
+        case .species:     return subject.map { "Because you like \($0)" } ?? "A species you like"
+        case .artist:      return subject.map { "More from \($0)" } ?? "An artist you like"
+        case .explore:     return "Something new"
+        }
+    }
+}
+
+/// Pure aggregation over `CatalogStore` reads, following `ConnectionsBuilder`.
+///
+/// ⚠️ **This is the one seam.** Every card that reaches a user passes through `build`, so the
+/// dismissal set, the taste set and the price ceiling are applied exactly once, here.
+///
+/// The bug it replaces was structural rather than arithmetic: `ForYouStream` applied the ceiling to
+/// its candidate *pool* and then appended `varietyPicks` — drawn straight from `topPricedCards` —
+/// afterwards. Measured against real device data, a $4,500 card therefore sat at slot 4 of page 0
+/// of a deck whose band was $5.13–$33.55, and dismissing it merely promoted the next grail into the
+/// same slot, 300 deep. Applying exclusions where every consumer routes through means variety
+/// inherits them for free.
+enum ShelfBuilder {
+    private static let log = Logger(subsystem: "ai.reyes.thetin", category: "ShelfBuilder")
+
+    /// Cards kept per shelf, enforced HERE so every consumer inherits it. Same reasoning as
+    /// `ConnectionsBuilder.maxCardsPerConnection`, whose absence took the app out with a jetsam kill
+    /// when an uncapped 1,767-card artist spotlight reached a non-lazy `HStack`.
+    static let maxCardsPerShelf = 24
+
+    /// Below this a row looks broken rather than curated, and a set-goal shelf widens past the band.
+    /// Measured: `me05` yields only 4 in-band cards against a cap of 24.
+    static let minCardsPerShelf = 8
+
+    /// How close to its 6-month low a card must be to count as "cheapest in 6 months".
+    static let historicLowWithinPct = 0.05
+
+    /// Candidates handed to the band-backed shelves. Bounded because `cardsNearHistoricLow` scans
+    /// up to ~26 weekly rows per candidate and the A10 iPad is the canary.
+    static let buySignalCandidateLimit = 600
+
+    /// Slots at the END of `someday` reserved for genuine top-end cards of a species the collector
+    /// loves.
+    ///
+    /// ⚠️ Without this the row is honest but joyless. Ranked purely by affinity, Someday opens on
+    /// $61–$126 cards — the plannable end — and a real grail never surfaces at all. But "it's still
+    /// fun to look at them" was the whole reason this row exists, so a few slots hold the actual
+    /// dreams.
+    ///
+    /// ⚠️ At the END, deliberately. Leading a row with a $2,300 card is exactly the failure this
+    /// rework deleted (`varietyPicks` put one at slot 4 of page 0). Here you scroll to the end of
+    /// your daydream row and find it, which is a reward rather than an interruption.
+    static let somedayGrailSlots = 4
+
+    /// How many species shelves to render at most.
+    static let maxSpeciesShelves = 4
+
+    /// How many artist shelves to render at most.
+    static let maxArtistShelves = 2
+
+    /// May this card appear on a **buying** row?
+    ///
+    /// ⚠️ Every shelf except `someday` is capped at `PriceTiers.buyingCeiling`, and that single rule
+    /// is what makes each buying row genuinely a buying row. Before tiers, expensive cards leaked
+    /// into every row and the only defence was a hidden per-user price cut derived from thumbs-down
+    /// taps — which is now deleted, because the tiers state the same thing visibly and editably.
+    ///
+    /// An unpriced card is admitted: we do not know what it costs, and exiling it to Someday would
+    /// be a claim we cannot support.
+    static func admitsToBuyingRow(price: Double?, tiers: PriceTiers?) -> Bool {
+        guard let price, let tiers else { return true }
+        return price <= tiers.buyingCeiling
+    }
+
+    /// Which species get their own shelf: walk by weight, skipping any whose family window overlaps
+    /// one already taken.
+    ///
+    /// ⚠️ Without this, dex-adjacent favourites each produce a near-identical row. Measured on a real
+    /// collection, Articuno / Zapdos / Moltres (144/145/146) shared 62–88% of their cards, because
+    /// `DiscoverAffinity.adjacencyRadius` is 2 and their windows sit on top of each other.
+    static func speciesSeeds(_ species: [Int: Double], limit: Int = maxSpeciesShelves) -> [Int] {
+        var taken: [Int] = []
+        // Weight desc, then dex id, so ties are deterministic across launches.
+        for (dexId, _) in species.sorted(by: { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }) {
+            guard taken.count < limit else { break }
+            let overlaps = taken.contains { abs($0 - dexId) <= DiscoverAffinity.adjacencyRadius * 2 }
+            if !overlaps { taken.append(dexId) }
+        }
+        return taken.sorted { lhs, rhs in
+            let l = species[lhs] ?? 0, r = species[rhs] ?? 0
+            return l != r ? l > r : lhs < rhs
+        }
+    }
+
+    /// ⚠️ A failed read and an empty result are indistinguishable once "absent when empty" is the
+    /// rule — and that is exactly the shape that made `CardDetailModel` look like a catalog problem
+    /// for two days, because every read there was `try?` and the empty result got cached. Log the
+    /// difference so the next empty screen can be diagnosed rather than guessed at.
+    private static func read<T>(_ what: String, _ body: () throws -> [T]) -> [T] {
+        do { return try body() } catch {
+            log.error("shelf read failed: \(what, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
+    /// Candidates for `someday`. Larger than the buy-signal limit because the pool above a low
+    /// ceiling is big — measured, 1,240 cards sit above $60 on the real catalog.
+    static let somedayCandidateLimit = 1_500
+
+    /// The genuine top-end cards of a species the collector actually collects.
+    ///
+    /// Drawn from `topPricedCards` (price-descending) rather than from the cheapest-first Someday
+    /// pool, so these survive even when a low ceiling makes that pool truncate. Requires an **exact**
+    /// species match, not the widened family: a grail should be a Pokémon you actually love, not one
+    /// two dex ids away from one.
+    static func grails(store: CatalogStore, tiers: PriceTiers, excluded: Set<String>,
+                       profile: DiscoverAffinity.Profile,
+                       slots: Int = somedayGrailSlots) -> [String] {
+        guard slots > 0, !profile.species.isEmpty else { return [] }
+        let top = (try? store.topPricedCards(limit: 300)) ?? []
+        guard !top.isEmpty else { return [] }
+        let prices = (try? store.previewPrices(cardIds: top.map(\.id))) ?? [:]
+        let dex = (try? store.dexIds(forCards: top.map(\.id))) ?? [:]
+        return top.lazy
+            .filter { !excluded.contains($0.id) }
+            .filter { (prices[$0.id] ?? 0) > tiers.buyingCeiling }
+            .filter { (dex[$0.id] ?? []).contains { profile.species[$0] != nil } }
+            .prefix(slots)
+            .map(\.id)
+    }
+
+    static func build(store: CatalogStore,
+                      profile: DiscoverAffinity.Profile,
+                      band: PriceBand?,
+                      setGoals: Set<String>,
+                      owned: Set<String>,
+                      tasteIds: Set<String>,
+                      dismissed: Set<String>,
+                      tiers: PriceTiers?,
+                      relatedSpecies: [Int: Double],
+                      maxCards: Int = maxCardsPerShelf) -> [Shelf] {
+        var out: [Shelf] = []
+        let excluded = tasteIds.union(dismissed)
+        var scoringProfile = profile
+        if !relatedSpecies.isEmpty { scoringProfile.species = relatedSpecies }
+
+        /// Cards already placed. Shelves are built in priority order, so a card lands under the
+        /// strongest reason for showing it and appears exactly once.
+        ///
+        /// ⚠️ The spec put this dedup in `ForYouStream`'s round-robin, which is not enough: the
+        /// stream shows one card at a time, but `ForYouShelvesView` renders every row at once.
+        /// Measured on real data, "Because you like Articuno" and "More from 5ban Graphics" led
+        /// with the SAME THREE CARDS — two adjacent rows that read as a rendering bug. Deduping in
+        /// the builder means both surfaces agree, and it is the same greedy principle as
+        /// `speciesSeeds`.
+        var used: Set<String> = []
+
+        /// Whole dollars, for row titles. "$10", never "$10.00".
+        func money(_ amount: Double) -> String { "$\(Int(amount.rounded()))" }
+
+        /// Prices for a candidate set, fetched once and reused by both the seam and the ranking.
+        func prices(_ cards: [CardRecord]) -> [String: Double] {
+            guard !cards.isEmpty else { return [:] }
+            do { return try store.previewPrices(cardIds: cards.map(\.id)) } catch {
+                log.error("shelf read failed: previewPrices — \(error.localizedDescription, privacy: .public)")
+                return [:]
+            }
+        }
+
+        /// The seam. Nothing reaches a shelf except through here.
+        ///
+        /// `buyingRow: false` is passed only by `someday`, the one row allowed above the ceiling —
+        /// which is the whole point of it existing.
+        func admit(_ cards: [CardRecord], _ priced: [String: Double],
+                   buyingRow: Bool = true) -> [CardRecord] {
+            cards.filter {
+                guard !excluded.contains($0.id), !used.contains($0.id) else { return false }
+                return !buyingRow || admitsToBuyingRow(price: priced[$0.id], tiers: tiers)
+            }
+        }
+
+        func rank(_ cards: [CardRecord], _ priced: [String: Double]) -> [String] {
+            guard !cards.isEmpty else { return [] }
+            let dex = read("dexIds") { Array(try store.dexIds(forCards: cards.map(\.id))) }
+            let dexById = Dictionary(uniqueKeysWithValues: dex.map { ($0.key, $0.value) })
+            return cards
+                .map { ($0.id, DiscoverAffinity.score($0, dexIds: dexById[$0.id] ?? [],
+                                                      profile: scoringProfile, band: band,
+                                                      priceUsd: priced[$0.id])) }
+                .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
+                .prefix(maxCards)
+                .map(\.0)
+        }
+
+        /// A shelf with no data does NOT render. Not an empty state, not a placeholder — absent,
+        /// the rule the Supporters row already follows. Distinct from the Movers case, where a bold
+        /// `+$0.00` was a lie about movement; here there is no claim to get wrong.
+        func append(_ kind: Shelf.Kind, id: String, subject: String? = nil,
+                    detail: String? = nil, cards: [CardRecord], tail: [String] = []) {
+            let priced = prices(cards)
+            let keep = maxCards - tail.count
+            // ⚠️ The reserved ids are removed from the BODY candidates first. Deduping the other way
+            // round — ranking everything, then dropping tail ids already present — silently voids the
+            // reservation whenever a reserved card also ranks well, which for a grail of a loved
+            // species is most of the time. The slot has to be reserved, not merely appended.
+            let body = cards.filter { !tail.contains($0.id) }
+            var ids = Array(rank(admit(body, priced, buyingRow: kind != .someday), priced).prefix(keep))
+            ids += tail
+            guard !ids.isEmpty else { return }
+            used.formUnion(ids)
+            out.append(Shelf(id: id, kind: kind, subject: subject, detail: detail, cardIds: ids))
+        }
+
+        // 1. Set goals — the user literally named the set.
+        for setId in setGoals.sorted() {
+            guard let record = (try? store.set(id: setId)) ?? nil else { continue }
+            var cards = read("cardsMissingFromSet(\(setId))") {
+                try store.cardsMissingFromSet(setId, owned: owned, band: band, limit: maxCards * 3)
+            }
+            // ⚠️ In-band alone can starve a goal shelf: `me05` yields 4 cards against a cap of 24.
+            // A four-card row reads as broken, so widen to the whole gap and let affinity order it.
+            if cards.count < minCardsPerShelf {
+                let wider = read("cardsMissingFromSet(\(setId), unbanded)") {
+                    try store.cardsMissingFromSet(setId, owned: owned, band: nil, limit: maxCards * 8)
+                }
+                if !wider.isEmpty { cards = wider }
+            }
+            let remaining = read("cardsMissingFromSet(\(setId), count)") {
+                try store.cardsMissingFromSet(setId, owned: owned, band: nil, limit: Int.max)
+            }.count
+            append(.setGoal, id: "setGoal/\(setId)", subject: record.name,
+                   detail: "\(remaining) left", cards: cards)
+        }
+
+        // 2. Buy signals, and the three intentions.
+        //
+        // ⚠️ **Each row queries its OWN price range.** One shared candidate window cannot serve two
+        // tiers, and assuming it could emptied a row on a real device: that collector's band came
+        // from purchases ($5.13–$33.55, centred on $6.24), so the 600-card window spanned $5.36–
+        // $7.12 and contained ZERO cards above $10. "Worth a think" was structurally impossible to
+        // fill. A window centred on one number cannot reach a tier defined by another.
+        //
+        // The band still exists, but only for AFFINITY SCORING — it describes typical spend. What
+        // is *buyable* is defined by the stated tiers, and they are what select candidates.
+        var buyingCards: [CardRecord] = []
+        let buyingRange = tiers?.band ?? band
+        if let buyingRange {
+            buyingCards = read("cardsInPriceBand") {
+                try store.cardsInPriceBand(buyingRange, limit: buySignalCandidateLimit)
+            }
+            let candidates = admit(buyingCards, prices(buyingCards))
+            let candidateIds = candidates.map(\.id)
+            let byId = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
+
+            let lowIds = read("cardsNearHistoricLow") {
+                try store.cardsNearHistoricLow(candidateIds: candidateIds,
+                                               withinPct: historicLowWithinPct, limit: maxCards * 2)
+            }
+            append(.historicLow, id: "historicLow", cards: lowIds.compactMap { byId[$0] })
+
+            let drops = read("cardsDroppedThisWeek") {
+                try store.cardsDroppedThisWeek(candidateIds: candidateIds,
+                                               maxPct: DiscoverConstants.dealsMaxPct7d, limit: maxCards)
+            }
+            // Already ordered by drop size in SQL, and that ordering IS the reason — don't re-rank.
+            // Still passes `used`, so this shelf obeys cross-shelf dedup like every other one.
+            let dropIds = Array(drops.compactMap { byId[$0.id]?.id }
+                .filter { !used.contains($0) }.prefix(maxCards))
+            if !dropIds.isEmpty {
+                used.formUnion(dropIds)
+                out.append(Shelf(id: "weeklyDrop", kind: .weeklyDrop, subject: nil,
+                                 detail: nil, cardIds: dropIds))
+            }
+        }
+
+        if let tiers {
+            // Its own query, centred on the middle of its own range so the window cannot drift out
+            // of the tier it is meant to fill.
+            let easy = read("cardsInPriceBand(routine)") {
+                try store.cardsInPriceBand(PriceBand(p25: 0.01,
+                                                     p50: tiers.routineCeiling / 2,
+                                                     p75: tiers.routineCeiling),
+                                           limit: buySignalCandidateLimit)
+            }
+            append(.easyAdds, id: "easyAdds", subject: money(tiers.routineCeiling), cards: easy)
+
+            let midpoint = (tiers.routineCeiling + tiers.occasionalCeiling) / 2
+            let occasional = read("cardsInPriceBand(occasional)") {
+                try store.cardsInPriceBand(PriceBand(p25: tiers.routineCeiling + 0.01,
+                                                     p50: midpoint,
+                                                     p75: tiers.occasionalCeiling),
+                                           limit: buySignalCandidateLimit)
+            }
+            append(.worthAThink, id: "worthAThink",
+                   subject: "\(money(tiers.routineCeiling))–\(money(tiers.occasionalCeiling))",
+                   cards: occasional)
+
+            // ⚠️ Ranked by AFFINITY, not by price. Modelled on real data this opens on an $85
+            // Charizard & Braixen rather than the catalog's $3,510 top card — Someday is the user's
+            // dreams, not the most expensive objects in existence. Leading with the latter is
+            // precisely the mistake the deleted cold-start `popularMix` made.
+            let dreams = read("cardsAboveCeiling") {
+                try store.cardsAbovePrice(tiers.buyingCeiling, limit: somedayCandidateLimit)
+            }
+            append(.someday, id: "someday", cards: dreams,
+                   tail: grails(store: store, tiers: tiers, excluded: excluded, profile: profile))
+        }
+
+        // 3. Inferred similarity.
+        let seeds = speciesSeeds(profile.species)
+        let seedNames = (try? store.pokemonNames(dexIds: seeds)) ?? [:]
+        for seed in seeds {
+            guard let name = seedNames[seed] else { continue }
+            let radius = DiscoverAffinity.adjacencyRadius
+            let family = ((seed - radius)...(seed + radius)).filter {
+                $0 > 0 && (profile.species[$0] != nil || relatedSpecies[$0] != nil)
+            }
+            let cards = read("cardsForDexIds(\(seed))") {
+                try store.cardsForDexIds(family, band: band, limit: maxCards * 4)
+            }
+            append(.species, id: "species/\(seed)", subject: name, cards: cards)
+        }
+
+        for artist in profile.artists.sorted(by: { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key })
+            .prefix(maxArtistShelves).map(\.key) {
+            let cards = read("cardsByArtist(\(artist))") { try store.cards(byArtist: artist) }
+            append(.artist, id: "artist/\(artist)", subject: artist, cards: cards)
+        }
+
+        // 4. Exploration: a set AND artist never touched — but IN BAND. Novelty comes from the
+        //    dimension, never from the price. `varietyPicks` made "something new" mean "something
+        //    expensive", which is how a $4,500 card became a recurring recommendation.
+        if buyingRange != nil {
+            let fresh = buyingCards.filter {
+                profile.sets[$0.setId] == nil && ($0.artist.map { profile.artists[$0] == nil } ?? true)
+            }
+            append(.explore, id: "explore", cards: fresh)
+        }
+
+        return out
+    }
+}

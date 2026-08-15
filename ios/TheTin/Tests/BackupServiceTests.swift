@@ -41,8 +41,11 @@ final class BackupServiceTests: XCTestCase {
     private func makeService(collection: LocalCollectionRepository, wants: LocalWantsRepository,
                              setGoals: SetGoalsModel? = nil,
                              debounce: Duration = .seconds(5)) -> BackupService {
+        // A per-service defaults suite: `.standard` is shared by every test in the process (and
+        // survives the run), so the last-written fingerprint would leak between cases.
         BackupService(store: TempDirBackupStore(dir: dir.appendingPathComponent("icloud", isDirectory: true)),
                       collection: collection, wants: wants, setGoals: setGoals, uid: "local",
+                      defaults: UserDefaults(suiteName: "test-\(UUID().uuidString)")!,
                       debounce: debounce, now: { self.fixedNow })
     }
 
@@ -80,7 +83,7 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(service.status, .backedUp(fixedNow))
 
         let snapshot = try await service.loadBackup()
-        XCTAssertEqual(snapshot.schemaVersion, 3)
+        XCTAssertEqual(snapshot.schemaVersion, 4)
         XCTAssertEqual(snapshot.setGoals, ["base1"])
         XCTAssertEqual(snapshot.exportedAt, fixedNow)
         XCTAssertEqual(snapshot.groups.map(\.id), [gid])
@@ -89,6 +92,8 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertNotNil(snapshot.wantEntries?["sv1-25"])
 
         // Two-slot rotation: a second write moves the previous snapshot to the .prev slot.
+        // It has to be a write of something NEW — an unchanged snapshot is skipped now.
+        try await col.addEntry(fixtureEntry(id: "e2", groupId: gid))
         await service.backUpNow()
         let prev = dir.appendingPathComponent("icloud", isDirectory: true)
             .appendingPathComponent(BackupService.prevFileName)
@@ -255,6 +260,55 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(Set(restoredWants.keys), ["a1"])
     }
 
+    // MARK: Sealed products (schema v4)
+
+    /// A v3 backup file has no `sealed` key. It must still decode (as nil), and restoring it must
+    /// leave the device's own sealed products alone rather than wiping them — the same rule
+    /// `setGoals` earns, and the reason both are real Optionals.
+    func testV3BackupDecodesAndLeavesSealedUntouched() async throws {
+        let v3JSON = """
+        {"schemaVersion":3,"exportedAt":"2023-11-14T22:13:20Z","groups":[],"entries":[],
+         "wanted":[],"setGoals":[]}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let snapshot = try decoder.decode(BackupSnapshot.self, from: v3JSON)
+        XCTAssertEqual(snapshot.schemaVersion, 3)
+        XCTAssertNil(snapshot.sealed)
+
+        let (col, wants) = try makeRepos(sub: "deviceV3")
+        try await col.addSealed(SealedEntry(id: "mine", productId: 517_898, qty: 2,
+                                            pricePaid: 900, addedAt: fixedNow))
+        try await makeService(collection: col, wants: wants).performRestore(snapshot: snapshot)
+
+        let sealed = await firstValue(col.sealedStream()) ?? []
+        XCTAssertEqual(sealed.map(\.id), ["mine"], "a v3 backup says nothing about sealed")
+        XCTAssertEqual(sealed.first?.pricePaid, 900)
+    }
+
+    /// A v4 backup carries sealed, and restoring it replaces what's on the device — last writer
+    /// wins, exactly as it does for cards.
+    func testV4BackupCapturesAndRestoresSealed() async throws {
+        let (colA, wantsA) = try makeRepos(sub: "sealedA")
+        try await colA.addSealed(SealedEntry(id: "s1", productId: 517_898, qty: 3, pricePaid: 1350,
+                                             acquiredFrom: "card show", addedAt: fixedNow))
+        await makeService(collection: colA, wants: wantsA).backUpNow()
+
+        let written = try await makeService(collection: colA, wants: wantsA).loadBackup()
+        XCTAssertEqual(written.schemaVersion, 4)
+        XCTAssertEqual(written.sealed?.map(\.id), ["s1"])
+
+        let (colB, wantsB) = try makeRepos(sub: "sealedB")
+        try await colB.addSealed(SealedEntry(id: "replaced", productId: 1, qty: 1, addedAt: fixedNow))
+        try await makeService(collection: colB, wants: wantsB).performRestore(snapshot: written)
+
+        let restored = await firstValue(colB.sealedStream()) ?? []
+        XCTAssertEqual(restored.map(\.id), ["s1"])
+        XCTAssertEqual(restored.first?.qty, 3)
+        XCTAssertEqual(restored.first?.pricePaid, 1350)
+        XCTAssertEqual(restored.first?.acquiredFrom, "card show")
+    }
+
     /// Chasing a set is a backup-worthy change on its own — it must arm the debounce even when
     /// the collection and wishlist never move.
     func testGoalChangeAloneTriggersBackup() async throws {
@@ -294,5 +348,124 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
         let snapshot = try await service.loadBackup()
         XCTAssertEqual(Set(snapshot.entries.map(\.id)), ["e1", "e2"])
+    }
+
+    // MARK: Two devices, one file
+
+    /// A second device with its own UserDefaults and its own clock — the whole point of the
+    /// injection is that these are two devices, not one talking to itself.
+    private func makeDevice(sub: String, at date: Date) throws
+    -> (BackupService, LocalCollectionRepository) {
+        let (collection, wants) = try makeRepos(sub: sub)
+        let service = BackupService(
+            store: TempDirBackupStore(dir: dir.appendingPathComponent("icloud", isDirectory: true)),
+            collection: collection, wants: wants, uid: "local",
+            defaults: UserDefaults(suiteName: "test-\(sub)-\(UUID().uuidString)")!,
+            debounce: .seconds(5), now: { date })
+        return (service, collection)
+    }
+
+    /// The bug, exactly: an idle second device overwrote the phone's newer backup with its own
+    /// staler collection and nothing warned (device pair, 2026-08-10).
+    func testAStalerDeviceRefusesToOverwriteANewerBackup() async throws {
+        let (phone, phoneCollection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await phoneCollection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        let (pad, _) = try makeDevice(sub: "pad", at: fixedNow.addingTimeInterval(60))
+        await pad.backUpNow()   // the iPad is empty and would have clobbered the phone
+
+        XCTAssertEqual(pad.conflict?.entryCount, 1)
+        let onDisk = try await pad.loadBackup()
+        XCTAssertEqual(onDisk.entries.map(\.id), ["e1"], "the phone's backup must survive")
+    }
+
+    /// Taking the other device's backup makes it ours — otherwise the device would refuse to
+    /// back up forever, calling the snapshot it is now running on foreign.
+    func testAcceptingTheConflictRestoresAndThenBacksUpNormally() async throws {
+        let (phone, phoneCollection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await phoneCollection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        let (pad, padCollection) = try makeDevice(sub: "pad", at: fixedNow.addingTimeInterval(60))
+        await pad.backUpNow()
+        try await pad.acceptConflict()
+
+        XCTAssertNil(pad.conflict)
+        let restored = await firstValue(padCollection.entriesStream()) ?? []
+        XCTAssertEqual(restored.map(\.id), ["e1"])
+
+        try await padCollection.addEntry(fixtureEntry(id: "e2", groupId: ""))
+        await pad.backUpNow()
+        XCTAssertNil(pad.conflict, "the backup it restored from is its own now")
+        let onDisk = try await pad.loadBackup()
+        XCTAssertEqual(Set(onDisk.entries.map(\.id)), ["e1", "e2"])
+    }
+
+    /// The escape hatch: this device's data is the one you want, so overwrite deliberately.
+    func testOverwritingTheConflictKeepsThisDevicesData() async throws {
+        let (phone, phoneCollection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await phoneCollection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        let (pad, padCollection) = try makeDevice(sub: "pad", at: fixedNow.addingTimeInterval(60))
+        try await padCollection.addEntry(fixtureEntry(id: "e2", groupId: ""))
+        await pad.backUpNow()
+        XCTAssertNotNil(pad.conflict)
+
+        await pad.overwriteConflict()
+
+        XCTAssertNil(pad.conflict)
+        let onDisk = try await pad.loadBackup()
+        XCTAssertEqual(onDisk.entries.map(\.id), ["e2"])
+    }
+
+    /// The phantom write: a launch that changed nothing produced a fresh `exportedAt` over
+    /// identical data, which kept the idle iPad permanently "newest" and meant it could never
+    /// fall behind — so the conflict guard could never fire on it (device pair, 2026-08-10).
+    func testAnUnchangedSnapshotIsNotWrittenAgain() async throws {
+        let (phone, collection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await collection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        let file = dir.appendingPathComponent("icloud", isDirectory: true)
+            .appendingPathComponent(BackupService.fileName)
+        let first = try Data(contentsOf: file)
+
+        await phone.backUpNow()   // nothing changed in between
+
+        let prev = dir.appendingPathComponent("icloud", isDirectory: true)
+            .appendingPathComponent(BackupService.prevFileName)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: prev.path),
+                       "a skipped write must not rotate the previous slot away")
+        XCTAssertEqual(try Data(contentsOf: file), first)
+    }
+
+    /// …but a real change still writes.
+    func testAChangedSnapshotIsWritten() async throws {
+        let (phone, collection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await collection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+
+        try await collection.addEntry(fixtureEntry(id: "e2", groupId: ""))
+        await phone.backUpNow()
+
+        let onDisk = try await phone.loadBackup()
+        XCTAssertEqual(Set(onDisk.entries.map(\.id)), ["e1", "e2"])
+    }
+
+    /// One device, many launches: writing its own backup repeatedly must never look foreign.
+    func testASingleDeviceNeverConflictsWithItself() async throws {
+        let (phone, collection) = try makeDevice(sub: "phone", at: fixedNow)
+        try await collection.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        await phone.backUpNow()
+        XCTAssertNil(phone.conflict)
+
+        try await collection.addEntry(fixtureEntry(id: "e2", groupId: ""))
+        await phone.backUpNow()
+
+        XCTAssertNil(phone.conflict)
+        let onDisk = try await phone.loadBackup()
+        XCTAssertEqual(Set(onDisk.entries.map(\.id)), ["e1", "e2"])
     }
 }

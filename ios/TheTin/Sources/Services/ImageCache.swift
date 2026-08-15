@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Network
 
 /// Durable, per-device cache for card art. Persists every downloaded image to
 /// Application Support keyed by sha256(url) so a URL is fetched at most once until the user
@@ -11,14 +12,17 @@ actor ImageCache {
 
     private let dir: URL
     private let download: @Sendable (URL) async throws -> Data
+    private let isOnline: @Sendable () -> Bool
     private let fm = FileManager.default
     private var didEnsureDirectory = false
     private var inFlight: [URL: Task<Data?, Never>] = [:]
 
     init(directory: URL = ImageCache.defaultDirectory(),
-         download: @escaping @Sendable (URL) async throws -> Data = ImageCache.defaultDownload) {
+         download: @escaping @Sendable (URL) async throws -> Data = ImageCache.defaultDownload,
+         isOnline: @escaping @Sendable () -> Bool = { Reachability.shared.isSatisfied }) {
         self.dir = directory
         self.download = download
+        self.isOnline = isOnline
     }
 
     /// Cache hits are served WITHOUT entering the actor.
@@ -61,6 +65,15 @@ actor ImageCache {
         // cleared `inFlight`, and start a redundant fetch. `testConcurrentSameURLDownloadsOnce`
         // catches exactly that. Only the miss path pays for this read.
         if let data = Self.readCachedImage(at: file) { return data }
+
+        // No route: this is a known answer, not a download. Without this every missing tile pays a
+        // doomed round trip before the fallback renders — and a convention hall is not airplane
+        // mode, it is a captive portal, so requests do not fail, they HANG. 36 binder pockets then
+        // queue three deep behind a 12-slot gate and the fact sheet arrives minutes later or never.
+        //
+        // ⚠️ Gates STARTING a request only. A monitor that blips unsatisfied while a download is
+        // succeeding must never cancel it — the in-flight task above is untouched by this.
+        guard isOnline() else { return nil }
 
         let download = self.download
         let task = Task<Data?, Never> { [weak self] in
@@ -197,6 +210,10 @@ actor ImageCache {
         let config = URLSessionConfiguration.default
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // Stock is 60 s, which is a minute of grey box per tile on bad wifi. Card art is a few
+        // hundred KB off a CDN: a request still pending at 12 s was never going to land in time to
+        // be useful, and giving up lets the fact sheet render instead.
+        config.timeoutIntervalForRequest = 12
         return URLSession(configuration: config)
     }()
 
@@ -208,6 +225,35 @@ actor ImageCache {
             throw URLError(.badServerResponse)
         }
         return data
+    }
+
+    /// Is there a route to the network at all?
+    ///
+    /// Lives here because `ImageCache` is its only consumer; promote it if a second one appears.
+    ///
+    /// ⚠️ Starts `true` and only ever becomes `false` once the monitor has actually said so. The
+    /// failure mode of guessing wrong in the optimistic direction is one wasted request; guessing
+    /// wrong the other way suppresses every download at launch, before the first path update
+    /// lands, which would look exactly like the bug this whole change is fixing.
+    final class Reachability: @unchecked Sendable {
+        static let shared = Reachability()
+
+        private let monitor = NWPathMonitor()
+        private let lock = NSLock()
+        private var satisfied = true
+
+        var isSatisfied: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return satisfied
+        }
+
+        private init() {
+            monitor.pathUpdateHandler = { [weak self] path in
+                guard let self else { return }
+                lock.lock(); satisfied = path.status == .satisfied; lock.unlock()
+            }
+            monitor.start(queue: DispatchQueue(label: "ai.reyes.thetin.reachability"))
+        }
     }
 
     /// Cheap magic-byte sniff — JPEG/PNG/GIF/WebP. Guards the cache from persisting error bodies

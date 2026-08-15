@@ -98,7 +98,9 @@ struct SetDetailView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .tint(goals.isCollecting(model.set.id) ? .green : .accentColor)
+                    // `.bordered` renders the LABEL in the tint over a ~15% fill, so a bare
+                    // `.green` here is green text on near-white (~2.2:1), not white-on-green.
+                    .tint(goals.isCollecting(model.set.id) ? Color.statusPositive : .accentColor)
                     .padding(.top, 2)
                 }
 
@@ -150,7 +152,7 @@ struct SetDetailView: View {
                     Divider().padding(.vertical, 6)
                     Text("Sealed products").font(.headline)
                     LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(model.sealed) { SealedCard(product: $0) }
+                        ForEach(model.sealed) { SealedCard(product: $0, collection: collection) }
                     }
                 }
             }

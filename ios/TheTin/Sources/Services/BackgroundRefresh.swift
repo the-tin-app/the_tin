@@ -10,6 +10,20 @@ enum BackgroundRefresh {
     static let refreshTaskId = "ai.reyes.thetin.catalog-refresh"
     static let downloadTaskId = "ai.reyes.thetin.catalog-download"
 
+    /// ⚠️ `register` is SKIPPED under XCTest, so submitting is too — the two have to agree.
+    ///
+    /// `submit` raises `NSInternalInconsistencyException` ("No launch handler registered…") when
+    /// its id was never registered, and that is an **ObjC exception, which `try?` does not catch**.
+    /// It killed the test host from `TheTin`'s own `scenePhase == .background` handler, and because
+    /// the app backgrounds at whatever moment the run happens to reach, the corpse landed on a
+    /// different innocent test each time: LensQueue, LocalCollectionRepository and
+    /// WidgetSnapshotWriter one run, CollectionModel's cost-basis split the next — each of which
+    /// passes on its own. Three phantom failures, never the same three.
+    ///
+    /// Lives here rather than beside the caller so every submitter is covered by construction;
+    /// the asymmetry between a guarded `register` and an unguarded `submit` was the whole bug.
+    static let isTesting = NSClassFromString("XCTestCase") != nil
+
     /// Must run before the app finishes launching — called from TheTin.init. Both ids are
     /// declared in BGTaskSchedulerPermittedIdentifiers (project.yml).
     @MainActor static func register(model: AppModel) {
@@ -24,12 +38,14 @@ enum BackgroundRefresh {
     /// Submitted on every background transition and re-submitted from the handler; iOS treats
     /// duplicates as a replace, and submit failures (e.g. simulator) are non-fatal.
     static func scheduleRefresh() {
+        guard !isTesting else { return }
         let request = BGAppRefreshTaskRequest(identifier: refreshTaskId)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 4 * 60 * 60)
         try? BGTaskScheduler.shared.submit(request)
     }
 
     static func scheduleDownload() {
+        guard !isTesting else { return }
         let request = BGProcessingTaskRequest(identifier: downloadTaskId)
         request.requiresNetworkConnectivity = true // Wi-Fi-sized download tolerance
         request.requiresExternalPower = false

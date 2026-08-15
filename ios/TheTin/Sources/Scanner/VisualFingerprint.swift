@@ -24,12 +24,17 @@ enum VisualFingerprint {
         return v.map { Float16($0) }
     }
 
-    static func cosine(_ a: [Float16], _ b: [Float16]) -> Double {
+    /// Generic over `Collection` (not just `[Float16]`, and `a`/`b` need not be the same concrete
+    /// type) so `Matcher.narrow` can score a `[Float16]` query against an `ArraySlice` row of the
+    /// shared reference matrix — no per-row copy — while every existing `[Float16]` call site
+    /// keeps compiling unchanged.
+    static func cosine<A: Collection, B: Collection>(_ a: A, _ b: B) -> Double
+        where A.Element == Float16, B.Element == Float16 {
         precondition(a.count == b.count)
         var dot = 0.0, na = 0.0, nb = 0.0
-        for i in 0..<a.count {
-            let x = Double(a[i]), y = Double(b[i])
-            dot += x * y; na += x * x; nb += y * y
+        for (x, y) in zip(a, b) {
+            let xd = Double(x), yd = Double(y)
+            dot += xd * yd; na += xd * xd; nb += yd * yd
         }
         if na == 0 || nb == 0 { return 0 }
         return dot / (na.squareRoot() * nb.squareRoot())

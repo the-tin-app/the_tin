@@ -152,7 +152,7 @@ struct SheetCell: View {
 /// A tap on any "Print sheet…" entry point. Setting one on a printSheetFlow binding starts the
 /// confirm (>20 pages) → prefetch → render → share flow.
 struct PrintSheetRequest: Identifiable {
-    let title: String        // "For Trade — <divider>" / "Want List"
+    let title: String        // "For Trade — <divider>" / "Wishlist"
     let items: [PrintItem]
     let asOf: String?
     let id = UUID()
@@ -192,7 +192,10 @@ extension PrintSheet {
         let setNames = Dictionary(uniqueKeysWithValues:
             ((try? store.sets()) ?? []).map { ($0.id, $0.name) })
         let prices = (try? store.prices(cardIds: cards.map(\.id))) ?? [:]
-        return PrintSheetRequest(title: "Want List",
+        // "Wishlist", not "Want List". #159 renamed the door and every screen behind it; the
+        // printed sheet was the one surface that kept the old name, so the PDF you hand across a
+        // table was titled something the app no longer calls anything.
+        return PrintSheetRequest(title: "Wishlist",
                                  items: wantItems(cards: cards, setNames: setNames, prices: prices),
                                  asOf: (try? store.priceAsOf()) ?? nil)
     }

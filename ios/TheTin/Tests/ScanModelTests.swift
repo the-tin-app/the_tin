@@ -34,6 +34,18 @@ final class ScanModelTests: XCTestCase {
         }
     }
 
+    /// Replays like `ReplaySource` and records the frame-rate transitions the model asks for,
+    /// so the camera throttling can be asserted without a camera.
+    private final class ThrottleSpySource: FrameSource, @unchecked Sendable {
+        let buffer: CVPixelBuffer; let count: Int
+        private(set) var idleStates: [Bool] = []
+        init(buffer: CVPixelBuffer, count: Int) { self.buffer = buffer; self.count = count }
+        func stream() -> AsyncStream<CVPixelBuffer> {
+            AsyncStream { cont in for _ in 0..<count { cont.yield(buffer) }; cont.finish() }
+        }
+        func setIdle(_ idle: Bool) { idleStates.append(idle) }
+    }
+
     // The fingerprint fixture ids (card_a/card_b) aren't real catalog cards, so real
     // OCR-narrowing can't produce them — inject a deterministic stub pool so these staging
     // regression tests don't depend on OCR/catalog fixture alignment (recognition accuracy
@@ -373,6 +385,101 @@ final class ScanModelTests: XCTestCase {
         XCTAssertEqual(model.lookedUpCardId, "card_b")
     }
 
+    /// Freezing the EVENT was never enough: the cascade behind it still ran, so every second
+    /// spent reading a looked-up card was a second of OCR + ORB + RANSAC whose result `handle`
+    /// discards on arrival. In look-up mode — scan, read, dismiss, repeat — that is most of a
+    /// session, and it is why the phone gets hot.
+    func testPresentedLookUpCardStopsTheCascadeNotJustItsEvent() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let narrowing = CountingNarrowing(poolIds: ["card_a"])
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: try CandidateIndex(store: catalog)),
+                              narrowing: narrowing, staging: ScanStagingStore.inMemory(),
+                              store: catalog, fingerThrottle: 1)
+        model.lookedUpCardId = "card_a"          // a card is on screen
+
+        let source = ThrottleSpySource(buffer: pb, count: 6)
+        await model.run(source: source)
+
+        XCTAssertEqual(narrowing.calls, 0, "no frame may be OCR'd while its result is pre-discarded")
+        XCTAssertEqual(source.idleStates, Array(repeating: true, count: 6),
+                       "and the camera must sit at its idle rate for as long as the sheet is up")
+    }
+
+    /// The interaction between #154 and #155, which merged clean and were each correct alone.
+    ///
+    /// A borrowed viewfinder (the trade picker) sets `lookedUpCardId` as a HANDOFF: `onChange`
+    /// gives the card to the caller and clears it, and nothing is ever presented over the camera.
+    /// Throttling on "a card was recognised" instead of "something is on screen" idled the camera
+    /// on every card — and because the waking frame then arrives at the *idle* rate, that is up to
+    /// half a second of dead viewfinder per card, in the one flow built for working through a pile
+    /// without pause. Both PRs' own tests pass either way; only the pair is wrong.
+    func testABorrowedViewfinderKeepsScanningWhileHandingOffEachCard() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let narrowing = CountingNarrowing(poolIds: ["card_a"])
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: try CandidateIndex(store: catalog)),
+                              narrowing: narrowing, staging: ScanStagingStore.inMemory(),
+                              store: catalog, fingerThrottle: 1)
+        model.forcesLookUp = true                // the trade picker owns this viewfinder
+        model.lookedUpCardId = "card_a"          // mid-handoff, NOT presented
+
+        let source = ThrottleSpySource(buffer: pb, count: 6)
+        await model.run(source: source)
+
+        XCTAssertFalse(model.isModalPresented, "a handoff is not a presentation")
+        XCTAssertFalse(source.idleStates.contains(true),
+                       "the camera must never idle mid-handoff — the next card is already coming")
+        XCTAssertGreaterThan(narrowing.calls, 0, "and the cascade has to keep running to read it")
+
+        // The chooser is the case that IS on screen in both worlds, borrowed or not.
+        model.ambiguous = [ChooserOption(id: "card_a", card: nil, setName: "S",
+                                         year: nil, setTotal: nil)]
+        XCTAssertTrue(model.isModalPresented, "a chooser is really presented, borrowed or not")
+    }
+
+    /// The hot-phone case: the scanner left open and face-up on a table between stacks. Nothing
+    /// to look at, and at the capture default a segmentation network running against a tabletop
+    /// ~22 times a second for as long as it takes to get the next cards ready.
+    func testCameraIdlesOnAnEmptyViewfinderAndWakesOnACard() {
+        var throttle = CameraThrottle()
+        XCTAssertFalse(throttle.update(cardVisible: true, modal: false),
+                       "a card in view scans at the full rate")
+        for _ in 0..<(CameraThrottle.emptyFramesBeforeIdle - 1) {
+            XCTAssertFalse(throttle.update(cardVisible: false, modal: false),
+                           "a dropout shorter than the threshold must not throttle a live scan")
+        }
+        XCTAssertTrue(throttle.update(cardVisible: false, modal: false), "an empty viewfinder idles")
+        XCTAssertFalse(throttle.update(cardVisible: true, modal: false), "and the next card wakes it")
+    }
+
+    /// A hand-held card already flickers out of the detector for runs of frames — that is what
+    /// `graceMisses` exists to absorb. Idle at or below it and the camera would throttle itself
+    /// in the middle of a scan that is going fine.
+    func testIdleThresholdClearsTheLockGatesDropoutGrace() {
+        XCTAssertGreaterThan(CameraThrottle.emptyFramesBeforeIdle, LockConfig().graceMisses)
+    }
+
+    /// Dismissing a sheet has to restore the scanning rate on the next frame, and the next card
+    /// is usually NOT in frame yet when it does. Letting the empty count run during the sheet
+    /// would leave the camera idling into the next scan, costing it the wake-up it just earned.
+    func testAModalSheetIdlesTheCameraAndReleasesItOnTheNextFrame() {
+        var throttle = CameraThrottle()
+        for _ in 0..<(CameraThrottle.emptyFramesBeforeIdle + 5) {
+            XCTAssertTrue(throttle.update(cardVisible: false, modal: true), "a sheet idles at once")
+        }
+        XCTAssertFalse(throttle.update(cardVisible: false, modal: false),
+                       "dismissing returns to the scanning rate immediately, empty viewfinder or not")
+    }
+
     /// The source is captured ONTO the draft at scan time, not read from the model at commit.
     /// Drafts persist to disk and survive relaunch; the picker deliberately does not — read it
     /// at commit and a pack scanned last night commits untagged.
@@ -486,5 +593,60 @@ final class ScanModelTests: XCTestCase {
                               textGate: TextGate(index: index), narrowing: StubNarrowing(),
                               staging: ScanStagingStore.inMemory(), store: catalog)
         XCTAssertNil(model.stagingVia)
+    }
+
+    // MARK: Borrowing the scanner
+
+    /// A trade reads a stranger's card onto the table. Staging it would file someone else's
+    /// property into your tin, so the caller pins look-up — and the lock must obey the pin even
+    /// though the user's own mode says Add.
+    func testForcedLookUpStagesNothingEvenWhenTheUsersModeIsAdd() async throws {
+        let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: staging, store: catalog, fingerThrottle: 1)
+        let previous = AppConfig.scanLookUpMode
+        defer { AppConfig.scanLookUpMode = previous }
+        AppConfig.scanLookUpMode = false
+        model.isLookUpMode = false
+        model.forcesLookUp = true
+
+        await model.run(source: ReplaySource(buffer: pb, count: 6))
+
+        XCTAssertEqual(model.lookedUpCardId, "card_a", "the caller still needs the card")
+        XCTAssertTrue(staging.drafts.isEmpty, "a borrowed viewfinder must never stage")
+    }
+
+    /// Borrowing must not rewrite the Scan tab's sticky mode. Setting `isLookUpMode` would have
+    /// been the one-line version and it persists — so a single trade would silently leave the
+    /// scanner in Look up the next time the user opened it to catalogue a box.
+    func testForcingLookUpLeavesTheUsersPersistedModeAlone() throws {
+        // No frames needed: this is about the two flags, not about what a lock does with them.
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let catalog = try FixtureCatalog.make()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: try Matcher(store: store, codebook: try Codebook.bundled(in: bundle())),
+                              detector: CardDetector(), textGate: TextGate(index: index),
+                              narrowing: StubNarrowing(), staging: .inMemory(), store: catalog)
+        let previous = AppConfig.scanLookUpMode
+        defer { AppConfig.scanLookUpMode = previous }
+        AppConfig.scanLookUpMode = false
+        model.isLookUpMode = false
+
+        model.forcesLookUp = true
+        XCTAssertTrue(model.isLookingUp, "the pipeline follows the pin")
+        XCTAssertFalse(model.isLookUpMode, "the picker still shows the user's own choice")
+        XCTAssertFalse(AppConfig.scanLookUpMode, "and nothing was written to their preference")
+
+        model.forcesLookUp = false
+        XCTAssertFalse(model.isLookingUp, "handing the scanner back restores Add mode")
     }
 }

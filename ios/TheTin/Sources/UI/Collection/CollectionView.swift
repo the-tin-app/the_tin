@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import TipKit
 
 @MainActor @Observable
 final class CollectionModel {
@@ -22,6 +23,18 @@ final class CollectionModel {
     private(set) var allEntries: [CollectionEntry] = []
     /// Copies that have left, most recently gone first.
     private(set) var soldEntries: [CollectionEntry] = []
+    /// The sealed products you own, sold boxes filtered out — same owned/sold split as `entries`,
+    /// made in the one place so no consumer has to remember it.
+    private(set) var sealed: [SealedEntry] = []
+    /// Every sealed row on file, owned and sold alike. Only for whole-collection rewrites (undo,
+    /// backup) and CSV export, where dropping the sold rows would look like a successful save.
+    private(set) var allSealed: [SealedEntry] = []
+    /// tcgplayer_id → catalog product, for the sealed you own. Loaded only when there IS sealed:
+    /// `allSealedProducts()` is a full table scan over ~2,500 rows, and a tin with no boxes must
+    /// not pay for it on every entries-stream emission.
+    private(set) var sealedProducts: [Int: SealedProduct] = [:]
+    /// What the sealed you own is worth, in the same best-effort terms as `tinValue`.
+    private(set) var sealedValue: (total: Double, priced: Int, boxes: Int) = (0, 0, 0)
     private(set) var prices: [String: PriceRecord] = [:]
     private(set) var variantsByCard: [String: [VariantPrice]] = [:]
     private(set) var conditionsByCard: [String: [ConditionPrice]] = [:]
@@ -42,6 +55,22 @@ final class CollectionModel {
     private(set) var tradeEntries: [CollectionEntry] = []
     /// What the trade list is worth, in the same best-effort terms as the tin total.
     private(set) var tradeValue: (total: Double, pricedCards: Int, totalCards: Int) = (0, 0, 0)
+    /// Whether the entries stream has delivered at least once. `entries` starts empty and is
+    /// filled asynchronously, so `entries.isEmpty` on its own cannot tell "you own nothing" from
+    /// "we haven't read the file yet".
+    private(set) var hasLoadedEntries = false
+    /// Whether the LAST launch ended holding cards. Captured at init, not read on demand: a plain
+    /// `UserDefaults` read inside a computed property is invisible to SwiftUI's observation (the
+    /// same trap that made the Watching dot survive visiting its screen), and the value can't
+    /// change before the first emission anyway.
+    private let hadCardsLastLaunch = UserDefaults.standard.bool(forKey: "hasCards")
+
+    /// True only between launch and the entries stream's first emission, and only for a tin that
+    /// had cards last time. `CollectionView`'s empty branch states "Your tin is empty" out loud,
+    /// which is a lie told to exactly the people who own the most — a first run has
+    /// `hadCardsLastLaunch == false` and falls straight through to the real empty state.
+    var isAwaitingFirstLoad: Bool { !hasLoadedEntries && hadCardsLastLaunch }
+
     private var streamTasks: [Task<Void, Never>] = []
     /// Mirrors the header's numbers to the home-screen widget. nil until AppModel injects one
     /// (and in unit tests that don't care) — publishing is then a no-op.
@@ -73,6 +102,7 @@ final class CollectionModel {
                 // that is already correct, rather than each consumer remembering to exclude sold
                 // rows — which is the version of this feature that would have quietly broken the
                 // tin total the first time somebody added a screen.
+                self?.hasLoadedEntries = true
                 self?.allEntries = all
                 self?.entries = all.filter { !$0.isSold }
                 self?.soldEntries = all.filter(\.isSold).sorted {
@@ -82,6 +112,31 @@ final class CollectionModel {
                 self?.publishWidgetSnapshot()
             }
         })
+        streamTasks.append(Task { [weak self] in
+            guard let stream = self?.repository.sealedStream() else { return }
+            for await all in stream {
+                self?.allSealed = all
+                self?.sealed = all.filter { !$0.isSold }
+                self?.reloadSealedProducts()
+            }
+        })
+    }
+
+    /// Re-read the catalog rows behind the sealed you own, then re-total. Skips the table scan
+    /// entirely when there's no sealed — which is every tin that hasn't used the feature.
+    private func reloadSealedProducts() {
+        guard !allSealed.isEmpty else {
+            sealedProducts = [:]
+            sealedValue = (0, 0, 0)
+            return
+        }
+        // Keyed off `allSealed`, not `sealed`: a SOLD box still needs its product name for the
+        // CSV export and the report, even though it contributes nothing to the value.
+        let wanted = Set(allSealed.map(\.productId))
+        let all = (try? store.allSealedProducts()) ?? []
+        sealedProducts = Dictionary(uniqueKeysWithValues:
+            all.filter { wanted.contains($0.tcgplayerId) }.map { ($0.tcgplayerId, $0) })
+        sealedValue = sealed.marketValue(products: sealedProducts)
     }
 
     /// The catalog artifact was swapped under the live store (daily update installed
@@ -89,6 +144,7 @@ final class CollectionModel {
     func catalogDidChange() {
         catalogGeneration += 1   // views keying caches (card names) off the catalog watch this
         reloadPrices()
+        reloadSealedProducts()
         publishWidgetSnapshot()
     }
     private(set) var catalogGeneration = 0
@@ -335,8 +391,12 @@ final class CollectionModel {
                 restoredEntries.append(entry)
             }
         }
+        // `sealed` is passed through UNCHANGED. Undo only ever restores cards and dividers, but
+        // `replaceAll` rewrites the whole file — omitting sealed here would make pressing Undo on
+        // a deleted divider silently destroy every sealed product in the tin.
         await write("undo that") {
-            try await repository.replaceAll(groups: restoredGroups, entries: restoredEntries)
+            try await repository.replaceAll(groups: restoredGroups, entries: restoredEntries,
+                                            sealed: sealed)
         }
     }
 
@@ -404,6 +464,18 @@ final class CollectionModel {
         await write("import the cards") { try await repository.addEntries(entries) }
     }
 
+    /// One more of exactly this copy — same printing, condition, grade and cost basis.
+    ///
+    /// Pulling a second identical card out of a pack is the most ordinary thing that happens to a
+    /// collection, and it cost a row tap, a mode switch or a swipe, a sheet, a stepper and a Save.
+    /// Goes through `saveEntry`, so the id is known and it takes the update path rather than
+    /// minting a second row that can't be told apart from the first.
+    func addCopy(_ entry: CollectionEntry) async {
+        var bumped = entry
+        bumped.qty += 1
+        await saveEntry(bumped)
+    }
+
     func moveEntry(_ entry: CollectionEntry, toGroup groupId: String) async {
         var moved = entry
         moved.groupId = groupId
@@ -466,6 +538,34 @@ final class CollectionModel {
         await write("bring that card back") { try await repository.updateEntry(restored) }
     }
 
+    /// Write the outgoing half of an executed trade — copies gone as sold-with-no-proceeds, plus
+    /// the shrunken remainder of any stack traded in part.
+    ///
+    /// ONE write, deliberately: a stack split across two writes could crash between them and
+    /// leave a copy that had both left and stayed. `TradeSession.plan` builds both rows together
+    /// for exactly this reason.
+    func applyTradePlan(_ plan: TradePlan) async -> Bool {
+        guard !plan.updatedEntries.isEmpty else { return true }
+        return await write("record that trade") {
+            try await repository.applyEntryEdits(updated: plan.updatedEntries, deletedIds: [])
+        }
+    }
+
+    /// Put the tin back to before the trade — the outgoing half only; the trade screen clears the
+    /// incoming drafts out of the tray itself.
+    ///
+    /// A backup snapshot is written before every execute, but restoring one reverses everything
+    /// done since, so it is no answer to "wrong card". This is: the original rows written back
+    /// over the sold ones, and any row the plan MINTED (the sold half of a stack traded in part)
+    /// deleted — without that, those copies would exist twice.
+    func revertTradePlan(_ plan: TradePlan) async -> Bool {
+        guard !plan.originalEntries.isEmpty || !plan.mintedIds.isEmpty else { return true }
+        return await write("undo that trade") {
+            try await repository.applyEntryEdits(updated: plan.originalEntries,
+                                                 deletedIds: plan.mintedIds)
+        }
+    }
+
     func deleteEntry(id: String) async {
         // Sold rows are deletable too (from the Gone section), so look in the full list — else
         // the write lands but the undo offer never appears.
@@ -475,6 +575,31 @@ final class CollectionModel {
         offerUndo(UndoableDelete(message: "Removed \(cardName(removed.cardId))",
                                  groups: [], entries: [removed]))
     }
+
+    // MARK: Sealed products
+
+    /// Add or update a sealed product. `allSealed`, not `sealed`: editing a sold box from a future
+    /// "gone" surface must route a known id to `updateSealed` rather than minting a duplicate.
+    ///
+    /// There is deliberately no add-or-increment twin rule here (`CollectionEntry.isSameCopy`).
+    /// Sealed has no condition/grade/printing to compare, so "the same product twice" is just a
+    /// quantity — which the form already asks for directly.
+    @discardableResult
+    func saveSealed(_ entry: SealedEntry) async -> Bool {
+        if allSealed.contains(where: { $0.id == entry.id }) {
+            return await write("save the sealed product") { try await repository.updateSealed(entry) }
+        }
+        return await write("save the sealed product") { try await repository.addSealed(entry) }
+    }
+
+    func deleteSealed(id: String) async {
+        await write("remove the sealed product") { try await repository.deleteSealed(id: id) }
+    }
+
+    /// The catalog row behind a sealed entry, or nil when this catalog doesn't carry it (an older
+    /// artifact, or a product that has since left the feed). Callers show the raw id rather than
+    /// dropping the row — you still own the box.
+    func sealedProduct(_ entry: SealedEntry) -> SealedProduct? { sealedProducts[entry.productId] }
 
     // MARK: Trade list
 
@@ -648,7 +773,10 @@ enum DividerPalette {
 /// it; long-press for rename/delete/list; the reorder toolbar button turns on drag handles.
 struct CollectionView: View {
     /// Where the empty-tin call-to-action routes; the host (MainTabView) switches tabs.
-    enum GetStartedTab { case scan, browse }
+    /// `importCSV` is not a tab — it opens Settings with the file picker already up. It rides on
+    /// this enum anyway because the host is the only thing that can present Settings, and inventing
+    /// a second callback for one case would be two ways to say "leave this screen".
+    enum GetStartedTab { case scan, browse, importCSV }
 
     @Bindable var model: CollectionModel
     let store: CatalogStore
@@ -656,6 +784,10 @@ struct CollectionView: View {
     var onGetStarted: ((GetStartedTab) -> Void)? = nil
     /// Scanner pack already installed — flips the empty-tin CTA from "set up" to "scan".
     var scannerReady = false
+    /// The pack itself, for the trade screen: reading a stranger's card onto the table is the one
+    /// place outside the Scan tab that needs a live viewfinder, and typing a name you can't see
+    /// across a table was the alternative.
+    var pack: ScannerPackModel? = nil
     /// Hands the current query to the catalog-wide Search tab. Without it, searching your tin for
     /// something you don't own dead-ended in a note pointing at another tab — the app admitting a
     /// seam instead of crossing it.
@@ -666,6 +798,18 @@ struct CollectionView: View {
     /// mirror of the context menu's "Flip through cards" — actions can't tap the invisible
     /// NavigationLinks. (Row activation itself opens the list-first landing.)
     var openPager: ((String?) -> Void)? = nil
+    /// The scan tray a trade's incoming cards land in. nil disables executing a trade rather
+    /// than silently dropping the cards.
+    var staging: ScanStagingStore? = nil
+    /// Written before a trade mutates anything — the one destructive action on these screens.
+    var backup: BackupService? = nil
+    /// Lands the user on the tray after a trade, so filing what they just took is the obvious
+    /// next step rather than something they discover later.
+    var onExecutedTrade: (() -> Void)? = nil
+    /// Where a scanned label goes. Routed through the host (and so through `AppModel.openCard`)
+    /// rather than pushed straight onto the path, so scanning a sticker in-app and scanning the
+    /// SAME sticker with the system Camera cannot end up behaving differently.
+    var onOpenLabel: ((String, CardHighlight?) -> Void)? = nil
     /// Opens the settings sheet, which the host owns.
     ///
     /// The gear used to be a SECOND `.toolbar` applied by `RootView` over this view. On iPadOS 18
@@ -680,13 +824,28 @@ struct CollectionView: View {
     @State private var renameGroupName = ""
     @State private var editMode: EditMode = .inactive
     @State private var printRequest: PrintSheetRequest?
+    /// Label printing is owned by the app, not this screen — see `AppModel.labelRequest`.
+    @Environment(AppModel.self) private var app: AppModel?
+    /// ⚠️ The label scanner is the app's THIRD AVCaptureSession and it opens from HERE precisely
+    /// because the Tin has no camera running — see QRScannerView's header.
+    @State private var showingLabelScanner = false
+    @State private var labelScanError: String?
     @State private var showingReport = false
     @State private var deletingGroup: CardGroup?
     /// Second-stage confirmation for the one action that destroys cards rather than just a
     /// divider. Set only from the first alert's destructive button.
     @State private var destroyingGroup: CardGroup?
     @State private var searchText = ""
+    /// The price date last seen on Watching, driving that row's dot.
+    ///
+    /// ⚠️ `@AppStorage`, NOT `AppConfig.watchingLastSeenAsOf`. The value was always written
+    /// correctly; a plain `UserDefaults` read is invisible to SwiftUI, so this list never
+    /// re-rendered to notice and the dot survived visiting the screen. It only appeared to work
+    /// when something *else* invalidated the view — adding a hunt mutates the `@Observable`
+    /// wants model, which is exactly the case it was first tested with (2026-08-01).
+    @AppStorage("watchingLastSeenAsOf") private var watchingLastSeenAsOf: String?
     @State private var editingEntry: CollectionEntry?
+    @State private var editingSealed: SealedEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var searchIndex = CardSearchIndex()
 
@@ -696,8 +855,18 @@ struct CollectionView: View {
     var body: some View {
         List {
             if searchText.isEmpty {
+                fundingRow
                 if model.catalogUnavailable { catalogNotice.tinRow() }
-                if model.entries.isEmpty {
+                if model.isAwaitingFirstLoad {
+                    // NOT `emptyTin`: until the stream delivers we don't know the tin is empty,
+                    // and telling someone who owns cards that they own none reads as data loss —
+                    // the same objection the sealed comment below makes about a different cause.
+                    // A redacted `header` is exactly what lands here, so nothing jumps.
+                    header.tinRow()
+                        .redacted(reason: .placeholder)
+                        .disabled(true) // it's a placeholder figure — don't let it open Portfolio
+                        .accessibilityHidden(true)
+                } else if model.entries.isEmpty {
                     // A first-run tin has nothing to total, riffle, or file — so the screen's job
                     // is to say what a tin is and offer the two ways to fill it. Dividers still
                     // show if any exist (deleting the last card mustn't strand them), and the
@@ -706,7 +875,15 @@ struct CollectionView: View {
                     ForEach(model.groups) { group in
                         groupRow(group).tinRow()
                     }
-                    if let wants, !wants.wanted.isEmpty { wishlistLink(wants).tinRow() }
+                    // Also on the empty branch: a tin holding only sealed products owns no CARDS,
+                    // which is what this branch is about — but it isn't empty, and hiding what
+                    // you do own behind a "your tin is empty" screen would read as data loss.
+                    sealedSection
+                    if let wants, !wants.wanted.isEmpty {
+                        wishlistLink(wants).tinRow()
+                        TipView(WatchingTip()).tinRow()
+                        watchingLink(wants).tinRow()
+                    }
                 } else {
                     header.tinRow()
                     everythingRow.tinRow()
@@ -719,7 +896,15 @@ struct CollectionView: View {
                         Task { await model.reorderGroups(ids: ids) }
                     }
                     newDividerRow.tinRow()
+                    sealedSection
                     if let wants { wishlistLink(wants).tinRow() }
+                    // Gated on having something hearted, unlike the always-shown Wishlist row
+                    // above: with nothing hearted the screen has nothing to say, and a row that
+                    // opens an empty screen is the same broken promise the trade row avoids below.
+                    if let wants, !wants.wanted.isEmpty {
+                        TipView(WatchingTip()).tinRow()
+                        watchingLink(wants).tinRow()
+                    }
                     // Not on the empty branch: with no entries there is nothing to trade, so the
                     // row would only be a promise the tin can't keep — same rule as the wishlist.
                     tradeLink.tinRow()
@@ -733,6 +918,7 @@ struct CollectionView: View {
         .environment(\.editMode, $editMode)
         .printSheetFlow($printRequest)
         .collectionReportFlow(isActive: $showingReport, collection: model, store: store)
+        .fullScreenCover(isPresented: $showingLabelScanner) { labelScannerCover }
         .navigationTitle("The Tin")
         .navigationBarTitleDisplayMode(.inline)
         // ONE toolbar for this screen, every item explicitly placed. Items used to arrive from two
@@ -768,6 +954,14 @@ struct CollectionView: View {
                     }
                     Button { showingReport = true }
                         label: { Label("Collection report (PDF)", systemImage: "doc.text") }
+                        .disabled(model.entries.isEmpty)
+                    // Both label actions live in this menu rather than as their own toolbar items:
+                    // the comment above is not hypothetical — a third trailing item is DROPPED on
+                    // iPadOS 18, and menu contents are never subject to toolbar overflow.
+                    Button { labelScanError = nil; showingLabelScanner = true }
+                        label: { Label("Scan a label", systemImage: "qrcode.viewfinder") }
+                    Button { app?.labelRequest = LabelPrintRequest(title: "The Tin", entries: model.entries) }
+                        label: { Label("Print labels", systemImage: "qrcode") }
                         .disabled(model.entries.isEmpty)
                 } label: {
                     // A Label, not a bare Image: when iPadOS folds this into its overflow menu it
@@ -865,13 +1059,24 @@ struct CollectionView: View {
                 GroupDetailView(model: model, group: group, store: store, onGetStarted: onGetStarted)
             }
         }
-        .navigationDestination(for: WantedRoute.self) { _ in
+        .navigationDestination(for: WantedRoute.self) { route in
             if let wants {
-                WantedView(store: store, wants: wants, collection: model, goals: goals)
+                WantedView(store: store, wants: wants, collection: model, goals: goals,
+                           initialScope: route.scope)
+            }
+        }
+        .navigationDestination(for: WatchingRoute.self) { _ in
+            if let wants {
+                WatchingView(store: store, wants: wants)
             }
         }
         .navigationDestination(for: TradeRoute.self) { _ in
             TradeListView(model: model, store: store)
+        }
+        .navigationDestination(for: TradeSessionRoute.self) { route in
+            TradeSessionView(model: model, store: store, wants: wants, staging: staging,
+                             backup: backup, offer: route.offer, pack: pack,
+                             onExecuted: onExecutedTrade)
         }
         .navigationDestination(for: TinAllCardsRoute.self) { _ in
             GroupDetailView(model: model, group: nil, store: store, onGetStarted: onGetStarted)
@@ -882,8 +1087,18 @@ struct CollectionView: View {
                     EntryFormView(card: card, groups: model.groups, existing: entry,
                                   variants: model.variantsByCard[entry.cardId] ?? [],
                                   conditions: model.conditionsByCard[entry.cardId] ?? [],
-                                  matrix: model.matrixByCard[entry.cardId] ?? []) { updated in
+                                  matrix: model.matrixByCard[entry.cardId] ?? [],
+                                  onDelete: { await model.deleteEntry(id: $0.id) }) { updated in
                         await model.saveEntry(updated)
+                    }
+                }
+            }
+        }
+        .sheet(item: $editingSealed) { entry in
+            if let product = model.sealedProduct(entry) {
+                NavigationStack {
+                    SealedEntryFormView(product: product, existing: entry) {
+                        await model.saveSealed($0)
                     }
                 }
             }
@@ -891,18 +1106,62 @@ struct CollectionView: View {
         .navigationDestination(for: CardID.self) { cardID in
             if let card = try? store.card(id: cardID.raw) {
                 CardDetailView(model: CardDetailModel(store: store, card: card, history: CatalogPriceHistory(store: store)),
-                               store: store, collection: model, wants: wants)
+                               store: store, collection: model, wants: wants,
+                               highlight: cardID.highlight)
             }
         }
         .onChange(of: model.catalogGeneration) { searchIndex.clear() }
     }
 
+    /// Broken out of `body` — and `handleScannedCode` broken out of THIS — for the reason this
+    /// file already documents twice: inline, the multi-statement scanner closure inside the
+    /// modifier chain sent the type checker away for twenty minutes and never came back.
+    private var labelScannerCover: some View {
+        NavigationStack {
+            QRScannerView(onCode: handleScannedCode)
+                .ignoresSafeArea()
+                // CENTRED, not bottom-aligned. Against a live camera feed a small capsule at the
+                // bottom edge reads as chrome and is easy to miss entirely — on the iPad it was
+                // never noticed at all (device test, step 8). The middle of the viewfinder is
+                // where the user is already looking, because that is where they are aiming.
+                // Clears itself, so a stale "that isn't a Tin label" can't sit over a later
+                // successful aim. Keyed on the message: a second failure restarts the countdown.
+                .scanErrorBanner($labelScanError)
+                .navigationTitle("Scan a label")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Done") { showingLabelScanner = false }
+                    }
+                }
+        }
+    }
+
+    /// Returns true to stop scanning. A QR that isn't one of our labels returns FALSE so the
+    /// viewfinder keeps running — pointing at a random sticker must not dead-end the camera.
+    private func handleScannedCode(_ code: String) -> Bool {
+        guard let url = URL(string: code), let payload = LabelPayload.parse(url) else {
+            withAnimation { labelScanError = "That isn't a Tin label." }
+            return false
+        }
+        showingLabelScanner = false
+        onOpenLabel?(payload.cardId,
+                     CardHighlight(printing: payload.printing, condition: payload.condition))
+        return true
+    }
+
     /// Only rendered once there's a card to total — `emptyTin` owns the first-run screen.
     private var header: some View {
         let v = model.tinValue
+        // Sealed is added to the DISPLAYED total but deliberately not folded into `tinValue`
+        // itself: forty-odd consumers of that number (GroupStats, the widget, per-divider totals,
+        // set completion) all mean "cards", and quietly redefining it would change all of them.
+        // This is the one place the two are shown as one figure — and it has to be, because
+        // tapping it opens the Portfolio, which totals them together.
+        let total = v.total + model.sealedValue.total
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text(v.total, format: WidgetShared.tinCurrency(v.total))
+                Text(total, format: WidgetShared.tinCurrency(total))
                     .font(.system(.largeTitle, design: .rounded).weight(.bold))
                     .monospacedDigit()
                     .contentTransition(.numericText())
@@ -910,10 +1169,14 @@ struct CollectionView: View {
                     .font(.body.weight(.semibold)).foregroundStyle(.tertiary)
             }
             .background { navLink(PortfolioRoute()) }
-            .accessibilityLabel("Tin value, \(v.total.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
+            .accessibilityLabel("Tin value, \(total.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
             .accessibilityHint("Shows portfolio value history")
             Text("\(v.totalCards) cards in your tin · \(v.pricedCards) of \(v.totalCards) priced")
                 .font(.footnote).foregroundStyle(.secondary)
+            if model.sealedValue.boxes > 0 {
+                Text("plus ^[\(model.sealedValue.boxes) sealed box](inflect: true)")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             if let asOf = model.priceAsOf {
                 AsOfLabel(date: asOf)
             }
@@ -926,8 +1189,10 @@ struct CollectionView: View {
     /// surprise — and drops the download line once the pack is installed.
     private var emptyTin: some View {
         VStack(spacing: 16) {
+            // `.largeTitle` + `.imageScale(.large)` lands at ~41 pt and GROWS; `.system(size: 44)`
+            // pinned the glyph while the title under it tripled.
             Image(systemName: "square.stack.3d.up")
-                .font(.system(size: 44)).foregroundStyle(.tint)
+                .font(.largeTitle).imageScale(.large).foregroundStyle(.tint)
             VStack(spacing: 6) {
                 Text("Your tin is empty")
                     .font(.system(.title2, design: .serif).italic().weight(.semibold))
@@ -946,6 +1211,16 @@ struct CollectionView: View {
                     title: "Browse sets",
                     caption: "Pick a set, find the card, add it by hand.",
                     prominent: false) { onGetStarted?(.browse) }
+                // The option for everyone who did NOT start collecting today. Both choices above
+                // assume an empty collection and a card in your hand; someone arriving with 3,000
+                // cards in another app or a spreadsheet had nothing here, and the importer that
+                // would have taken them — multi-format, and it restores our own export's dividers —
+                // was three levels down in Settings. Formats are named because the answer to "will
+                // it take mine?" decides whether this is worth tapping.
+                getStartedOption(
+                    title: "Import a list",
+                    caption: "Bring a collection in from a CSV — ours, or an export from another app.",
+                    prominent: false) { onGetStarted?(.importCSV) }
             }
             .padding(.top, 4)
         }
@@ -997,8 +1272,11 @@ struct CollectionView: View {
                     Label("Flip through cards", systemImage: "rectangle.stack")
                 }
                 Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
-                    label: { Label("Print sheet…", systemImage: "printer") }
+                    label: { Label("Trade sheet…", systemImage: "printer") }
                     .disabled(model.entries(in: group.id).isEmpty)
+                Button { app?.labelRequest = LabelPrintRequest(title: group.name, entries: entries) }
+                    label: { Label("Print labels…", systemImage: "qrcode") }
+                    .disabled(entries.isEmpty)
                 Button(role: .destructive) { deletingGroup = group }
                     label: { Label("Delete divider", systemImage: "trash") }
             }
@@ -1021,7 +1299,7 @@ struct CollectionView: View {
                 renameGroupName = group.name; renamingGroupId = group.id
             }
             .accessibilityAction(named: "Flip through cards") { openPager?(group.id) }
-            .accessibilityAction(named: "Print sheet") {
+            .accessibilityAction(named: "Trade sheet") {
                 if !entries.isEmpty {
                     printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store)
                 }
@@ -1051,11 +1329,30 @@ struct CollectionView: View {
     /// Honest degraded state when the catalog store can't be read: without it, names fall
     /// back to raw card ids and prices just vanish, which reads as data loss. Same visual
     /// pattern as PortfolioView's history notice.
+    /// The support strip, as the first ROW of the tin rather than chrome pinned above it.
+    ///
+    /// It used to ride on `safeAreaInset(edge: .top)`, which cements it to the top of the screen:
+    /// scroll the tin and it stays, permanently occupying the line above your collection's value.
+    /// That is the wrong weight for an ask that nothing in the app depends on — it should be
+    /// visible when you arrive and gone the moment you're doing something else. As a list row it
+    /// scrolls away with everything above the fold and comes back when you scroll home.
+    ///
+    /// Only when `searchText.isEmpty`: mid-search the list is results, and a donation ask is not
+    /// one of them.
+    @ViewBuilder private var fundingRow: some View {
+        if let funding = app?.funding {
+            FundingBar(funding: funding)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
+        }
+    }
+
     private var catalogNotice: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Couldn't read the card catalog", systemImage: "exclamationmark.triangle")
                 .font(.subheadline.weight(.medium))
-            Text("Card names and prices can't be shown right now — your collection itself is safe. Restart the app, or re-download the catalog in Settings.")
+            Text("Card names and prices can't be shown right now — your tin itself is safe. Restart the app, or re-download the catalog in Settings.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1075,6 +1372,37 @@ struct CollectionView: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+
+    /// Sealed products you own, as a section beside the dividers. Rendered straight into the List
+    /// (not wrapped in a container) so each row keeps its own swipe actions.
+    ///
+    /// Hidden entirely when empty — an empty section advertising a feature you aren't using is
+    /// noise, and sealed is a feature most collectors will never touch.
+    @ViewBuilder private var sealedSection: some View {
+        if !model.sealed.isEmpty {
+            SealedSectionHeader(value: model.sealedValue).tinRow()
+            ForEach(model.sealed) { entry in
+                SealedRow(entry: entry, product: model.sealedProduct(entry))
+                    .tinRow()
+                    .contentShape(Rectangle())
+                    .onTapGesture { editingSealed = entry }
+                    // Reveal-then-tap IS the confirmation, and no full swipe, so it can't fire by
+                    // accident — the same rule the tin's card rows follow.
+                    .swipeActions(allowsFullSwipe: false) {
+                        Button("Remove", role: .destructive) {
+                            Task { await model.deleteSealed(id: entry.id) }
+                        }
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button { editingSealed = entry } label: { Label("Edit", systemImage: "pencil") }
+                    }
+                    .accessibilityAction(named: "Edit") { editingSealed = entry }
+                    .accessibilityAction(named: "Remove") {
+                        Task { await model.deleteSealed(id: entry.id) }
+                    }
+            }
+        }
     }
 
     /// Whole-tin search: "do I own this?" answered from the Tin root — a card-shop moment,
@@ -1114,9 +1442,16 @@ struct CollectionView: View {
                 }
                 .swipeActions(edge: .leading) {
                     Button { editingEntry = entry } label: { Label("Edit", systemImage: "pencil") }
+                    Button {
+                        app?.labelRequest = LabelPrintRequest(title: cardName(entry), entries: [entry])
+                    } label: { Label("Label", systemImage: "qrcode") }
+                        .tint(.teal)
                 }
                 .contextMenu {
                     Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
+                    Button {
+                        app?.labelRequest = LabelPrintRequest(title: cardName(entry), entries: [entry])
+                    } label: { Label("Print label", systemImage: "qrcode") }
                 }
             }
         }
@@ -1133,8 +1468,23 @@ struct CollectionView: View {
 
     private func wishlistLink(_ wants: WantsModel) -> some View {
         // One row for both kinds of wanting: sets you're collecting and singles you're hunting.
-        pinnedLink(title: "Wanted", systemImage: "heart", tint: .pink,
+        pinnedLink(title: "Wishlist", systemImage: "heart", tint: .pink,
                    count: wants.wanted.count + (goals?.setIds.count ?? 0), route: WantedRoute())
+    }
+
+    /// What the cards you care about have been doing. Sits under Wishlist because it is about the
+    /// same cards — the wishlist is the list, this is the news.
+    /// ⚠️ **No count, deliberately.** This row is not a container of N things — the screen behind
+    /// it shows hunts, wishlist drops and grail trends, three different subsets that change on
+    /// their own. Any single number is either wrong or just repeats Wishlist's. It shipped briefly
+    /// with `wants.wanted.count`, which read as 72 beside Wishlist's 74 (Wishlist also counts set
+    /// goals) and meant nothing to anyone. The dot carries "there's something new here", which
+    /// is the only thing this row needs to say.
+    private func watchingLink(_ wants: WantsModel) -> some View {
+        pinnedLink(title: "Watching", systemImage: "binoculars", tint: .teal,
+                   count: nil, route: WatchingRoute(),
+                   dot: WatchingModel.hasUnseen(asOf: model.priceAsOf,
+                                                lastSeen: watchingLastSeenAsOf))
     }
 
     /// The other half of the wishlist: what you'll give up. Sits beside it because "hunting" and
@@ -1145,13 +1495,21 @@ struct CollectionView: View {
     }
 
     /// The pinned rows under the dividers — same shape, so they read as a pair.
+    /// `count` is optional: a row that isn't a container of countable things omits it rather
+    /// than showing a number that means nothing (see `watchingLink`).
     private func pinnedLink<V: Hashable>(title: String, systemImage: String, tint: Color,
-                                         count: Int, route: V) -> some View {
+                                         count: Int?, route: V, dot: Bool = false) -> some View {
         HStack {
             Image(systemName: systemImage).foregroundStyle(tint)
             Text(title)
+            if dot {
+                Circle().fill(.tint).frame(width: 7, height: 7)
+                    .accessibilityLabel("New since you last looked")
+            }
             Spacer()
-            Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
+            if let count {
+                Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
+            }
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)

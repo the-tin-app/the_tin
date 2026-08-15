@@ -89,6 +89,55 @@ final class ScannerPackModelTests: XCTestCase {
         XCTAssertEqual(pack.installedVersion, 1)
     }
 
+    /// An update must not tear the installed pack down. The Scan tab does show the progress view
+    /// for the duration (a deliberate call — keeping the viewfinder alive meant crossing SwiftUI
+    /// `switch` branches and restarting the capture session), but the pack itself has to stay
+    /// intact: `isScannerUsable` going false mid-update means the update wall is being shown
+    /// because the scanner is *gone*, not because it is busy, and a failed transfer would then
+    /// leave a user with no scanner at all rather than the one they started with.
+    @MainActor
+    func testScannerStaysUsableThroughoutAnUpdate() async throws {
+        // Parts format, because that is the only format the NAS serves.
+        let env = try FingerprintUpdaterTestEnv.makeParts(version: 1)
+        _ = try await env.updater.ensureLatest()
+        let (v2, files) = FingerprintUpdaterTestEnv.partsManifest(version: 2, sqlite: env.sqlite,
+                                                                  partSize: 4096)
+        env.remote.partsManifest = v2
+        for (path, data) in files { env.remote.files[path] = data }
+        let pack = try makePack(env: env)
+        await pack.refresh()
+        XCTAssertTrue(pack.updateAvailable)
+        XCTAssertTrue(pack.isScannerUsable, "installed pack must be live before the update starts")
+
+        pack.startDownload()
+        XCTAssertTrue(pack.isDownloading)
+        XCTAssertTrue(pack.isScannerUsable, "the installed pack must keep serving mid-download")
+        await pack.waitForDownload()
+
+        XCTAssertTrue(pack.isScannerUsable, "and after the swap, against the new pack")
+        XCTAssertEqual(pack.installedVersion, 2)
+        XCTAssertFalse(pack.updateAvailable)
+    }
+
+    /// The DEBUG rehearsal switch: rewinding the recorded version must reproduce the case above
+    /// exactly — update offered, pack file still on disk and still serving the scanner. If it ever
+    /// deleted or invalidated the pack it would be testing a first-install, not an update.
+    @MainActor
+    func testDebugRewindOffersAnUpdateWithoutTouchingThePack() async throws {
+        let env = try FingerprintUpdaterTestEnv.make(version: 2)
+        _ = try await env.updater.ensureLatest()
+        let bytes = try Data(contentsOf: env.paths.databaseURL)
+        let pack = try makePack(env: env)
+
+        pack.debugRewindInstalledVersion()
+        await pack.refresh()
+
+        XCTAssertEqual(pack.installedVersion, 1, "recorded version must drop by one")
+        XCTAssertTrue(pack.updateAvailable, "the server's v2 must now read as newer")
+        XCTAssertEqual(pack.phase, .ready, "the installed pack keeps serving the scanner")
+        XCTAssertEqual(try Data(contentsOf: env.paths.databaseURL), bytes, "pack file must be untouched")
+    }
+
     /// The opposite case: a bumped fpVersion means the installed pack would silently mismatch,
     /// so it genuinely has to be replaced before scanning again.
     @MainActor

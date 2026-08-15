@@ -19,7 +19,7 @@ final class CardDetailModel {
     private(set) var variants: [VariantPrice] = []
     private(set) var matrix: [MatrixPrice] = []
     private(set) var gradedByPrinting: [GradedPrintingPrice] = []
-    let gradedSales: [GradedSale]
+    private(set) var gradedSales: [GradedSale] = []
     private(set) var population: [PopulationRow] = []
     /// Population grouped by grading company (PSA/CGC/Beckett/SGC) for the picker-driven section.
     /// `population` above stays PSA-only — it backs the price-based "Grade it?" ROI, which has no
@@ -41,30 +41,85 @@ final class CardDetailModel {
     private let store: CatalogStore
     private let history: PriceHistoryProviding
 
+    /// `init` does NO catalog work. It used to run twelve synchronous GRDB queries, and it is
+    /// constructed inside a `navigationDestination` closure — so every push paid all twelve on the
+    /// main thread, mid-transition. That is a latent watchdog hang (`0x8BADF00D`), which is
+    /// uncatchable and never reaches Crashlytics, and it was the standing suspect for the build-21
+    /// hang whose faulting stack was a `NavigationStack` push. `load()` does the reads off-main.
     init(store: CatalogStore, card: CardRecord, history: PriceHistoryProviding) {
         self.card = card
         self.store = store
         self.history = history
         self.tier = CatalogTier(rawValue: AppConfig.catalogTier) ?? .average
-        price = try? store.price(cardId: card.id)
-        conditions = (try? store.conditionPrices(cardId: card.id)) ?? []
-        variants = (try? store.variantPrices(cardId: card.id)) ?? []
-        matrix = (try? store.matrixPrices(cardId: card.id)) ?? []
-        gradedByPrinting = (try? store.gradedPrintingPrices(cardId: card.id)) ?? []
-        gradedSales = (try? store.gradedSales(cardId: card.id)) ?? []
-        population = (try? store.population(cardId: card.id)) ?? []
-        populationGroups = (try? store.populationByGrader(cardId: card.id)) ?? []
-        deltas = (try? store.deltas(cardId: card.id)) ?? []
+    }
+
+    /// Everything the detail screen reads from the catalog, gathered in one off-main hop.
+    private struct Loaded: Sendable {
+        var setName: String?
+        var year: String?
+        var price: PriceRecord?
+        var conditions: [ConditionPrice] = []
+        var variants: [VariantPrice] = []
+        var matrix: [MatrixPrice] = []
+        var gradedByPrinting: [GradedPrintingPrice] = []
+        var gradedSales: [GradedSale] = []
+        var population: [PopulationRow] = []
+        var populationGroups: [GraderPopulation] = []
+        var deltas: [DeltaRecord] = []
+        var availableConditions: [Condition] = []
+        var availableGrades: [Grade] = []
+    }
+
+    private var isLoaded = false
+
+    /// Idempotent — `.task` re-fires whenever the view reappears, and a second full read of the
+    /// catalog per back-swipe is exactly the cost this move was meant to remove.
+    func load() async {
+        guard !isLoaded else { return }
+        let (store, card, tier) = (self.store, self.card, self.tier)
+        let out = await Task.detached(priority: .userInitiated) {
+            CardDetailModel.read(store: store, card: card, tier: tier)
+        }.value
+
+        setName = out.setName
+        year = out.year
+        price = out.price
+        conditions = out.conditions
+        variants = out.variants
+        matrix = out.matrix
+        gradedByPrinting = out.gradedByPrinting
+        gradedSales = out.gradedSales
+        population = out.population
+        populationGroups = out.populationGroups
+        deltas = out.deltas
+        availableConditions = out.availableConditions
+        availableGrades = out.availableGrades
+        overlayCondition = out.availableConditions.contains(.nearMint) ? .nearMint : nil
+        overlayGrade = out.availableGrades.first   // highest available grade, or nil
+        isLoaded = true
+    }
+
+    nonisolated private static func read(store: CatalogStore, card: CardRecord,
+                                         tier: CatalogTier) -> Loaded {
+        var out = Loaded()
+        out.price = try? store.price(cardId: card.id)
+        out.conditions = (try? store.conditionPrices(cardId: card.id)) ?? []
+        out.variants = (try? store.variantPrices(cardId: card.id)) ?? []
+        out.matrix = (try? store.matrixPrices(cardId: card.id)) ?? []
+        out.gradedByPrinting = (try? store.gradedPrintingPrices(cardId: card.id)) ?? []
+        out.gradedSales = (try? store.gradedSales(cardId: card.id)) ?? []
+        out.population = (try? store.population(cardId: card.id)) ?? []
+        out.populationGroups = (try? store.populationByGrader(cardId: card.id)) ?? []
+        out.deltas = (try? store.deltas(cardId: card.id)) ?? []
         if tier == .expert {
-            availableConditions = (try? store.availableConditions(cardId: card.id)) ?? []
-            availableGrades = (try? store.availableGrades(cardId: card.id)) ?? []
+            out.availableConditions = (try? store.availableConditions(cardId: card.id)) ?? []
+            out.availableGrades = (try? store.availableGrades(cardId: card.id)) ?? []
         }
-        overlayCondition = availableConditions.contains(.nearMint) ? .nearMint : nil
-        overlayGrade = availableGrades.first   // highest available grade, or nil
         if let set = try? store.set(id: card.setId) {
-            setName = set.name
-            if let date = set.releaseDate, date.count >= 4 { year = String(date.prefix(4)) }
+            out.setName = set.name
+            if let date = set.releaseDate, date.count >= 4 { out.year = String(date.prefix(4)) }
         }
+        return out
     }
 
     func delta(_ kind: DeltaRecord.Kind, _ key: String = "") -> DeltaRecord? {
@@ -101,12 +156,36 @@ final class CardDetailModel {
 }
 
 struct CardDetailView: View {
-    @Bindable var model: CardDetailModel
+    /// ⚠️ `@State`, NOT a passed-in `@Bindable`. Every call site builds this model inside a
+    /// `navigationDestination` closure, and that closure re-runs whenever the PARENT screen's body
+    /// re-evaluates — which hearting a card does, because the parent reads the same `WantsModel`.
+    /// A stored property would take the fresh, empty model; `.task` (no id) does not re-fire, so
+    /// `load()` never runs again and the screen falls to "No sales data for this card" until you
+    /// back out and re-enter. `@State` keeps the first model for the life of this pushed screen.
+    /// (Invisible before the read moved out of `init` — a rebuilt model used to arrive populated.)
+    @State private var model: CardDetailModel
     let store: CatalogStore
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    /// What a scanned label said about the copy in your hand. Scopes the printing menu and tints
+    /// the matching condition tile; nil for every other way of reaching this screen.
+    var highlight: CardHighlight? = nil
+
+    init(model: CardDetailModel, store: CatalogStore,
+         collection: CollectionModel? = nil, wants: WantsModel? = nil,
+         highlight: CardHighlight? = nil) {
+        _model = State(wrappedValue: model)
+        self.store = store
+        self.collection = collection
+        self.wants = wants
+        self.highlight = highlight
+    }
+
     @State private var showingAddSheet = false
+    @State private var sharing: SharePayload?
     @State private var editingEntry: CollectionEntry?
+    /// Label printing is owned by the app, not this screen — see `AppModel.labelRequest`.
+    @Environment(AppModel.self) private var app: AppModel?
     @State private var editingWishlist = false
     @State private var selectedPrinting: String?
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
@@ -130,8 +209,17 @@ struct CardDetailView: View {
         if let selectedPrinting, let v = model.variants.first(where: { $0.printing == selectedPrinting }) {
             return v
         }
+        // A label states which printing this copy is, so honour it until the user picks another.
+        // Resolved HERE rather than seeded into `selectedPrinting` on appear: `model.variants` is
+        // filled by `load()`, so an .onAppear seed would race an empty array and silently do
+        // nothing. ⚠️ `matches`, never `==` — a PPT key ("Reverse Holofoil") never equals a
+        // CardVariant rawValue, which is exactly what that bridge exists for.
+        if let labelled = highlight?.printing,
+           let v = model.variants.first(where: { labelled.matches(printing: $0.printing) }) {
+            return v
+        }
         let def = CardVariant.defaultFor(rarity: model.card.rarity)
-        return model.variants.first { def.matches(printing: $0.printing) } ?? model.variants.first
+        return def.row(in: model.variants) ?? model.variants.first
     }
 
     var body: some View {
@@ -246,7 +334,9 @@ struct CardDetailView: View {
                         // e.g. "Unlimited Holofoil"→.holo→matches "Holofoil"; "1st Edition
                         // Holofoil"→.firstEdition→matches "1st Edition"; "Unlimited"→.regular→
                         // matches "Normal".
-                        let printingVariant = currentPrinting.flatMap { p in CardVariant.allCases.first { $0.matches(printing: p.printing) } }
+                        // A print run ("Cosmos Holo") maps to itself, so it shows no graded rows
+                        // rather than borrowing plain Holofoil's — graded_by_printing has none.
+                        let printingVariant = currentPrinting.flatMap { p in CardVariant(rawValue: p.printing) }
                         let printingGraded = printingVariant.map { v in model.gradedByPrinting.filter { v.matches(printing: $0.printing) } } ?? []
                         // Graded (PSA) prices — only grades with data appear. When the selected
                         // printing has its own graded row for a grade, that value replaces the
@@ -281,7 +371,8 @@ struct CardDetailView: View {
                                     ForEach(Condition.allCases.compactMap { c in printingMatrix.first { $0.condition == c } }) { cell in
                                         PriceTile(label: cell.condition.label, value: cell.usd,
                                                   delta: model.delta(.matrix, "\(p.printing)|\(cell.condition.rawValue)")
-                                                      ?? model.delta(.condition, cell.condition.rawValue))
+                                                      ?? model.delta(.condition, cell.condition.rawValue),
+                                                  highlighted: cell.condition == highlight?.condition?.catalog)
                                     }
                                 }
                             } else {
@@ -289,7 +380,8 @@ struct CardDetailView: View {
                                     ForEach(model.conditions) { cp in
                                         PriceTile(label: cp.condition.label, value: cp.usd,
                                                   delta: model.delta(.condition, cp.condition.rawValue),
-                                                  footnote: cp.salesCount.map { "\($0) sale\($0 == 1 ? "" : "s")" })
+                                                  footnote: cp.salesCount.map { "\($0) sale\($0 == 1 ? "" : "s")" },
+                                                  highlighted: cp.condition == highlight?.condition?.catalog)
                                     }
                                 }
                                 if let p = currentPrinting, !model.conditions.isEmpty {
@@ -361,11 +453,22 @@ struct CardDetailView: View {
         }
         .navigationTitle(model.card.name)
         .navigationBarTitleDisplayMode(.inline)
+        // The header (art, name, number, artist) comes straight off `card`, so it draws on the
+        // first frame and the price sections fill in behind it — the body was already written
+        // against optionals and empty arrays, so no spinner and no gating is needed.
+        .task { await model.load() }
         .task(id: "\(model.overlayCondition?.rawValue ?? "-")|\(model.overlayGrade?.rawValue ?? "-")") {
+            // Folded into the existing task rather than given a `.task` of its own: this view's
+            // toolbar and sheet chain is already split out of `body` to stay inside the type
+            // checker's budget, and `SettingsView` failed the build outright this week for adding
+            // exactly one modifier too many. Opening a card IS viewing it, so this is the honest
+            // moment; re-running on an overlay change is harmless, the id de-duplicates.
+            AppConfig.recordRecentCard(model.card.id)
             await model.loadHistory()
         }
         .toolbar { detailToolbar }
         .sheet(item: $marketplaceURL) { SafariSheet(url: $0.url) }
+        .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
         .sheet(isPresented: $showingAddSheet) {
             if let collection {
                 NavigationStack {
@@ -421,15 +524,14 @@ struct CardDetailView: View {
             }
         }
         ToolbarItem {
-            ShareLink(
-                item: CardShareLink.url(card: model.card, setName: model.setName),
-                subject: Text(model.card.name),
-                message: Text("Check out this card on The Tin"),
-                preview: SharePreview(
-                    model.setName.map { "\(model.card.name) · \($0)" } ?? model.card.name,
-                    image: Image(systemName: "rectangle.portrait.on.rectangle.portrait")
-                )
-            ) {
+            // Not a `ShareLink` — see `ShareSheet`. This was the last one left, and it was left
+            // because it looked immune: it worked on an iPad Pro simulator while the list screens
+            // failed. That was an artefact of the SIMULATOR'S OS, not of this call site. On the
+            // real iPad (A10, iOS 18.7.9) it collapses to an ellipsis bubble and never opens.
+            Button {
+                sharing = SharePayload(url: CardShareLink.url(card: model.card,
+                                                              setName: model.setName))
+            } label: {
                 Image(systemName: "square.and.arrow.up")
             }
             .accessibilityLabel("Share card")
@@ -461,21 +563,37 @@ struct CardDetailView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tint)
                 ForEach(entries) { entry in
-                    Button { editingEntry = entry } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(sleeveText(entry)).font(.caption)
-                                Text("·").font(.caption).foregroundStyle(.tertiary)
-                                Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                                Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                    HStack(spacing: 8) {
+                        Button { editingEntry = entry } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(sleeveText(entry)).font(.caption)
+                                    Text("·").font(.caption).foregroundStyle(.tertiary)
+                                    Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                                }
+                                paidLine(entry)
                             }
-                            paidLine(entry)
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Edit this copy")
+                        // A sibling of the edit button, not a glyph inside it: a tappable control
+                        // nested in another button is a hit-testing coin flip. This is the screen
+                        // you are on right after adding a card, so the verb belongs here rather
+                        // than back on the list you'd have to navigate to.
+                        Button {
+                            app?.labelRequest = LabelPrintRequest(title: model.card.name,
+                                                                  entries: [entry])
+                        } label: {
+                            Image(systemName: "qrcode").font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+                        .accessibilityLabel("Print label for this copy")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Edit this copy")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -489,7 +607,8 @@ struct CardDetailView: View {
                     NavigationStack {
                         EntryFormView(card: model.card, groups: collection.groups, existing: entry,
                                       variants: model.variants, conditions: model.conditions,
-                                      matrix: model.matrix) { updated in
+                                      matrix: model.matrix,
+                                      onDelete: { await collection.deleteEntry(id: $0.id) }) { updated in
                             await collection.saveEntry(updated)
                         }
                     }
@@ -556,7 +675,7 @@ struct CardDetailView: View {
                 Image(systemName: "arrow.right").font(.system(size: 8))
                 Text(now, format: .currency(code: "USD"))
                 Text("· \(change >= 0 ? "+" : "−")\(abs(change) / paid, format: .percent.precision(.fractionLength(0)))")
-                    .foregroundStyle(change >= 0 ? .green : .red)
+                    .foregroundStyle(change >= 0 ? Color.statusPositive : Color.statusNegative)
             }
             .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
             .accessibilityElement(children: .ignore)
@@ -763,7 +882,12 @@ struct CardDetailView: View {
                 Spacer()
                 Image(systemName: "arrow.up.right").font(.caption2).foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 8)
+            // 26pt icon + 8pt above and below is a 42pt row — two short of the 44pt HIG minimum,
+            // which is exactly the size where a miss feels like the app ignored you rather than
+            // like you missed. `minHeight` rather than more padding so the row doesn't grow when
+            // Dynamic Type has already pushed it past 44.
+            .padding(.vertical, 9)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -783,7 +907,7 @@ struct CardDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(verdictHeadline(roi))
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(roi.verdict == .grade ? AnyShapeStyle(.green)
+                    .foregroundStyle(roi.verdict == .grade ? AnyShapeStyle(Color.statusPositive)
                                                            : AnyShapeStyle(.primary))
                     .padding(.top, 6)
                 // Expected-value math: per-grade odds × PSA price. "≈" marks interpolated
@@ -799,7 +923,8 @@ struct CardDetailView: View {
                         Spacer()
                         Text("\(row.isEstimate ? "≈" : "")\(row.value, format: .currency(code: "USD"))")
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(row.isEstimate ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
+                            .foregroundStyle(row.isEstimate ? AnyShapeStyle(Color.statusCaution)
+                                                            : AnyShapeStyle(.primary))
                     }
                 }
                 HStack {
@@ -810,7 +935,7 @@ struct CardDetailView: View {
                 }
                 if roi.hasEstimates {
                     Text("≈ estimated from nearby grades — no recorded sales at that grade.")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption2).foregroundStyle(Color.statusCaution)
                 }
                 if let gem = roi.gemRate {
                     HStack {
@@ -841,7 +966,7 @@ struct CardDetailView: View {
                 }
                 if roi.playedWarning {
                     Text("Your copy is moderately played or worse — played cards rarely gem.")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption2).foregroundStyle(Color.statusCaution)
                 }
                 Text("Estimate only — not what this specific copy will cost. Once you grade it, record the actual fee on the entry for accurate cost-basis and insurance reports.")
                     .font(.caption2).foregroundStyle(.tertiary)
@@ -894,6 +1019,8 @@ private struct PriceTile: View {
     let value: Double?
     var delta: DeltaRecord? = nil
     var footnote: String? = nil
+    /// This is the condition a scanned label says the copy in your hand is in.
+    var highlighted: Bool = false
 
     var body: some View {
         VStack(spacing: 2) {
@@ -912,5 +1039,10 @@ private struct PriceTile: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            if highlighted {
+                RoundedRectangle(cornerRadius: 10).strokeBorder(Color.accentColor, lineWidth: 2)
+            }
+        }
     }
 }

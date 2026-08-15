@@ -39,7 +39,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
@@ -53,6 +53,8 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan your cards to identify them and add to your collection.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Attach your own photos of a card to its entry, for insurance records.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

@@ -30,10 +30,14 @@ class _LimitReached(Exception):
 def make_cached_loader(cache_dir=CACHE_DIR):
     os.makedirs(cache_dir, exist_ok=True)
 
-    def load(card_id, image_base):
-        path = os.path.join(cache_dir, f"{card_id}.webp")
+    def load(card_id, image_url):
+        # The catalog query now hands us a ready URL (tcgdex .webp OR the TCGplayer CDN .jpg),
+        # so keep its extension — cv2 sniffs content, but a .jpg cached as .webp is a trap for
+        # whoever next looks in the cache dir.
+        ext = ".jpg" if image_url.lower().endswith(".jpg") else ".webp"
+        path = os.path.join(cache_dir, f"{card_id}{ext}")
         if not os.path.exists(path):
-            url = f"{image_base}/high.webp"
+            url = image_url
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             try:
                 with urllib.request.urlopen(req, timeout=30, context=_SSL_CTX) as r:

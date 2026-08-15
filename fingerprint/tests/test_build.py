@@ -6,11 +6,12 @@ from fpcore import build, codebook as cb, fpdb, packing
 
 def _make_catalog(path):
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT, image_base TEXT)")
-    conn.executemany("INSERT INTO card(id, set_id, image_base) VALUES (?,?,?)", [
-        ("card_a", "s1", "base/a"),
-        ("card_b", "s1", "base/b"),
-        ("card_null", "s1", None),  # skipped: null image_base
+    conn.execute("CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT, image_base TEXT, "
+                 "image_url TEXT, tcgplayer_id INTEGER)")
+    conn.executemany("INSERT INTO card(id, set_id, image_base, image_url, tcgplayer_id) VALUES (?,?,?,?,?)", [
+        ("card_a", "s1", "base/a", None, None),
+        ("card_b", "s1", "base/b", None, None),
+        ("card_null", "s1", None, None, None),  # no art anywhere -> not fingerprintable
     ])
     conn.commit()
     conn.close()
@@ -21,7 +22,7 @@ def _fixture_loader():
         "card_a": cv2.imread("tests/fixtures/card_a.png", cv2.IMREAD_COLOR),
         "card_b": cv2.imread("tests/fixtures/card_b.png", cv2.IMREAD_COLOR),
     }
-    return lambda card_id, image_base: imgs.get(card_id)
+    return lambda card_id, image_url: imgs.get(card_id)
 
 
 def _codebook():
@@ -86,3 +87,29 @@ def test_stratified_sample_deterministic():
     assert a == b
     assert len(a) == 4  # 2 per set x 2 sets
     assert all(len(t) == 2 for t in a)  # (card_id, image_base)
+
+
+def test_cards_without_tcgdex_art_are_fingerprinted_from_the_tcgplayer_cdn(tmp_path):
+    """The scanner used to select on image_base alone, so 1,416 cards the app displays
+    perfectly well (every MEP promo, all of me05) had no fingerprint and could not scan."""
+    cat = str(tmp_path / "catalog.sqlite")
+    conn = sqlite3.connect(cat)
+    conn.execute("CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT, image_base TEXT, "
+                 "image_url TEXT, tcgplayer_id INTEGER)")
+    conn.executemany("INSERT INTO card(id, set_id, image_base, image_url, tcgplayer_id) VALUES (?,?,?,?,?)", [
+        ("tcgdex", "s1", "base/a", None, 111),          # tcgdex wins when present
+        ("mep-046", "s1", None, None, 699870),          # the Chikorita: CDN fallback
+        ("empty_base", "s1", "", None, 699871),         # '' is not art
+        ("legacy", "s1", None, "https://legacy/x.jpg", None),
+        ("nothing", "s1", None, None, None),            # still excluded
+    ])
+    conn.commit()
+    conn.close()
+
+    rows = dict(sqlite3.connect(cat).execute(
+        f"SELECT id, {build.IMAGE_URL_SQL} FROM card WHERE {build.FINGERPRINTABLE_WHERE}").fetchall())
+    assert set(rows) == {"tcgdex", "mep-046", "empty_base", "legacy"}
+    assert rows["tcgdex"] == "base/a/high.webp"
+    assert rows["mep-046"] == "https://tcgplayer-cdn.tcgplayer.com/product/699870_in_1000x1000.jpg"
+    assert rows["empty_base"] == "https://tcgplayer-cdn.tcgplayer.com/product/699871_in_1000x1000.jpg"
+    assert rows["legacy"] == "https://legacy/x.jpg"

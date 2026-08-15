@@ -26,15 +26,15 @@ def main():
 
     cat = sqlite3.connect(args.catalog)
     rows = cat.execute(
-        "SELECT id, image_base, set_id FROM card WHERE image_base IS NOT NULL").fetchall()
+        f"SELECT id, {build.IMAGE_URL_SQL}, set_id FROM card WHERE {build.FINGERPRINTABLE_WHERE}").fetchall()
     cat.close()
     sample = build.stratified_sample(rows, args.per_set, args.max_cards, args.seed)
     print(f"sampled {len(sample)} cards for training")
 
     loader = make_cached_loader()
     card_descriptors = []
-    for i, (card_id, image_base) in enumerate(sample):
-        bgr = loader(card_id, image_base)
+    for i, (card_id, image_url) in enumerate(sample):
+        bgr = loader(card_id, image_url)
         if bgr is None:
             continue
         _, desc = d.extract(canonicalize.canonicalize(bgr))

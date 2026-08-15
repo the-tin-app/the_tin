@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// One entry of the collection as a list row: art thumbnail, name, sleeve details, value —
 /// plus which divider it lives behind when the list spans the whole tin.
@@ -17,7 +18,7 @@ struct CollectionEntryRow: View {
             if let card {
                 CardImageView(card: card, quality: "low").frame(width: 44)
                 VStack(alignment: .leading) {
-                    Text(card.name)
+                    Text(card.name).lineLimit(2)
                     Text("×\(entry.qty)\(entry.variantValue.map { " · \($0.label)" } ?? "")\(entry.condition.map { " · \($0)" } ?? "")\(entry.gradeValue.map { " · \($0.label)" } ?? "")")
                         .font(.caption).foregroundStyle(.secondary)
                     if let dividerName {
@@ -49,13 +50,25 @@ struct GroupDetailView: View {
         var id: String { rawValue }
     }
 
+    /// What tapping a row does. A mode rather than a per-row chip: the chip had to be squeezed in
+    /// between the card name and its price on every row forever, to serve a verb used on a handful
+    /// of them. Per-screen and not persisted — a remembered mode means coming back a week later to
+    /// a tin where taps mysteriously don't open cards.
+    private enum RowTap: String, CaseIterable, Identifiable {
+        case details = "Tap opens details", edit = "Tap opens edit"
+        var id: String { rawValue }
+    }
+
     @Bindable var model: CollectionModel
     let group: CardGroup?   // nil = the whole tin ("Everything")
     let store: CatalogStore
     @State private var sort: EntrySort = .newest
+    @State private var rowTap: RowTap = .details
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
     @State private var printRequest: PrintSheetRequest?
+    /// Label printing is owned by the app, not this screen — see `AppModel.labelRequest`.
+    @Environment(AppModel.self) private var app: AppModel?
     var onGetStarted: ((CollectionView.GetStartedTab) -> Void)? = nil
     @State private var searchIndex = CardSearchIndex()
     // Bulk refiling — stock List multi-select, the same gesture Photos and Files use.
@@ -71,11 +84,16 @@ struct GroupDetailView: View {
     @State private var showingGone = false
 
     var body: some View {
-        List(selection: $selection) {
+        List(selection: listSelection) {
             if searchText.isEmpty {
                 if scope.isEmpty {
                     emptyState   // instead of a "$0.00 · Priced 0 of 0" ledger for nothing
                 } else {
+                // `EditCardTip` can't anchor to the toolbar Menu it explains — `.popoverTip` on a
+                // `Menu` inside a `ToolbarItem` doesn't present (confirmed by direct test), and
+                // there's no lower control to point at instead. Inline at the top of the list, so
+                // it explains the menu above from below rather than pointing at it.
+                if !isSelecting { TipView(EditCardTip()) }
                 // While selecting, the cards ARE the screen: the plaque + performance chart push
                 // the first row below the fold, which reads as "there's nothing here to tick".
                 if !isSelecting { statsSection }
@@ -98,10 +116,13 @@ struct GroupDetailView: View {
         .searchable(text: $searchText, prompt: group == nil ? "Search by name, set, or number" : "Search this divider")
         // The title carries the selection state — the count is the feedback that ticking worked,
         // and "Select cards to move" says what to do before anything is ticked.
+        // In edit mode the title says so. Without it the only signals are the missing chevrons and
+        // a checkmark two taps deep in a menu — you would find out by tapping a card and getting
+        // the wrong screen, which is the failure this mode exists to avoid in the other direction.
         .navigationTitle(isSelecting
                          ? (selection.isEmpty ? "Select cards to move"
                             : "\(Self.cardCount(selection.count)) selected")
-                         : title)
+                         : (rowTap == .edit ? "\(title) · Editing" : title))
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.entries) {
             await model.portfolio.refresh(entries: model.allEntries, prices: model.prices,
@@ -127,7 +148,8 @@ struct GroupDetailView: View {
                     EntryFormView(card: card, groups: model.groups, existing: entry,
                                   variants: model.variantsByCard[entry.cardId] ?? [],
                                   conditions: model.conditionsByCard[entry.cardId] ?? [],
-                                  matrix: model.matrixByCard[entry.cardId] ?? []) { updated in
+                                  matrix: model.matrixByCard[entry.cardId] ?? [],
+                                  onDelete: { await model.deleteEntry(id: $0.id) }) { updated in
                         await model.saveEntry(updated)
                     }
                 }
@@ -170,17 +192,60 @@ struct GroupDetailView: View {
             }
         } else {
             ToolbarItem {
+                // One menu, two pickers — NOT a fourth toolbar item. iPadOS silently DROPS a
+                // third trailing item rather than collapsing it (that is how Settings became
+                // unreachable on iPad; see CollectionView's toolbar comment), and this screen
+                // already carries three. Menu contents are never subject to that.
                 Menu {
+                    // ⚠️ An inline Picker in a menu renders its options WITHOUT its own label,
+                    // and wrapping it in a `Section("…")` does not add one either — both verified
+                    // on the simulator, 2026-08-11. The two groups can therefore only be told
+                    // apart by reading the options, which is why the mode's read "Tap opens …"
+                    // rather than the shorter "Details" / "Edit" a header would have qualified.
                     Picker("Sort", selection: $sort) {
                         ForEach(EntrySort.allCases) { Text($0.rawValue).tag($0) }
                     }
-                } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
+                    Picker("Tapping a card", selection: $rowTap) {
+                        ForEach(RowTap.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                } label: {
+                    // The GLYPH is what says you're in edit mode, not the nav title. The title
+                    // is already truncated to "Test di…" by the Print and Select items beside it,
+                    // so the "· Editing" suffix below is invisible on iPhone — it earns its keep
+                    // only where the divider name is short or the screen is an iPad.
+                    Label("View options",
+                          systemImage: rowTap == .edit ? "pencil.circle.fill"
+                                                       : "line.3.horizontal.decrease.circle")
+                }
+                .accessibilityLabel(rowTap == .edit ? "View options, tapping a card opens edit"
+                                                    : "View options")
             }
             if let group {
                 ToolbarItem {
-                    Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
-                        label: { Label("Print sheet…", systemImage: "printer") }
-                        .disabled(model.entries(in: group.id).isEmpty)
+                    // A MENU, not two buttons: this toolbar already carries Sort and Select, and
+                    // a fourth text-bearing item both eats the inline nav title and risks the
+                    // iPadOS "third trailing item is silently dropped" behaviour CollectionView
+                    // documents. One slot, both printables.
+                    Menu {
+                        Button { printRequest = PrintSheet.tradeRequest(group: group, model: model, store: store) }
+                            label: { Label("Trade sheet", systemImage: "printer") }
+                            .disabled(model.entries(in: group.id).isEmpty)
+                        Button { app?.labelRequest = LabelPrintRequest(title: group.name,
+                                                                       entries: model.entries(in: group.id)) }
+                            label: { Label("Card labels", systemImage: "qrcode") }
+                            .disabled(model.entries(in: group.id).isEmpty)
+                    } label: {
+                        // Spelled out as an HStack, not a `Label` + `.labelStyle(.titleAndIcon)`:
+                        // the toolbar overrides the label style and renders icon-only, which is
+                        // exactly the problem — a lone printer glyph reads as "print the screen"
+                        // when what it makes is a shareable PDF.
+                        HStack(spacing: 4) {
+                            Image(systemName: "printer")
+                            Text("Print")
+                        }
+                    }
+                    .accessibilityLabel("Print")
+                    .disabled(model.entries(in: group.id).isEmpty)
                 }
             }
             if !scope.isEmpty {
@@ -202,6 +267,19 @@ struct GroupDetailView: View {
 
     private var isSelecting: Bool { editMode == .active }
     private var allSelected: Bool { !scope.isEmpty && selection.count == scope.count }
+
+    /// The selection binding, attached ONLY while selecting — `nil` disables List selection entirely.
+    ///
+    /// ⚠️ **iOS 27 regression, found on device 2026-08-12 and invisible on every iOS 26 simulator.**
+    /// A `List` holding a selection binding claims its rows' taps even with `EditMode` **inactive**,
+    /// so edit mode's row `Button` never received the touch: tapping a row did nothing, while the
+    /// leading swipe and the context menu still opened the same sheet. iOS 26 let the Button win the
+    /// tap, which is why the whole feature verified clean here and failed in his hand.
+    ///
+    /// Attaching it unconditionally was always the wrong shape — a list that is not selecting has
+    /// nothing to select, and handing SwiftUI a binding for it asks the framework to own a tap this
+    /// screen owns. The version bump only made the cost visible.
+    private var listSelection: Binding<Set<String>>? { isSelecting ? $selection : nil }
 
     @ViewBuilder private var destinationDialogActions: some View {
         Button("No divider") { move(to: "") }
@@ -428,8 +506,10 @@ struct GroupDetailView: View {
         }
     }
 
-    // Tap shows the card — the app-wide "open a card" verb (the cards are the hero);
-    // editing is the deliberate second gesture, on leading swipe + long-press.
+    // What a tap does is a MODE, set in the toolbar's View menu — details (push the card) or edit
+    // (open its sheet). It used to be a per-row Edit chip, which taxed every row's width forever
+    // to serve a verb used on a handful of them, and squeezed the card name to do it. Selection
+    // mode still outranks both: there, the tap belongs to the tick.
     @ViewBuilder
     private func row(_ entry: CollectionEntry, showDivider: Bool) -> some View {
         let content = CollectionEntryRow(
@@ -442,9 +522,25 @@ struct GroupDetailView: View {
         // A NavigationLink row owns its own tap, so in selection mode it eats the tick instead of
         // toggling — the row has to be a plain, selectable row while selecting. `.tag` pins the
         // selection identity either way rather than leaving it to be inferred.
+        //
+        // Edit mode is a Button, not a link: no chevron, which is the honest signal that this tap
+        // does not go anywhere.
         Group {
             if isSelecting {
                 content
+            } else if rowTap == .edit {
+                // ⚠️ `.contentShape` is NOT decoration. A `.plain` Button hit-tests only where its
+                // label actually DREW, and this row is mostly gap: the HStack's `Spacer` between the
+                // name and the price is the widest thing in it, and the middle of a row is where a
+                // thumb naturally lands. Without this, tapping a row read as broken (device, iOS 27,
+                // 2026-08-12) — "I first thought it was not working, because by default I tap in the
+                // blank area." A NavigationLink never had the problem: it shapes the whole row itself.
+                //
+                // iOS 26 hit-tested the gap anyway, so the simulator on this Mac says this line does
+                // nothing. It is load-bearing on 27. Same lesson as #158, one layer down.
+                Button { editingEntry = entry } label: { content.contentShape(Rectangle()) }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Edit this entry")
             } else {
                 NavigationLink(value: CardID(raw: entry.cardId)) { content }
             }
@@ -463,9 +559,21 @@ struct GroupDetailView: View {
         }
         .swipeActions(edge: .leading) {
             Button { editingEntry = entry } label: { Label("Edit", systemImage: "pencil") }
+            // On the swipe as well as in the context menu, because a long press is invisible —
+            // the same reason edit is a mode you can see. Printing one card's label is the common case
+            // (you added a card; the other 39 on the sheet are already stuck on sleeves), not the
+            // rare one, so it does not get to hide.
+            Button { printLabel(for: entry) } label: { Label("Label", systemImage: "qrcode") }
+                .tint(.teal)
         }
         .contextMenu {
             Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
+            // The one edit common enough to deserve skipping the form entirely: pulling a second
+            // identical card out of a pack cost a tap, a mode switch, a sheet, a stepper and Save.
+            Button { Task { await model.addCopy(entry) } } label: {
+                Label("Add another copy", systemImage: "plus")
+            }
+            Button { printLabel(for: entry) } label: { Label("Print label", systemImage: "qrcode") }
             Button { sellingEntry = entry } label: { Label("Sold or traded…", systemImage: "bag") }
         }
     }
@@ -496,5 +604,12 @@ struct GroupDetailView: View {
 
     private func cardName(_ entry: CollectionEntry) -> String {
         searchIndex.name(for: entry, store: store)
+    }
+
+    /// This row's labels — `qty` of them, not one. A label identifies a physical card, so three
+    /// copies behind one entry are three stickers. The start-position picker still runs, which is
+    /// the whole point: one label lands on the next free slot of a part-used sheet.
+    private func printLabel(for entry: CollectionEntry) {
+        app?.labelRequest = LabelPrintRequest(title: cardName(entry), entries: [entry])
     }
 }

@@ -33,8 +33,19 @@ enum DiscoverConstants {
     /// Verified: TG=120, GG=70 present in production catalog v3.
     static let galleryNumberPrefixes: [String] = ["TG", "GG"]
 
-    /// A card counts as a "deal" when its raw price fell more than this over 7 days (percent).
-    static let dealsMaxPct7d: Double = -5.0
+    /// A card counts as a "deal" when its raw price fell more than this over 7 days.
+    ///
+    /// ⚠️ **A FRACTION, not whole percent** — `-0.05` is a 5% drop. `price_delta.pct_7d` is
+    /// written by the pipeline as `(new − old) / old` (`publish-tiers-deltas.test.ts` asserts
+    /// 2.0 → 3.0 gives `0.5`), and `DeltaBadge` renders it with `.percent`, which multiplies
+    /// by 100.
+    ///
+    /// This was `-5.0` until 2026-08-01 — wrong by 100×, so `pct_7d < -5.0` asked for cards
+    /// that had fallen more than 500%, and **the Deals filter matched nothing on any real
+    /// catalog, ever**. It survived because `CatalogStoreBrowseTests` seeded its fixture in
+    /// whole percent to match the constant, so the test agreed with the bug. That fixture is
+    /// fractional now.
+    static let dealsMaxPct7d: Double = -0.05
 
     /// The fixed Pokémon TCG energy types, for the Browse type filter (not a catalog query).
     static let energyTypes: [String] = [
