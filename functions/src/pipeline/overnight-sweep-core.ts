@@ -2,7 +2,7 @@
 import type { Database as Db } from "better-sqlite3";
 import { normalizeNumber } from "./matcher";
 import { PSA_COLUMNS } from "./ppt-export";
-import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales, parseRawLow } from "./ppt-history";
+import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales, parseRawLow, parsePrimaryRaw } from "./ppt-history";
 import { parseGradedSales } from "./ppt-graded";
 import type { PptEnrichmentCard } from "../upstream/ppt";
 import type { PopulationRow } from "./ppt-population";
@@ -20,7 +20,7 @@ export interface OvernightOptions { populationEnabled: boolean; asOf: string; }
 export interface OvernightSummary {
   setsDone: number; historyRows: number; gradedRows: number; popRows: number;
   condHistoryRows: number; byCondRows: number; byVariantRows: number; matrixRows: number; condSalesRows: number;
-  liquidityRows: number; gradedSalesRows: number;
+  liquidityRows: number; gradedSalesRows: number; rawRows: number;
   stoppedEarly: boolean; stopReason?: string;
 }
 
@@ -61,6 +61,9 @@ export async function runOvernightSweep(
     if (!plCols.has(col)) db.exec(`ALTER TABLE price_latest ADD COLUMN ${col} INTEGER`);
   }
   if (!plCols.has("low_usd")) db.exec(`ALTER TABLE price_latest ADD COLUMN low_usd REAL`);
+  // Same guard `ppt-export` carries: this sweep now writes raw_printing too, and it can run over a
+  // db built before the column existed (a rebuild on yesterday's file, or a test fixture).
+  if (!plCols.has("raw_printing")) db.exec(`ALTER TABLE price_latest ADD COLUMN raw_printing TEXT`);
   const pbcCols = new Set((db.pragma("table_info(price_by_condition)") as { name: string }[]).map((c) => c.name));
   if (!pbcCols.has("sales_count")) db.exec(`ALTER TABLE price_by_condition ADD COLUMN sales_count INTEGER`);
   const insHist = db.prepare("INSERT OR REPLACE INTO price_history(card_id, date, raw_usd) VALUES (?,?,?)");
@@ -80,10 +83,19 @@ export async function runOvernightSweep(
     ON CONFLICT(card_id) DO UPDATE SET
       sellers=COALESCE(@sellers, sellers), listings=COALESCE(@listings, listings), low_usd=COALESCE(@low, low_usd)`);
   const insGs = db.prepare("INSERT OR REPLACE INTO graded_sales(card_id, grade, sales_count, confidence, as_of) VALUES (?,?,?,?,?)");
+  // PPT is the single source for the raw quote. build-catalog's export pass fills raw_usd from
+  // the tcgcsv product feed first; this REBASES it onto PPT's own primary printing, so raw_usd,
+  // raw_printing, low_usd, price_by_variant, price_matrix, price_by_condition and price_history
+  // all describe the same subject in the same vocabulary. Cards this sweep never reaches keep the
+  // export's value — degraded, but never blank.
+  const upRaw = db.prepare(`INSERT INTO price_latest(card_id, raw_usd, raw_printing, low_usd, as_of)
+    VALUES (@id,@raw,@printing,@low,@as_of)
+    ON CONFLICT(card_id) DO UPDATE SET
+      raw_usd=@raw, raw_printing=@printing, low_usd=COALESCE(@low, low_usd), as_of=@as_of`);
   const ourStmt = db.prepare("SELECT id, number, name FROM card WHERE set_id = ?");
 
   const sum: OvernightSummary = {
-    setsDone: 0, historyRows: 0, gradedRows: 0, popRows: 0, condHistoryRows: 0, byCondRows: 0, byVariantRows: 0, matrixRows: 0, condSalesRows: 0, liquidityRows: 0, gradedSalesRows: 0, stoppedEarly: false,
+    setsDone: 0, historyRows: 0, gradedRows: 0, popRows: 0, condHistoryRows: 0, byCondRows: 0, byVariantRows: 0, matrixRows: 0, condSalesRows: 0, liquidityRows: 0, gradedSalesRows: 0, rawRows: 0, stoppedEarly: false,
   };
 
   // ---- Phase A: per set (history + graded) ----
@@ -135,8 +147,18 @@ export async function runOvernightSweep(
         for (const cell of parseMatrix(pc.pricesRaw)) {
           insMatrix.run(m.id, cell.printing, cell.condition, cell.usd, opts.asOf); sum.matrixRows++;
         }
+        // Before liquidity, so the low written here is the one `parsePrimaryRaw` already checked
+        // against the raw it is paired with, not the unfiltered `prices.low`.
+        const primary = parsePrimaryRaw(pc.pricesRaw);
+        if (primary) {
+          upRaw.run({ id: m.id, raw: primary.usd, printing: primary.printing,
+                      low: primary.low, as_of: opts.asOf });
+          sum.rawRows++;
+        }
         const liq = parseLiquidity(pc.pricesRaw);
-        const low = parseRawLow(pc.pricesRaw);
+        // `low` only when this card got no primary raw — otherwise `upRaw` owns it, and letting
+        // the unfiltered value back in here would reinstate the low>raw rows it just dropped.
+        const low = primary ? null : parseRawLow(pc.pricesRaw);
         if (liq.sellers != null || liq.listings != null || low != null) {
           upLiquidity.run({ id: m.id, sellers: liq.sellers, listings: liq.listings, low, as_of: opts.asOf });
           sum.liquidityRows++;

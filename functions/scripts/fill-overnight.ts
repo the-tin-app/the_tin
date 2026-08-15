@@ -153,7 +153,10 @@ async function main() {
   const bounded = Number.isInteger(setLimit) && setLimit > 0;
   const summary = await runOvernightSweep(db as any, client as any, sets, ledger,
     { populationEnabled: bounded ? false : sc.probe.populationEnabled, asOf }, isStopError);
-  console.log(`[overnight] +${summary.setsDone} sets · ${summary.historyRows} history · ${summary.gradedRows} graded · ${summary.popRows} pop${summary.stoppedEarly ? ` · STOPPED (${summary.stopReason})` : ""}`);
+  // `raw` counts cards whose raw_usd/raw_printing were rebased onto PPT's primary printing. Far
+  // below the card count means most cards still carry the tcgcsv export's quote — the very split
+  // this rebase exists to close, so it belongs in the nightly line rather than only in tests.
+  console.log(`[overnight] +${summary.setsDone} sets · ${summary.historyRows} history · ${summary.gradedRows} graded · ${summary.rawRows} raw · ${summary.popRows} pop${summary.stoppedEarly ? ` · STOPPED (${summary.stopReason})` : ""}`);
 
   if (summary.stoppedEarly) {
     if (isRateLimitStop(summary.stopReason)) {
