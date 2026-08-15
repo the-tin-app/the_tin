@@ -82,15 +82,25 @@ struct Supporter: Codable, Equatable {
 }
 
 enum FundingModel {
-    /// Compile-time switch for the support UI. `false` ships the "coming soon" variant (no
-    /// meter, no donate link).
+    /// Compile-time switch for the support **link**. `false` ships the "coming soon" variant with
+    /// nowhere to go.
+    ///
+    /// ⚠️ This used to gate the meter as well, and that conflation is why the app spent a day
+    /// telling people funding was "almost ready" while `github.com/sponsors/treyes133` was live and
+    /// taking money. Two different questions were riding one flag: *can people donate* (settled the
+    /// moment the listing publishes) and *is there a number worth showing* (not until someone
+    /// actually sponsors). **The meter is data-driven now** — every consumer renders `FundedMeter`
+    /// only when `raisedCents > 0`, so it appears on its own the day the first sponsorship lands,
+    /// with no build and no flag to remember. That is deliberately the same distinction Movers
+    /// makes between `$0.00` and "no data yet"; `0% funded` under a donation ask does not read as
+    /// honest, it reads as *nobody supports this*.
+    ///
+    /// So the bar for flipping this is now just: the listing is published and accepting money.
+    /// It is (2026-08-12) — four monthly tiers, three one-time, a $150/mo goal.
     ///
     /// The platform is settled — GitHub Sponsors, `AppConfig.supportURL` (Open Source Collective
-    /// rejected the project 2026-07-25). Flip this to `true` only in a build where the listing is
-    /// PUBLISHED and accepting money, and the nightly has actually run once with the GitHub-backed
-    /// `refresh-funding.ts` on `main` + a rebuilt `catalog-pipeline:latest` image. Flipping early
-    /// ships a meter reading "$0 of $150" to every user, which is worse than the coming-soon copy.
-    static let isLive = false
+    /// rejected the project 2026-07-25).
+    static let isLive = true
 
     /// Fallback goal shown before the manifest's funding block has loaded ($150/mo).
     static let defaultGoalCents = 15_000

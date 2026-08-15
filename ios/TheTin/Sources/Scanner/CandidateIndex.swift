@@ -149,7 +149,16 @@ final class CandidateIndex: CandidateNarrowing {
         guard let info = byId[cardId] else {
             return CandidateConsistency(nameAgrees: false, denomOk: fields.denominator == nil, hasTwinInPool: false)
         }
-        let nameAgrees = info.basename.count >= 3 && fields.rawText.lowercased().contains(info.basename)
+        // ⚠️ Both sides are squashed to alphanumerics, and that is a correctness fix rather than a
+        // loosening. `baseName` normalizes the CATALOG side (strips apostrophes, "mega ", mechanic
+        // suffixes) while the OCR side was compared raw — so a card whose name Vision read perfectly
+        // still failed, because Vision decides word breaks and punctuation for itself. Measured on
+        // Tomas's two device pages: "GarchompEX" vs `garchomp-ex`, "Team Rocket's Moltres(" vs
+        // `team rockets moltres`, "Ethan's Ho-Ohe" vs `ethans ho-oh` — three correct winners refused
+        // by a comparison neither side was wrong about. A genuinely garbled read ("MegaChanizardXex"
+        // for Charizard) still fails, which is what this leg is for.
+        let nameAgrees = info.basename.count >= 3
+            && Self.squashed(fields.rawText).contains(info.basename)
         let denomOk: Bool
         if let denominator = fields.denominator {
             denomOk = printedTotalBySet[info.setId] == Int(denominator)
@@ -163,13 +172,22 @@ final class CandidateIndex: CandidateNarrowing {
 
     /// Ports `scorer.py`'s `base_name(n)`: lowercase, strip stage/mechanic suffixes and
     /// "mega "/apostrophes, so OCR text (which never prints "EX"/"VMAX" as part of the base
-    /// species name search) can still substring-match the card's core name.
+    /// species name search) can still substring-match the card's core name — then `squashed`,
+    /// because the thing it is compared against is squashed too.
     private static func baseName(_ name: String) -> String {
         var n = name.lowercased()
         for suffix in [" ex", " vmax", " vstar", " v", " lv.x"] {
             n = n.replacingOccurrences(of: suffix, with: "")
         }
-        n = n.replacingOccurrences(of: "mega ", with: "").replacingOccurrences(of: "'", with: "")
-        return n.trimmingCharacters(in: .whitespaces)
+        return squashed(n.replacingOccurrences(of: "mega ", with: ""))
+    }
+
+    /// Lowercased alphanumerics, nothing else. ⚠️ Vision decides for itself where the word breaks
+    /// and the punctuation go — "Team Rocket's Moltres" comes back as one word as readily as three
+    /// — so any comparison against a catalog name has to happen in a space where that choice cannot
+    /// matter. Both sides, always: normalizing one is the bug this exists to fix.
+    private static func squashed(_ s: String) -> String {
+        String(String.UnicodeScalarView(s.lowercased().unicodeScalars
+            .filter(CharacterSet.alphanumerics.contains)))
     }
 }

@@ -60,11 +60,13 @@ final class CatalogUpdater {
     /// the value monotonic.
     ///
     /// `desiredTier` is the tier the user chose in Settings. A manifest tier that matches
-    /// NEITHER the installed tier NOR the desired one can only be the casual-only Firebase
-    /// fallback reached on a transient primary failure — installing it would silently downgrade
-    /// a richer catalog (empty price history, missing grade columns), so it's ignored while a
-    /// healthy catalog is on disk. 2026-07-18: a NAS timeout during the nightly publish window
-    /// let a background refresh replace average-v14 with casual-v14 exactly this way.
+    /// NEITHER the installed tier NOR the desired one means whichever remote answered wasn't
+    /// actually asked for the right tier — a legacy pre-tiering manifest, or a remote whose
+    /// captured `tier` went stale after a switch (see `AppModel.setTier`, which now rebuilds
+    /// BOTH the NAS and R2 remotes for exactly this reason). Installing it anyway would silently
+    /// downgrade a richer catalog (empty price history, missing grade columns), so it's ignored
+    /// while a healthy catalog is on disk. 2026-07-18: a NAS timeout during the nightly publish
+    /// window let a background refresh replace average-v14 with casual-v14 exactly this way.
     func ensureLatest(desiredTier: String = AppConfig.catalogTier,
                       onProgress: (@MainActor @Sendable (Double) -> Void)? = nil) async throws -> CatalogUpdateOutcome {
         let manifest = try await remote.fetchManifest()
@@ -129,28 +131,5 @@ final class CatalogUpdater {
                                    supporters: manifest.supporters ?? installedState()?.supporters,
                                    tier: manifest.tier))
         return .installed(version: manifest.version)
-    }
-}
-
-extension CatalogUpdater {
-    /// Best-effort daily price refresh; offline or missing deltas are normal, never an error.
-    @discardableResult
-    func refreshPrices(store: CatalogStore, dates: [String]) async -> String? {
-        var state = installedState() ?? CatalogState(version: 0, priceAsOf: nil)
-        var newest: String? = nil
-        for date in dates.sorted() {  // apply oldest→newest so as_of ends at the latest
-            if let applied = state.priceAsOf, date <= applied { continue }
-            do {
-                let gz = try await remote.fetchData(path: "catalog/deltas/prices-\(date).json.gz")
-                let delta = try JSONDecoder().decode(PriceDelta.self, from: gz.gunzipped())
-                try store.applyPriceDelta(delta)
-                state.priceAsOf = delta.asOf
-                newest = delta.asOf
-                try saveState(state)
-            } catch {
-                continue // 404 (not published yet), offline, or decode issue — skip this date
-            }
-        }
-        return newest
     }
 }

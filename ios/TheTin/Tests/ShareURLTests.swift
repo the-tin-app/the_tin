@@ -22,6 +22,19 @@ final class ShareURLTests: XCTestCase {
                       || url.absoluteString.contains("n=Charizard+%26+Friends"))
     }
 
+    /// The old inline rule was imageBase-then-imageUrl, which skipped the TCGplayer CDN entirely —
+    /// so every card TCGdex has no art for shared with no preview image at all.
+    func testACardWithoutTCGdexArtStillGetsAPreviewImage() {
+        let noTCGdex = CardRecord(id: "mep-046", setId: "mep", number: "46", name: "Chikorita",
+                                  hp: nil, types: [], rarity: nil, artist: nil,
+                                  imageBase: nil, imageUrl: nil, tcgplayerId: 517_123)
+        let items = Dictionary(uniqueKeysWithValues:
+            (URLComponents(url: CardShareLink.url(card: noTCGdex, setName: nil),
+                           resolvingAgainstBaseURL: false)!.queryItems ?? []).map { ($0.name, $0.value) })
+        XCTAssertEqual(items["img"],
+                       "https://tcgplayer-cdn.tcgplayer.com/product/517123_in_800x800.jpg")
+    }
+
     func testSetNameOmittedWhenNil() {
         let url = CardShareLink.url(card: card(id: "x-1", name: "Pikachu"), setName: nil)
         let names = (URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems ?? []).map(\.name)

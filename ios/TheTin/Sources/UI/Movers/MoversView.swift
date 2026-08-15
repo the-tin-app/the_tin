@@ -13,7 +13,13 @@ struct MoversView: View {
     @AppStorage("deltaPeriod") private var periodRaw: String = DeltaPeriod.d1.rawValue
     /// Your holdings, or the whole catalog. Persisted: which question you're asking tends to hold
     /// for a session ("what did my tin do" vs "what should I be chasing").
-    @AppStorage("moversScope") private var scopeRaw: String = Scope.mine.rawValue
+    ///
+    /// Empty means never chosen, which is NOT the same as choosing "My Cards" — and the difference
+    /// is the whole first run. Defaulted to `.mine`, this tab opened on "Nothing in your tin yet"
+    /// while the Market segment beside it was full of exactly the price data the app exists to
+    /// show. Three of five tabs were empty or blocked on day one and this was the cheapest of them
+    /// to fix. Touching the picker writes a real value and the fallback stops applying forever.
+    @AppStorage("moversScope") private var scopeRaw: String = ""
     /// Catalog movers for the current period; reloaded when the period changes, not per body pass.
     @State private var market: [Movers.MarketRow] = []
 
@@ -23,7 +29,16 @@ struct MoversView: View {
     }
 
     private var period: DeltaPeriod { DeltaPeriod(rawValue: periodRaw) ?? .d1 }
-    private var scope: Scope { Scope(rawValue: scopeRaw) ?? .mine }
+    /// The stored choice, or — before one has been made — whichever segment has something in it.
+    private var scope: Scope {
+        Scope(rawValue: scopeRaw) ?? (model.entries.isEmpty ? .market : .mine)
+    }
+    /// Reads the RESOLVED scope and writes a real one, so the segmented control always shows a
+    /// selection (a `""` selection matches no tag and renders as nothing selected) and the first
+    /// tap is what turns the fallback off.
+    private var scopeSelection: Binding<String> {
+        Binding(get: { scope.rawValue }, set: { scopeRaw = $0 })
+    }
     private var tier: CatalogTier { CatalogTier(rawValue: AppConfig.catalogTier) ?? .average }
 
     /// Cheap enough to compute in `body`: it's arithmetic over dictionaries `CollectionModel`
@@ -73,7 +88,10 @@ struct MoversView: View {
         }
         .listStyle(.plain)
         .overlay { emptyState(summary) }
-        .task(id: "\(periodRaw)|\(scopeRaw)|\(model.catalogGeneration)") { await loadMarket() }
+        // Keyed on the RESOLVED scope, not `scopeRaw`: unset, `scopeRaw` is "" and never changes
+        // until the picker is touched, so the market load this fallback exists to trigger would
+        // never run and the segment would open empty — the same bug in a new place.
+        .task(id: "\(periodRaw)|\(scope.rawValue)|\(model.catalogGeneration)") { await loadMarket() }
         .navigationTitle("Movers")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: CardID.self) { cardID in
@@ -89,21 +107,28 @@ struct MoversView: View {
 
     @ViewBuilder private func header(_ summary: Movers.Summary) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Picker("Scope", selection: $scopeRaw) {
+            Picker("Scope", selection: scopeSelection) {
                 ForEach(Scope.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
             }
             .pickerStyle(.segmented)
             if scope == .mine {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(signed(summary.totalImpact))
+                    // No coverage is NOT a $0.00 move. `price_delta` only carries a window once
+                    // the catalog has built that much history (30d is the long pole), and until
+                    // then a bold "+$0.00 last month" is the app asserting something it doesn't
+                    // know. An em dash says the same thing honestly.
+                    Text(hasWindowData(summary) ? signed(summary.totalImpact) : "—")
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
                         .monospacedDigit()
                         .contentTransition(.numericText())
-                        .foregroundStyle(tint(summary.totalImpact))
-                    Text(period.label).font(.subheadline).foregroundStyle(.secondary)
+                        .foregroundStyle(hasWindowData(summary) ? tint(summary.totalImpact) : .secondary)
+                    Text(hasWindowData(summary) ? period.label : "no \(period.short) data yet")
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Your tin is \(summary.totalImpact >= 0 ? "up" : "down") \(abs(summary.totalImpact).formatted(.currency(code: "USD"))) since \(period.label)")
+                .accessibilityLabel(hasWindowData(summary)
+                    ? "Your tin is \(summary.totalImpact >= 0 ? "up" : "down") \(abs(summary.totalImpact).formatted(.currency(code: "USD"))) since \(period.label)"
+                    : "No price changes for \(period.label) have reached the catalog yet")
             } else {
                 // No total to headline: these aren't your cards, so there's no holding to sum.
                 Text("Biggest movers \(period.label)")
@@ -115,6 +140,11 @@ struct MoversView: View {
     }
 
     private var ownedIds: Set<String> { Set(model.entries.map(\.cardId)) }
+
+    /// False when the catalog carries no change at all for this window — which is "we don't know
+    /// yet", not "nothing moved". The two look identical in the data (an absent `pct_30d` and a
+    /// zero one both produce no rows) and only this denominator tells them apart.
+    private func hasWindowData(_ summary: Movers.Summary) -> Bool { summary.cardsWithData > 0 }
 
     private func loadMarket() async {
         guard scope == .market else { return }
@@ -149,20 +179,22 @@ struct MoversView: View {
             .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
             .padding()
         } else if scope == .market {
+            // "Nothing moved" was a claim; an empty window is an absence of one. 30d in particular
+            // stays empty until the catalog has built a month of history behind it.
             if market.isEmpty {
-                ContentUnavailableView("Nothing moved \(period.label)", systemImage: "equal.circle",
-                                       description: Text("No catalog price changes landed for this window. Try a longer one."))
+                ContentUnavailableView("No \(period.short) data yet", systemImage: "hourglass",
+                                       description: Text("Price changes for \(period.label) haven't reached the catalog yet — they fill in as it builds history. Try a shorter window."))
             }
         } else if model.entries.isEmpty {
             ContentUnavailableView("Nothing in your tin yet", systemImage: "chart.line.uptrend.xyaxis",
                                    description: Text("Add a card and this is where you'll see what it does."))
         } else if summary.rows.isEmpty {
-            ContentUnavailableView {
-                Label("Nothing moved \(period.label)", systemImage: "equal.circle")
-            } description: {
-                Text(summary.cardsWithData == 0
-                     ? "No price changes have landed for your cards in this window yet — try a longer one, or check back after the next catalog update."
-                     : "Your cards held their value. Try a longer window.")
+            if !hasWindowData(summary) {
+                ContentUnavailableView("No \(period.short) data yet", systemImage: "hourglass",
+                                       description: Text("Price changes for \(period.label) haven't reached the catalog for your cards yet — they fill in as it builds history. Try a shorter window."))
+            } else {
+                ContentUnavailableView("Nothing moved \(period.label)", systemImage: "equal.circle",
+                                       description: Text("Your cards held their value. Try a longer window."))
             }
         }
     }
@@ -209,7 +241,7 @@ private struct MarketMoverRow: View {
             Text((row.pct > 0 ? "+" : "−") + abs(row.pct).formatted(.percent.precision(.fractionLength(1))))
                 .font(.system(.subheadline, design: .rounded).weight(.bold))
                 .monospacedDigit()
-                .foregroundStyle(row.pct > 0 ? .green : .red)
+                .foregroundStyle(row.pct > 0 ? Color.statusPositive : Color.statusNegative)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(card?.name ?? row.cardId), \(row.usd.formatted(.currency(code: "USD"))), \(row.pct >= 0 ? "up" : "down") \(abs(row.pct).formatted(.percent.precision(.fractionLength(1))))\(wanted ? ", on your wishlist" : "")\(owned ? ", in your tin" : "")")
@@ -234,7 +266,7 @@ private struct MoverRow: View {
                 Text(signed(row.impact))
                     .font(.system(.subheadline, design: .rounded).weight(.bold))
                     .monospacedDigit()
-                    .foregroundStyle(row.impact > 0 ? .green : .red)
+                    .foregroundStyle(row.impact > 0 ? Color.statusPositive : Color.statusNegative)
                 if let pct = row.pct {
                     Text(pct, format: .percent.precision(.fractionLength(1)))
                         .font(.caption2).foregroundStyle(.secondary).monospacedDigit()

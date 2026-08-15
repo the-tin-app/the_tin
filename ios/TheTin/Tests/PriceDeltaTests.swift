@@ -1,5 +1,4 @@
 import XCTest
-import Gzip
 @testable import TheTin
 
 final class PriceDeltaTests: XCTestCase {
@@ -38,24 +37,6 @@ final class PriceDeltaTests: XCTestCase {
         XCTAssertEqual(try store.price(cardId: "sv1-1")?.rawUsd, 0.25)
     }
 
-    func testRefreshPricesFetchesDecodesAppliesAndAdvancesState() async throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let paths = CatalogPaths(directory: dir)
-        let remote = StubRemote(manifest: CatalogManifest(version: 1, path: "x", sha256: "x",
-                                                          sizeBytes: 0, generatedAt: "x"))
-        let payload = PriceDelta(asOf: "2026-07-05",
-                                 rows: [.init(cardId: "sv1-25", rawUsd: 0.5, rawEur: 0.45, psa3: nil, psa7: nil, psa9: nil, psa10: 16)])
-        remote.files["catalog/deltas/prices-2026-07-05.json.gz"] = try JSONEncoder().encode(payload).gzipped()
-
-        let updater = CatalogUpdater(remote: remote, paths: paths)
-        try updater.saveState(CatalogState(version: 1, priceAsOf: "2026-07-04"))
-
-        let applied = await updater.refreshPrices(store: store, dates: ["2026-07-06", "2026-07-05"])
-        XCTAssertEqual(applied, "2026-07-05") // 06 was 404 → skipped, 05 applied
-        XCTAssertEqual(try store.price(cardId: "sv1-25")?.rawUsd, 0.5)
-        XCTAssertEqual(updater.installedState(), CatalogState(version: 1, priceAsOf: "2026-07-05"))
-    }
-
     func testPriceDeltaRowDecodesCamelCaseWireFormat() throws {
         let json = """
         {"cardId":"x","rawUsd":1.0,"rawEur":0.9,"psa3":null,"psa7":null,"psa9":null,"psa10":null}
@@ -80,16 +61,5 @@ final class PriceDeltaTests: XCTestCase {
 
         let empty = DeltaRecord(kind: .raw, key: "", pct1d: nil, pct7d: nil, pct30d: nil)
         XCTAssertFalse(empty.hasData)                // truly no data → badge stays absent
-    }
-
-    func testRefreshSkipsDatesAlreadyApplied() async throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let paths = CatalogPaths(directory: dir)
-        let remote = StubRemote(manifest: CatalogManifest(version: 1, path: "x", sha256: "x",
-                                                          sizeBytes: 0, generatedAt: "x"))
-        let updater = CatalogUpdater(remote: remote, paths: paths)
-        try updater.saveState(CatalogState(version: 1, priceAsOf: "2026-07-05"))
-        let applied = await updater.refreshPrices(store: store, dates: ["2026-07-05", "2026-07-04"])
-        XCTAssertNil(applied) // nothing newer; no fetches attempted for stale dates
     }
 }

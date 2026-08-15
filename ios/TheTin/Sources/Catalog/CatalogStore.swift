@@ -160,8 +160,23 @@ final class CatalogStore {
     }
 
     private static func populationRow(_ row: Row) -> PopulationRow {
-        PopulationRow(grader: row["grader"], grade: row["grade"], count: row["count"] ?? 0,
-                      gemRate: row["gem_rate"], totalPopulation: row["total_population"])
+        // ⚠️ `gem_rate` arrives as a PERCENTAGE (0–100), and `PopulationRow.gemRate` is a
+        // FRACTION. Measured on the served average-tier catalog: 665,643 non-null rows spanning
+        // 0.0–100.0, mean 27.4 — a fraction column would top out at 1.0.
+        //
+        // Both display sites format it with `.percent`, which multiplies by 100, so the raw value
+        // rendered as "2740% gem" on a typical card and "240%" on a thin one (reported 2026-08-12).
+        // `GradingROI` made it worse by mixing units in one expression: the feed value 0–100 with
+        // `?? counts[10] / total`, a real fraction — the same field meaning two different things
+        // depending on which branch ran.
+        //
+        // Converted HERE, at the single boundary every consumer reads through, rather than at the
+        // two call sites — that is what makes the ROI fallback agree with the feed instead of
+        // being off by 100× from it.
+        let gemRatePercent: Double? = row["gem_rate"]
+        return PopulationRow(grader: row["grader"], grade: row["grade"], count: row["count"] ?? 0,
+                             gemRate: gemRatePercent.map { $0 / 100 },
+                             totalPopulation: row["total_population"])
     }
 
     private static func sealedProduct(_ row: Row) -> SealedProduct {
@@ -561,6 +576,24 @@ final class CatalogStore {
         }
     }
 
+    /// Dex ids that share a card with any of `seeds` — the species that appear *alongside* the ones
+    /// the user likes. A card carrying two dex ids (a tag team, "Pikachu & Zekrom") is a statement
+    /// that those two belong together, and the catalog already records it in `card_dex`.
+    ///
+    /// The seeds themselves are excluded: a species is not its own neighbour.
+    func coOccurringDexIds(with seeds: [Int]) throws -> Set<Int> {
+        guard !seeds.isEmpty else { return [] }
+        let marks = databaseQuestionMarks(count: seeds.count)
+        return try dbQueue.read { db in
+            Set(try Int.fetchAll(db, sql: """
+                SELECT DISTINCT partner.dex_id
+                FROM card_dex seed
+                JOIN card_dex partner ON partner.card_id = seed.card_id
+                WHERE seed.dex_id IN (\(marks)) AND partner.dex_id NOT IN (\(marks))
+                """, arguments: StatementArguments(seeds + seeds)))
+        }
+    }
+
     func cards(byArtist artist: String) throws -> [CardRecord] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM card WHERE artist = ? ORDER BY id",
@@ -600,6 +633,156 @@ final class CatalogStore {
         }
     }
 
+    // MARK: - Shelf queries
+    //
+    // Each For You shelf is ONE bounded query. This replaces `ForYouStream`'s pool-in-memory:
+    // measured against the real served catalog, that pool held 3,960 cards on page 0 and 9,615 by
+    // page 5, of which 39 and 182 respectively survived the diversity cap — ~98% of the scoring
+    // work was discarded by a rule that was not the score.
+
+    /// Cards whose raw price sits inside the user's buying range, most *typical* first — nearest
+    /// the band's median.
+    ///
+    /// ⚠️ **The ORDER BY is load-bearing, and `c.id` was catastrophically wrong here.** Card ids
+    /// sort alphabetically, so `ORDER BY c.id LIMIT 600` over a real 3,342-card band stopped at
+    /// `ecard2-144`: every `g1`, `me*`, `sm*`, `sv*`, `swsh*` and `xy*` card was excluded outright,
+    /// which is essentially the whole of a modern collection. Four shelves would have been built
+    /// from sets the collector owns nothing from. Measured: ordering by distance from `p50` covers
+    /// **151 distinct sets against 45**, and reaches every set in the test collection.
+    ///
+    /// Cheapest-first is also wrong, for a subtler reason: it fills the window with bulk commons.
+    /// Distance from the median is the honest reading of "your usual range".
+    func cardsInPriceBand(_ band: PriceBand, limit: Int) throws -> [CardRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT c.* FROM card c JOIN price_latest p ON p.card_id = c.id
+                WHERE p.raw_usd BETWEEN ? AND ?
+                ORDER BY ABS(p.raw_usd - ?), c.id LIMIT ?
+                """, arguments: [band.p25, band.p75, band.p50, limit]).map(Self.cardRecord)
+        }
+    }
+
+    /// The gap in a chased set.
+    ///
+    /// ⚠️ Ordering is in-band-first, NOT cheapest-first. Measured on the real catalog, cheapest-first
+    /// on `sv10` returned 7 Commons and 5 Uncommons at $0.02–$0.06 — a vendor bulk bin rather than a
+    /// shelf. `band = nil` returns the whole gap, which is the caller's fallback when the in-band
+    /// slice is too thin to fill a row (`me05` yields only 4).
+    func cardsMissingFromSet(_ setId: String, owned: Set<String>, band: PriceBand?,
+                             limit: Int) throws -> [CardRecord] {
+        let rows: [CardRecord] = try dbQueue.read { db in
+            if let band {
+                // ⚠️ NOT by card number. `limit` is smaller than a modern set (sv10 is 244 cards),
+                // so ordering by number truncates to the low numbers — which are the commons, while
+                // the cards worth chasing carry the high numbers. Same bias as `cardsInPriceBand`.
+                return try Row.fetchAll(db, sql: """
+                    SELECT c.* FROM card c JOIN price_latest p ON p.card_id = c.id
+                    WHERE c.set_id = ? AND p.raw_usd BETWEEN ? AND ?
+                    ORDER BY ABS(p.raw_usd - ?), c.id
+                    """, arguments: [setId, band.p25, band.p75, band.p50]).map(Self.cardRecord)
+            }
+            return try Row.fetchAll(db, sql: """
+                SELECT * FROM card WHERE set_id = ? ORDER BY CAST(number AS INTEGER), number
+                """, arguments: [setId]).map(Self.cardRecord)
+        }
+        return Array(rows.lazy.filter { !owned.contains($0.id) }.prefix(limit))
+    }
+
+    /// How many weekly rows a card needs before its six-month low means anything. Below this the
+    /// "low" is just the only price we ever saw.
+    static let historicLowMinRows = 8
+
+    /// Candidate ids whose current price is within `withinPct` of their lowest price in ~6 months.
+    ///
+    /// Candidate-restricted on purpose: this scans up to ~26 weekly rows per card, and the A10 iPad
+    /// is the canary. Returns ids only — the caller already holds the records.
+    func cardsNearHistoricLow(candidateIds: [String], withinPct: Double, limit: Int) throws -> [String] {
+        guard !candidateIds.isEmpty else { return [] }
+        let marks = databaseQuestionMarks(count: candidateIds.count)
+        return try dbQueue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT h.card_id FROM price_history h
+                JOIN price_latest p ON p.card_id = h.card_id
+                WHERE h.card_id IN (\(marks)) AND h.date >= date('now', '-182 day')
+                GROUP BY h.card_id
+                HAVING COUNT(*) >= ? AND p.raw_usd <= MIN(h.raw_usd) * (1.0 + ?)
+                LIMIT ?
+                """, arguments: StatementArguments(candidateIds)
+                    + [Self.historicLowMinRows, withinPct, limit])
+        }
+    }
+
+    /// Candidate ids that fell more than `maxPct` over 7 days, biggest drop first.
+    ///
+    /// ⚠️ `pct_7d` is a FRACTION (`-0.05` is a 5% drop — see `DiscoverConstants.dealsMaxPct7d`, which
+    /// was wrong by 100× until 2026-08-01), and `price_delta` carries five `kind`s. Filtering without
+    /// `kind = 'raw' AND key = ''` mixes graded and per-condition series into a raw-price shelf.
+    func cardsDroppedThisWeek(candidateIds: [String], maxPct: Double,
+                              limit: Int) throws -> [(id: String, pct: Double)] {
+        guard !candidateIds.isEmpty else { return [] }
+        let marks = databaseQuestionMarks(count: candidateIds.count)
+        return try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT card_id, pct_7d FROM price_delta
+                WHERE kind = 'raw' AND key = '' AND card_id IN (\(marks)) AND pct_7d < ?
+                ORDER BY pct_7d ASC LIMIT ?
+                """, arguments: StatementArguments(candidateIds) + [maxPct, limit])
+                .map { (id: $0["card_id"], pct: $0["pct_7d"]) }
+        }
+    }
+
+    /// Cards carrying any of the given dex ids, optionally restricted to the buying range.
+    /// `DISTINCT` because a multi-dex card (a tag team) joins once per matching species.
+    func cardsForDexIds(_ dexIds: [Int], band: PriceBand?, limit: Int) throws -> [CardRecord] {
+        guard !dexIds.isEmpty else { return [] }
+        let marks = databaseQuestionMarks(count: dexIds.count)
+        return try dbQueue.read { db in
+            if let band {
+                // Same median-first ordering as `cardsInPriceBand`: a popular species (Pikachu has
+                // hundreds of printings) overruns `limit`, and id order would cut it alphabetically.
+                return try Row.fetchAll(db, sql: """
+                    SELECT DISTINCT c.* FROM card c
+                    JOIN card_dex x ON x.card_id = c.id
+                    JOIN price_latest p ON p.card_id = c.id
+                    WHERE x.dex_id IN (\(marks)) AND p.raw_usd BETWEEN ? AND ?
+                    ORDER BY ABS(p.raw_usd - ?), c.id LIMIT ?
+                    """, arguments: StatementArguments(dexIds) + [band.p25, band.p75, band.p50, limit])
+                    .map(Self.cardRecord)
+            }
+            return try Row.fetchAll(db, sql: """
+                SELECT DISTINCT c.* FROM card c JOIN card_dex x ON x.card_id = c.id
+                WHERE x.dex_id IN (\(marks)) ORDER BY c.id LIMIT ?
+                """, arguments: StatementArguments(dexIds) + [limit]).map(Self.cardRecord)
+        }
+    }
+
+    /// Cards priced above the user's buying ceiling — the Someday pool.
+    ///
+    /// ⚠️ Ordered **cheapest-first**, which is the opposite of what "grails" suggests and is
+    /// deliberate. The caller ranks by affinity, so ordering only matters when `limit` truncates —
+    /// and if it does, the right end to lose is the fantasy end. "Someday" means *budget for it and
+    /// talk to my wife*, which is an $85 card, not a $3,510 one. Measured on the real catalog: 1,240
+    /// cards sit above a $60 ceiling, so at the default settings this never truncates at all.
+    func cardsAbovePrice(_ amount: Double, limit: Int) throws -> [CardRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT c.* FROM card c JOIN price_latest p ON p.card_id = c.id
+                WHERE p.raw_usd > ? ORDER BY p.raw_usd ASC, c.id LIMIT ?
+                """, arguments: [amount, limit]).map(Self.cardRecord)
+        }
+    }
+
+    /// Newest sets first, for the For You first-run picker. A collector starting out is buying
+    /// current product, so recency is the right offer.
+    func recentSets(limit: Int) throws -> [SetRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM set_info WHERE release_date IS NOT NULL
+                ORDER BY release_date DESC, id LIMIT ?
+                """, arguments: [limit]).map(Self.setRecord)
+        }
+    }
+
     /// Distinct set eras that actually have cards, newest era first — populates the Browse filter.
     func distinctEras() throws -> [String] {
         try dbQueue.read { db in
@@ -616,7 +799,14 @@ final class CatalogStore {
     /// axes. Joins `set_info` only for an era filter, `price_latest` for a price band/sort
     /// (which also drops null-priced cards), `price_delta` for deals/biggest-drop. `LIMIT/OFFSET`
     /// pages in SQL; `ORDER BY … , c.id` keeps paging deterministic.
-    func browse(criteria: BrowseCriteria, ownedIds: [String], offset: Int, limit: Int) throws -> [CardRecord] {
+    ///
+    /// `seed` only affects the `.relevance` sort, which was plain `c.id` — so every session, and
+    /// every filter change (the deck restarts at the top when criteria change), opened on the same
+    /// handful of cards. A non-zero seed replaces it with a multiplicative hash of the rowid: still
+    /// a total order, so `LIMIT/OFFSET` paging stays coherent for as long as the seed holds, but a
+    /// different one per session/filter. `seed == 0` keeps the old id order.
+    func browse(criteria: BrowseCriteria, ownedIds: [String], offset: Int, limit: Int,
+                seed: Int = 0) throws -> [CardRecord] {
         var joins = ""
         var wheres: [String] = []
         var args: [(any DatabaseValueConvertible)?] = []
@@ -660,9 +850,19 @@ final class CatalogStore {
             args.append(contentsOf: ownedIds.map { $0 })
         }
 
+        // Two ways this silently degrades to plain rowid order, both hit while building it:
+        // an ADDED seed (`rowid * k + seed`) shifts every key equally and changes nothing, and a
+        // multiplier too small to wrap the modulus (`m * maxRowid < p`) is monotonic in rowid.
+        // So: multiply, and keep m ≥ p/2 so every row past the first wraps. `p` is prime, so the
+        // map is injective over the catalog's rowids; `c.id` breaks the rare tie either way.
+        let modulus = 1_000_003
+        let scramble = seed == 0 ? 0 : modulus / 2 + abs(seed % (modulus / 2))
         let orderBy: String
         switch criteria.sort {
-        case .relevance:   orderBy = "c.id"
+        case .relevance:
+            // Literal, not a bound parameter: `scramble` is an Int we derived ourselves, and the
+            // ORDER BY clause is assembled before the WHERE args are bound.
+            orderBy = scramble == 0 ? "c.id" : "(c.rowid * \(scramble)) % \(modulus), c.id"
         case .priceAsc:    orderBy = "p.raw_usd ASC, c.id"
         case .priceDesc:   orderBy = "p.raw_usd DESC, c.id"
         case .biggestDrop: orderBy = "d.pct_7d ASC, c.id"
@@ -819,13 +1019,17 @@ final class CatalogStore {
         // Missing column (pre-attacks catalogs) or bad JSON reads as no attacks.
         let attacksJSON: String? = r["attacks"]
         let attacks = attacksJSON.flatMap { try? JSONDecoder().decode([Attack].self, from: Data($0.utf8)) } ?? []
+        // Same contract as `attacks`, one column later: a catalog predating `detail` has no column,
+        // which reads as nil here rather than throwing, and the fact sheet omits what it lacks.
+        let detailJSON: String? = r["detail"]
+        let detail = detailJSON.flatMap { try? JSONDecoder().decode(CardDetail.self, from: Data($0.utf8)) }
         return CardRecord(id: r["id"], setId: r["set_id"], number: r["number"], name: r["name"],
                           hp: r["hp"],
                           types: (types ?? "").split(separator: ",").map(String.init),
                           rarity: r["rarity"], artist: r["artist"], imageBase: r["image_base"],
                           imageUrl: r["image_url"],
                           tcgplayerId: r["tcgplayer_id"],
-                          attacks: attacks)
+                          attacks: attacks, detail: detail)
     }
 
     private static func priceRecord(_ r: Row) -> PriceRecord {

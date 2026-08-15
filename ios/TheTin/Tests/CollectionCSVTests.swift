@@ -45,7 +45,7 @@ final class CollectionCSVTests: XCTestCase {
         // …and sold_at/sold_for/acquired_via blank for a card you still own with no recorded source.
         XCTAssertEqual(out[1],
             "swsh7-215,Rayquaza VMAX,swsh7,Evolving Skies,215,Rare Rainbow,2,holo,NM,psa10," +
-            "300.00,1970-01-02T00:00:00Z,\"trade, local show\",1970-01-01T00:00:00Z,Binder,1010.00,2026-07-13,,,,")
+            "300.00,1970-01-02T00:00:00Z,\"trade, local show\",1970-01-01T00:00:00Z,Binder,1010.00,2026-07-13,,,,,")
     }
 
     /// An export is the whole file, so a copy that has left has to appear in it — with what it
@@ -60,7 +60,7 @@ final class CollectionCSVTests: XCTestCase {
         let data = CollectionCSV.export(entries: [entry], groups: [group],
                                         cards: [card.id: card], sets: [set.id: set],
                                         prices: [card.id: price])
-        XCTAssertTrue(lines(data)[1].hasSuffix(",1970-01-02T00:00:00Z,420.00,"), "got \(lines(data)[1])")
+        XCTAssertTrue(lines(data)[1].hasSuffix(",1970-01-02T00:00:00Z,420.00,,"), "got \(lines(data)[1])")
     }
 
     /// The trade flag has to survive "your data is yours": export then re-import must not quietly
@@ -75,7 +75,7 @@ final class CollectionCSVTests: XCTestCase {
                                         cards: [card.id: card], sets: [set.id: set],
                                         prices: [card.id: price])
         // for_trade is followed by the (empty) sold_at/sold_for/acquired_via columns.
-        XCTAssertTrue(lines(data)[1].hasSuffix(",true,,,"), "got \(lines(data)[1])")
+        XCTAssertTrue(lines(data)[1].hasSuffix(",true,,,,"), "got \(lines(data)[1])")
     }
 
     func testExportUnknownCardAndUngroupedGoesBlankNotCrash() {
@@ -83,7 +83,7 @@ final class CollectionCSVTests: XCTestCase {
                                     grade: nil, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
                                     addedAt: Date(timeIntervalSince1970: 0))
         let data = CollectionCSV.export(entries: [entry], groups: [], cards: [:], sets: [:], prices: [:])
-        XCTAssertEqual(lines(data)[1], "gone-1,,,,,,1,,,,,,,1970-01-01T00:00:00Z,,,,,,,")
+        XCTAssertEqual(lines(data)[1], "gone-1,,,,,,1,,,,,,,1970-01-01T00:00:00Z,,,,,,,,")
     }
 
     func testWishlistExport() {
@@ -103,10 +103,57 @@ final class CollectionCSVTests: XCTestCase {
                        "the-tin-collection-1970-01-01.csv")
     }
 
-    /// The column is appended LAST — third-party importers read this header positionally, so an
+    /// New columns are appended LAST — third-party importers read this header positionally, so an
     /// inserted column silently shifts every field after it.
-    func testAcquiredViaIsTheFinalColumn() {
-        XCTAssertEqual(CollectionCSV.header.last, "acquired_via")
+    func testNewColumnsAreAppendedNotInserted() {
+        XCTAssertEqual(Array(CollectionCSV.header.suffix(2)), ["acquired_via", "tcgplayer_id"])
+    }
+
+    // MARK: Sealed products
+
+    private var box: SealedProduct {
+        SealedProduct(tcgplayerId: 517_898, name: "Evolving Skies Booster Box", setId: "swsh7",
+                      productType: "Booster Box", marketUsd: 500, lowUsd: 450, asOf: "2026-07-13")
+    }
+
+    /// Sealed rows carry an EMPTY card number — precisely the shape the importer already reads as
+    /// "sealed" — plus the product id, which is what makes our own round trip exact rather than a
+    /// name-matching guess.
+    func testExportWritesSealedRowsWithNoCardNumber() throws {
+        let entry = SealedEntry(id: "s1", productId: 517_898, qty: 2, pricePaid: 800,
+                                acquiredAt: Date(timeIntervalSince1970: 86_400),
+                                acquiredFrom: "Card shop",
+                                acquiredVia: AcquiredVia.bought.rawValue,
+                                addedAt: Date(timeIntervalSince1970: 0))
+        let out = lines(CollectionCSV.export(entries: [], groups: [], cards: [:],
+                                             sets: [set.id: set], prices: [:],
+                                             sealed: [entry], sealedProducts: [517_898: box]))
+        let f = try XCTUnwrap(out.last).components(separatedBy: ",")
+
+        XCTAssertEqual(f.count, CollectionCSV.header.count)
+        XCTAssertEqual(f[0], "")                              // card_id — a box has none
+        XCTAssertEqual(f[1], "Evolving Skies Booster Box")
+        XCTAssertEqual(f[4], "")                              // number — THE sealed signal
+        XCTAssertEqual(f[6], "2")                             // qty
+        XCTAssertEqual(f[15], "1000.00")                      // current_value: 500 × 2
+        XCTAssertEqual(f[20], "bought")
+        XCTAssertEqual(f.last, "517898")                      // tcgplayer_id
+    }
+
+    /// A box the catalog no longer prices still exports: quantity and cost basis are the user's
+    /// own data, and dropping the row to avoid a blank name column would destroy them.
+    func testExportKeepsSealedRowsForUnknownProducts() throws {
+        let entry = SealedEntry(id: "s1", productId: 999, qty: 1, pricePaid: 120,
+                                addedAt: Date(timeIntervalSince1970: 0))
+        let out = lines(CollectionCSV.export(entries: [], groups: [], cards: [:], sets: [:],
+                                             prices: [:], sealed: [entry], sealedProducts: [:]))
+        let f = try XCTUnwrap(out.last).components(separatedBy: ",")
+
+        XCTAssertEqual(f.count, CollectionCSV.header.count)
+        XCTAssertEqual(f[1], "")            // no name to write
+        XCTAssertEqual(f[10], "120.00")     // price_paid survives
+        XCTAssertEqual(f[15], "")           // no price ⇒ blank, never $0
+        XCTAssertEqual(f.last, "999")
     }
 
     func testExportWritesTheAcquisitionSource() throws {
@@ -119,7 +166,7 @@ final class CollectionCSVTests: XCTestCase {
                                              sets: ["swsh7": set],
                                              prices: ["swsh7-215": price]))
         let row = try XCTUnwrap(out.last)
-        XCTAssertTrue(row.hasSuffix(",pulled"), "source should be the final field: \(row)")
+        XCTAssertTrue(row.hasSuffix(",pulled,"), "source should be followed only by a blank tcgplayer_id: \(row)")
     }
 
     /// An unrecorded source writes an empty field, not the word "nil" or a default.

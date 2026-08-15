@@ -21,6 +21,7 @@ struct WantedCardsView: View {
     @State private var exportName = "the-tin-wishlist"
     /// Rebuilt when the wishlist changes rather than per body pass — see `TradeListView`.
     @State private var shareLink: (url: URL, included: Int)?
+    @State private var sharing: SharePayload?
 
     // `.top` so a tile that carries the "In a set you collect" caption doesn't force a blank
     // reserved line onto every tile that doesn't — see the note in `SetsListView`.
@@ -67,16 +68,16 @@ struct WantedCardsView: View {
             if r.allCards.isEmpty {
                 ContentUnavailableView {
                     Label { Text("Your wishlist is empty") }
-                    icon: { Image(systemName: "heart").foregroundStyle(.pink) }
+                    icon: { Image(systemName: "heart").foregroundStyle(.pink) } // contrast-ok: glyph, not text
                 } description: {
-                    Text("Tap the heart on any card to start hunting for it here.")
+                    // "Hunting" now names a specific opt-in state on its own segment, so this
+                    // no longer says it loosely.
+                    Text("Tap the heart on any card to add it here.")
                 }
             } else {
                 ScrollView { content(r, displayedCards) }
             }
         }
-        .navigationTitle("Wishlist")
-        .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Search wishlist")
         .toolbar {
             sortMenu(disabled: r.allCards.isEmpty)
@@ -89,6 +90,7 @@ struct WantedCardsView: View {
             exportDoc = nil
         }
         .printSheetFlow($printRequest)
+        .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
         // A new catalog artifact can rename a set or reprice every card, and the cache keys off
         // the wishlist alone — so the swap has to invalidate it explicitly, exactly as
         // CollectionView does for `CardSearchIndex`.
@@ -140,10 +142,17 @@ struct WantedCardsView: View {
                 Text(total, format: .currency(code: "USD")).monospacedDigit()
                 if atTarget > 0 {
                     Text("· \(atTarget) at target")
-                        .foregroundStyle(.green).font(.caption).bold()
+                        .foregroundStyle(Color.statusPositive).font(.caption).bold()
                 }
             }
             .font(.subheadline)
+            // The share button is an icon now, so the "first N cards" notice that used to be the
+            // menu item's own text has nowhere else to live. Without it a 71-card wishlist shares
+            // 67 and says nothing — which is how it was found on device, by counting the web page.
+            if let shareLink, shareLink.included < r.allCards.count {
+                Text("A shared link fits the \(shareLink.included) most valuable of these.")
+                    .font(.caption).foregroundStyle(Color.statusCaution)
+            }
             if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -198,24 +207,28 @@ struct WantedCardsView: View {
         }
     }
 
-    /// Export (CSV data) and Print (PDF sheet) under one share icon. The section titles say what
-    /// each produces, so the difference is visible before tapping.
+    /// Export (CSV data) and Print (PDF sheet) under one icon. The section titles say what each
+    /// produces, so the difference is visible before tapping.
+    ///
+    /// ⚠️ **Not a `ShareLink`, and not inside the menu** — see `ShareSheet`. This one shipped
+    /// broken in v1.0: from build 23 (when iPad shipped) until 2026-08-01, "Link to this list" was
+    /// unusable on an iPad, while working fine on every iPhone.
     @ToolbarContentBuilder private func shareMenu(r: Resolved, disabled: Bool) -> some ToolbarContent {
         ToolbarItem {
+            // A link a friend can open without the app — the thing you actually paste into
+            // Discord before a meetup. Carries card ids only; see `ShareList`.
+            Button {
+                if let shareLink { sharing = SharePayload(url: shareLink.url) }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .accessibilityLabel((shareLink?.included ?? 0) < r.allCards.count
+                                ? "Share a link to the first \(shareLink?.included ?? 0) cards"
+                                : "Share a link to this list")
+            .disabled(disabled || shareLink == nil)
+        }
+        ToolbarItem {
             Menu {
-                // A link a friend can open without the app — the thing you actually paste into
-                // Discord before a meetup. Carries card ids only; see `ShareList`.
-                Section("Share a link") {
-                    if let shareLink {
-                        ShareLink(item: shareLink.url,
-                                  subject: Text("Cards I'm hunting"),
-                                  message: Text("Cards I'm hunting — from The Tin")) {
-                            Text(shareLink.included < r.allCards.count
-                                 ? "Link (first \(shareLink.included) cards)"
-                                 : "Link to this list")
-                        }
-                    }
-                }
                 Section("Export as CSV (spreadsheet)") {
                     Button("All cards") { exportCSV(r, priority: nil) }
                     ForEach(WantPriority.allCases) { p in
@@ -228,8 +241,8 @@ struct WantedCardsView: View {
                         Button("\(p.label) priority only") { printSheet(r, priority: p) }
                     }
                 }
-            } label: { Image(systemName: "square.and.arrow.up") }
-            .accessibilityLabel("Share wishlist")
+            } label: { Image(systemName: "ellipsis.circle") }
+            .accessibilityLabel("More")
             .disabled(disabled)
         }
     }
@@ -336,18 +349,32 @@ private struct WishlistTile: View {
 
     @ViewBuilder private var priorityDot: some View {
         if let p = entry?.priority, p != .normal {
-            Image(systemName: "circle.fill")
-                .font(.system(size: 10))
-                .foregroundStyle(p == .high ? .red : .gray)
+            // Grail gets the filled star, not a fourth colour of the same dot: it's a
+            // different kind of statement about a card, and a dot can only carry so much.
+            // ⚠️ `.caption2`, not `.system(size: 10)`. This dot and the note glyph below are the
+            // ONLY carriers of "grail" and "has notes" on this row — a frozen point size pins them
+            // at 10 pt while every word beside them roughly triples at AX5, which is precisely the
+            // reader who needs them biggest. A text style scales the symbol for free.
+            Image(systemName: p == .grail ? "star.fill" : "circle.fill")
+                .font(.caption2)
+                .foregroundStyle(dotTint(p))
                 .padding(4)
-                .accessibilityLabel(p == .high ? "High priority" : "Low priority")
+                .accessibilityLabel("\(p.label) priority")
+        }
+    }
+
+    private func dotTint(_ p: WantPriority) -> Color {
+        switch p {
+        case .grail: return .yellow
+        case .high: return .red
+        case .normal, .low: return .gray
         }
     }
 
     @ViewBuilder private var noteGlyph: some View {
         if let n = entry?.notes, !n.isEmpty {
             Image(systemName: "note.text")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(.secondary)
                 .padding(4).accessibilityLabel("Has notes")
         }
     }
@@ -355,11 +382,11 @@ private struct WishlistTile: View {
     @ViewBuilder private var priceLabel: some View {
         if let usd = priceUsd {
             HStack(spacing: 2) {
-                if onSale { Image(systemName: "target").font(.system(size: 9)) }
+                if onSale { Image(systemName: "target").font(.caption2) }
                 Text(usd, format: .currency(code: "USD"))
             }
             .font(.caption2).monospacedDigit()
-            .foregroundStyle(onSale ? Color.green : Color.primary)
+            .foregroundStyle(onSale ? Color.statusPositive : Color.primary)
         }
     }
 }

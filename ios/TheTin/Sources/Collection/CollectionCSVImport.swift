@@ -81,14 +81,43 @@ struct ImportedRow {
     var note: String? = nil          // merged into acquiredFrom (e.g. "Grade: CGC 9.5")
     var forTrade: Bool = false       // The Tin only — round-trips the trade-list flag
     var acquiredVia: String? = nil   // The Tin only — AcquiredVia rawValue, nil if unreadable
+    /// The Tin only — a copy that has already left the collection. Other formats never set these,
+    /// so their rows import as owned, which is the only thing they can mean.
+    var soldAt: Date? = nil
+    var soldFor: Double? = nil
     /// The Tin only — the divider this copy was filed under. Empty string means deliberately
     /// ungrouped (the tin at large), which is NOT the same as "this format didn't say".
     var divider: String? = nil
 }
 
+/// One sealed-product row lifted from a CSV, pre-matching.
+///
+/// Its own type rather than a flag on `ImportedRow`, because almost nothing they carry overlaps: a
+/// sealed box has no number, printing, condition, grade or divider, and unlike a card row it
+/// round-trips its sold state. Sharing one struct would have meant nine fields that are always nil
+/// on one side or the other.
+struct ImportedSealedRow {
+    var tcgplayerId: Int? = nil   // The Tin only — authoritative, and what makes the round trip exact
+    var name: String? = nil
+    var setName: String? = nil
+    var qty: Int = 1
+    var pricePaid: Double? = nil
+    var acquiredAt: Date? = nil
+    var acquiredFrom: String? = nil
+    var acquiredVia: String? = nil
+    var addedAt: Date? = nil
+    var soldAt: Date? = nil
+    var soldFor: Double? = nil
+}
+
 enum MatchResult: Equatable {
     case matched(CardRecord)
     case unmatched(String)   // human-readable reason — lands verbatim in skipped-rows.csv
+}
+
+enum SealedMatchResult: Equatable {
+    case matched(SealedProduct)
+    case unmatched(String)
 }
 
 // MARK: - Card matcher
@@ -165,6 +194,45 @@ final class CardMatcher {
         let cards = (try? store.cards(inSet: setId)) ?? []
         cardsBySet[setId] = cards
         return cards
+    }
+
+    // MARK: Sealed products
+
+    /// Every sealed product, indexed by id and by normalized name. Built LAZILY and exactly once:
+    /// `allSealedProducts()` is a full scan of ~2,500 rows, and an import with no sealed rows in
+    /// it — which is most of them — must not pay for that. nil means "not built yet"; an empty
+    /// index is a legitimate built state (a catalog with no `sealed_product` table).
+    private var sealedIndex: (byId: [Int: SealedProduct], byName: [String: [SealedProduct]])?
+
+    private func sealedProducts() -> (byId: [Int: SealedProduct], byName: [String: [SealedProduct]]) {
+        if let sealedIndex { return sealedIndex }
+        let all = (try? store.allSealedProducts()) ?? []
+        let built = (byId: Dictionary(all.map { ($0.tcgplayerId, $0) }, uniquingKeysWith: { a, _ in a }),
+                     byName: Dictionary(grouping: all) { Self.norm($0.name) })
+        sealedIndex = built
+        return built
+    }
+
+    /// Resolve a sealed row to a catalog product: `tcgplayer_id` first (exact, and what our own
+    /// export writes), then the product name — narrowed by the named set when the name alone is
+    /// ambiguous. An ambiguous name stays unmatched rather than guessing, exactly as the card
+    /// matcher does: the wrong booster box is worse than a skipped row you can see in
+    /// skipped-rows.csv.
+    func matchSealed(_ row: ImportedSealedRow) -> SealedMatchResult {
+        let index = sealedProducts()
+        if let id = row.tcgplayerId, let product = index.byId[id] { return .matched(product) }
+        guard let rawName = row.name, !rawName.isEmpty else {
+            return .unmatched("sealed product with no id or name")
+        }
+        var hits = index.byName[Self.norm(rawName)] ?? []
+        if hits.count > 1, let setId = row.setName.flatMap({ setIdByName[Self.norm($0)] }) {
+            let inSet = hits.filter { $0.setId == setId }
+            if !inSet.isEmpty { hits = inSet }
+        }
+        if hits.count == 1 { return .matched(hits[0]) }
+        return .unmatched(hits.isEmpty
+            ? "sealed product not in the catalog: \(rawName)"
+            : "sealed product name is ambiguous: \(rawName)")
     }
 }
 
@@ -250,8 +318,10 @@ enum CSVField {
     /// substring rules the app uses for PPT printing keys. Unmapped → nil (spec: left nil).
     static func variant(_ s: String?) -> String? {
         guard let s else { return nil }
-        if let v = CardVariant(rawValue: s) { return v.rawValue }   // Tin round-trip
-        return CardVariant.allCases.first { $0.matches(printing: s) }?.rawValue
+        // Closed to the four finishes on purpose. `CardVariant.init(rawValue:)` never fails now
+        // (any string is a possible print run), so asking it first would turn arbitrary CSV text
+        // into a printing nothing in the catalog names.
+        return CardVariant.allCases.first { $0.rawValue == s || $0.matches(printing: s) }?.rawValue
     }
 
     /// "Ungraded" → (nil, nil). "PSA 10" → ("psa10", nil) when the value exists in our Grade
@@ -273,6 +343,7 @@ enum CSVField {
 
 enum RowOutcome {
     case row(ImportedRow)
+    case sealed(ImportedSealedRow)
     case skip(String)   // reason — lands verbatim in skipped-rows.csv
 }
 
@@ -315,6 +386,9 @@ enum CollectionCSVImport {
         let experimental: Bool
         let headers: [String]
         var entries: [CollectionEntry] = []   // groupId "" — caller files them (see `dividerByEntryId`)
+        /// Sealed products the file carried. Not filed behind a divider — sealed lives in its own
+        /// section of the tin — so the caller adds these as they are.
+        var sealed: [SealedEntry] = []
         var skipped: [SkippedRow] = []
         /// Divider name per entry id, for formats that record one (only ours does). An entry
         /// present here with an EMPTY name was deliberately ungrouped in the source tin; an entry
@@ -327,8 +401,11 @@ enum CollectionCSVImport {
 
         var summary: String {
             var s = "\(entries.count) cards imported, \(skipped.count) rows skipped."
-            let sealed = skipped.filter { $0.reason.hasPrefix("sealed") }.count
-            if sealed > 0 { s += " \(sealed) sealed products (not supported)." }
+            // Sealed used to be counted here as "(not supported)" — it now imports, so the count
+            // moved from the apology to the result.
+            if !sealed.isEmpty {
+                s += " \(sealed.count) sealed \(sealed.count == 1 ? "product" : "products") imported."
+            }
             return s
         }
     }
@@ -359,6 +436,13 @@ enum CollectionCSVImport {
             switch format.map(header, fields) {
             case .skip(let reason):
                 result.skipped.append(SkippedRow(fields: fields, reason: reason))
+            case .sealed(let row):
+                switch matcher.matchSealed(row) {
+                case .unmatched(let reason):
+                    result.skipped.append(SkippedRow(fields: fields, reason: reason))
+                case .matched(let product):
+                    result.sealed.append(sealedEntry(row, product: product, now: now))
+                }
             case .row(let row):
                 switch matcher.match(row) {
                 case .unmatched(let reason):
@@ -384,7 +468,17 @@ enum CollectionCSVImport {
                                acquiredFrom: from.isEmpty ? nil : from,
                                addedAt: row.addedAt ?? now, variant: row.variant,
                                forTrade: row.forTrade ? true : nil,
+                               soldAt: row.soldAt, soldFor: row.soldFor,
                                acquiredVia: row.acquiredVia)
+    }
+
+    private static func sealedEntry(_ row: ImportedSealedRow, product: SealedProduct,
+                                    now: Date) -> SealedEntry {
+        SealedEntry(id: UUID().uuidString, productId: product.tcgplayerId,
+                    qty: max(1, row.qty), pricePaid: row.pricePaid,
+                    acquiredAt: row.acquiredAt, acquiredFrom: row.acquiredFrom,
+                    acquiredVia: row.acquiredVia, addedAt: row.addedAt ?? now,
+                    soldAt: row.soldAt, soldFor: row.soldFor)
     }
 
     /// skipped-rows.csv: the file's original columns + a trailing skip_reason column.
@@ -401,7 +495,29 @@ enum CollectionCSVImport {
         name: "The Tin", experimental: false,
         detect: { $0.has("card_id") && $0.has("qty") },
         map: { h, f in
-            guard let id = h.value("card_id", in: f) else { return .skip("missing card_id") }
+            guard let id = h.value("card_id", in: f) else {
+                // No card id: this is either one of our own sealed rows — blank card_id, blank
+                // number, a tcgplayer_id — or a row we genuinely can't place. The id is what makes
+                // our round trip exact, so it's what we key on rather than the blank number.
+                if let pid = h.value("tcgplayer_id", in: f).flatMap(Int.init) {
+                    var s = ImportedSealedRow(tcgplayerId: pid)
+                    s.name = h.value("name", in: f)
+                    s.setName = h.value("set_name", in: f)
+                    s.qty = h.value("qty", in: f).flatMap(Int.init) ?? 1
+                    s.pricePaid = CSVField.money(h.value("price_paid", in: f))
+                    s.acquiredAt = CSVField.date(h.value("acquired_at", in: f))
+                    s.acquiredFrom = h.value("acquired_from", in: f)
+                    s.acquiredVia = h.value("acquired_via", in: f)
+                        .flatMap(AcquiredVia.init(rawValue:))?.rawValue
+                    s.addedAt = CSVField.date(h.value("added_at", in: f))
+                    // Sold state round-trips for sealed. A box you've flipped keeps its cost basis
+                    // and what it realised, which is the whole reason the row survives the sale.
+                    s.soldAt = CSVField.date(h.value("sold_at", in: f))
+                    s.soldFor = CSVField.money(h.value("sold_for", in: f))
+                    return .sealed(s)
+                }
+                return .skip("missing card_id")
+            }
             var row = ImportedRow(cardId: id)
             row.qty = h.value("qty", in: f).flatMap(Int.init) ?? 1
             row.variant = CSVField.variant(h.value("variant", in: f))
@@ -423,6 +539,13 @@ enum CollectionCSVImport {
             // a provenance label is not worth failing a card over.
             row.acquiredVia = h.value("acquired_via", in: f)
                 .flatMap(AcquiredVia.init(rawValue:))?.rawValue
+            // Sold state, Tin-format only. The sealed path has always round-tripped this and the
+            // card path never did, so re-importing our own export resurrected a sold copy as
+            // owned — back in the tin, back in the portfolio total, sale price gone. Read only
+            // here, because a TCGplayer or Dex export has no sold concept and its rows must keep
+            // landing as owned.
+            row.soldAt = CSVField.date(h.value("sold_at", in: f))
+            row.soldFor = CSVField.money(h.value("sold_for", in: f))
             // The divider IS read back, and empty means ungrouped rather than unknown — an
             // export→import of our own file has to reproduce the tin, not flatten it into one
             // "Imported <date>" pile.
@@ -457,10 +580,17 @@ enum CollectionCSVImport {
             if (name ?? "").contains("(JP)") || (set ?? "").contains("(JP)") {
                 return .skip("Japanese card — not in the catalog")
             }
-            // Empty Card Number = sealed product (booster box, ETB, …). Counted separately
-            // in Result.summary via the "sealed" reason prefix.
+            // Empty Card Number = sealed product (booster box, ETB, …). Collectr carries no
+            // product id, so this matches on the product name, narrowed by the set — the reason
+            // `CardMatcher.matchSealed` has a name path at all.
             guard let number = h.value("Card Number", in: f) else {
-                return .skip("sealed product (no card number)")
+                var s = ImportedSealedRow(name: name)
+                s.setName = set
+                s.qty = h.value("Quantity", in: f).flatMap(Int.init) ?? 1
+                s.pricePaid = CSVField.money(h.value("Average Cost Paid", in: f))
+                s.addedAt = CSVField.date(h.value("Date Added", in: f))
+                s.acquiredFrom = h.value("Notes", in: f)
+                return .sealed(s)
             }
             var row = ImportedRow()
             row.setName = set

@@ -8,7 +8,7 @@ from collections import defaultdict
 # local mirror of catalog card images (downloaded separately; not in repo)
 CACHE=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".cache", "images")
 con=sqlite3.connect("catalog-v3.sqlite")
-CARDS=con.execute("SELECT c.id,c.name,c.number,s.total,c.hp FROM card c JOIN set_info s ON s.id=c.set_id WHERE c.image_base IS NOT NULL").fetchall()
+CARDS=con.execute("SELECT c.id,c.name,c.number,s.total,c.hp FROM card c JOIN set_info s ON s.id=c.set_id WHERE COALESCE(c.image_base, c.tcgplayer_id, c.image_url) IS NOT NULL").fetchall()
 def bn(n):
     n=n.lower()
     for s in [" ex"," vmax"," vstar"," v"," lv.x"]: n=n.replace(s,"")

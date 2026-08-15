@@ -210,9 +210,10 @@ final class FingerprintUpdater {
 
         var completed = resumableParts(for: manifest)
         var bytesDone = completed.reduce(0) { $0 + manifest.parts[$1].bytes }
+        let total = manifest.sizeBytes
         let report: (Int) -> Void = { done in
             guard let onProgress else { return }
-            let p = FingerprintDownloadProgress(bytesDone: done, totalBytes: manifest.sizeBytes)
+            let p = FingerprintDownloadProgress(bytesDone: done, totalBytes: total)
             Task { @MainActor in onProgress(p) }
         }
         report(bytesDone)
@@ -221,7 +222,16 @@ final class FingerprintUpdater {
         do {
             for (index, part) in manifest.parts.enumerated() where !completed.contains(index) {
                 try Task.checkCancellation()
-                let data = try await remote.fetchData(path: part.path)
+                // Report WITHIN the part, not just after it. Reporting per completed part meant
+                // the bar sat at a hard 0% for the whole first 50 MiB — minutes on a slow link,
+                // indistinguishable from a stalled download. `base` is a per-iteration `let` so
+                // the escaping @Sendable callback never captures the mutable running total.
+                let base = bytesDone
+                let data = try await remote.fetchData(path: part.path) { received in
+                    guard let onProgress else { return }
+                    let p = FingerprintDownloadProgress(bytesDone: base + received, totalBytes: total)
+                    Task { @MainActor in onProgress(p) }
+                }
                 guard data.count == part.bytes, Self.hex(SHA256.hash(data: data)) == part.sha256.lowercased() else {
                     throw CatalogError.checksumMismatch
                 }

@@ -117,6 +117,75 @@ final class LocalCollectionRepositoryTests: XCTestCase {
         XCTAssertEqual(entries.map(\.id), ["kept"]) // rolled back, not silently kept in memory
     }
 
+    // MARK: Sealed products
+
+    func testSealedCRUDPersistsAcrossInstances() async throws {
+        let paths = try tempPaths()
+        let repo = LocalCollectionRepository(paths: paths)
+        var box = SealedEntry(id: "s1", productId: 517_898, qty: 1, pricePaid: 119.99,
+                              addedAt: Date(timeIntervalSince1970: 0))
+        try await repo.addSealed(box)
+        try await repo.addSealed(SealedEntry(id: "s2", productId: 100, qty: 3, addedAt: Date()))
+
+        box.qty = 2
+        box.acquiredFrom = "Card shop"
+        try await repo.updateSealed(box)
+        try await repo.deleteSealed(id: "s2")
+
+        // Reads back off DISK, through a fresh instance — the mutations persisted, not just
+        // landed in memory.
+        let sealed = await firstValue(LocalCollectionRepository(paths: paths).sealedStream()) ?? []
+        XCTAssertEqual(sealed.map(\.id), ["s1"])
+        let saved = try XCTUnwrap(sealed.first)
+        XCTAssertEqual(saved.qty, 2)
+        XCTAssertEqual(saved.pricePaid, 119.99)
+        XCTAssertEqual(saved.acquiredFrom, "Card shop")
+    }
+
+    /// Same contract as `testFailedPersistRollsBackAndThrows` for cards: a failed disk write
+    /// rolls the mutation back and throws, so the stream never shows a box that wouldn't
+    /// survive a relaunch.
+    func testFailedPersistRollsBackSealedAndThrows() async throws {
+        let paths = try tempPaths()
+        let repo = LocalCollectionRepository(paths: paths)
+        try await repo.addSealed(SealedEntry(id: "kept", productId: 1, qty: 1, addedAt: Date()))
+
+        try FileManager.default.removeItem(at: paths.fileURL)
+        try FileManager.default.createDirectory(at: paths.fileURL, withIntermediateDirectories: false)
+
+        do {
+            try await repo.addSealed(SealedEntry(id: "lost", productId: 2, qty: 1, addedAt: Date()))
+            XCTFail("expected addSealed to throw when the disk write fails")
+        } catch {}
+
+        let sealed = await firstValue(repo.sealedStream()) ?? []
+        XCTAssertEqual(sealed.map(\.id), ["kept"])
+    }
+
+    /// `replaceAll` is the only call that preserves ids (it exists for backup restore and undo),
+    /// so sealed has to survive it with its ids intact — and, crucially, has to be carried
+    /// explicitly: an undo that rebuilt the file from groups+entries alone would silently
+    /// delete every sealed product in the tin.
+    func testReplaceAllPreservesSealedIds() async throws {
+        let paths = try tempPaths()
+        let repo = LocalCollectionRepository(paths: paths)
+        try await repo.addSealed(SealedEntry(id: "gone", productId: 9, qty: 1, addedAt: Date()))
+
+        try await repo.replaceAll(
+            groups: [CardGroup(id: "g1", name: "Binder", sortOrder: 0, createdAt: Date())],
+            entries: [CollectionEntry(id: "e1", cardId: "ex6-58", groupId: "g1", qty: 1,
+                                      condition: nil, grade: nil, pricePaid: nil, acquiredAt: nil,
+                                      acquiredFrom: nil, addedAt: Date(), variant: nil)],
+            sealed: [SealedEntry(id: "s1", productId: 100, qty: 2, addedAt: Date())])
+
+        let fresh = LocalCollectionRepository(paths: paths)
+        let sealed = await firstValue(fresh.sealedStream()) ?? []
+        XCTAssertEqual(sealed.map(\.id), ["s1"])
+        XCTAssertEqual(sealed.first?.qty, 2)
+        let entries = await firstValue(fresh.entriesStream()) ?? []
+        XCTAssertEqual(entries.map(\.id), ["e1"])
+    }
+
     /// Batch import must land in ONE notification carrying every entry, not N notifications
     /// (a naive per-entry loop would yield a partial [1-entry] array on this first `next()`).
     func testAddEntriesNotifiesOnce() async throws {

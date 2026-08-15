@@ -9,6 +9,11 @@ struct ScanView: View {
     let store: CatalogStore
     let source: AVCaptureFrameSource
     var wants: WantsModel? = nil
+    /// Somewhere else for a recognised card to go. Set by callers who borrow the viewfinder for
+    /// their own question — a trade putting a stranger's card on the table — which pins the
+    /// scanner to look-up, drops the tray and the mode picker (there is no mode to choose), and
+    /// sends the card here instead of opening it in a detail sheet.
+    var onLookUp: ((String) -> Void)? = nil
     @State private var showingReview = false
     /// Collapsed by default — mode and condition are set once per stack, not per card.
     @State private var showingSettings = false
@@ -48,7 +53,10 @@ struct ScanView: View {
             .allowsHitTesting(false)
             VStack {
                 HStack(alignment: .top) {
-                    settingsControl
+                    // Every control behind this chip is a staging setting, and a borrowed
+                    // viewfinder stages nothing — leaving it would be a disclosure button that
+                    // expands to an empty box. Reset stays: it's the escape hatch either way.
+                    if onLookUp == nil { settingsControl }
                     Spacer()
                     // Escape hatch: clears the scanner to a clean slate (votes, lock, chooser, and
                     // any rejected-card suppression). Does NOT drop staged cards. Available in every
@@ -97,13 +105,19 @@ struct ScanView: View {
                     if model.ambiguous.isEmpty {
                         // In look-up mode the tray is noise until something is actually staged —
                         // but staged cards from an earlier session still need their way back.
-                        if !model.isLookUpMode || !staging.drafts.isEmpty {
+                        // A borrowed viewfinder shows it never: those cards belong to the screen
+                        // that borrowed it, and a Review button here would route out of a sheet.
+                        if onLookUp == nil, !model.isLookingUp || !staging.drafts.isEmpty {
                             StagingTray(staging: staging, store: store,
                                         knowledge: latestKnowledge) { showingReview = true }
                         }
                     } else {
                         // Variant A (approved 2026-07-15): bottom sheet, 2×2 card-image grid.
-                        AmbiguousChooser(model: model, options: model.ambiguous)
+                        // Shared with the virtual binder — see `CardChooser`.
+                        CardChooser(options: model.ambiguous,
+                                    escape: "None of these — keep scanning",
+                                    onPick: { id in Task { await model.chooseAmbiguous(cardId: id) } },
+                                    onEscape: { Task { await model.dismissChooser() } })
                     }
                 }
                 // Anchored on the controls stack, NOT the root: the root already carries the
@@ -125,7 +139,18 @@ struct ScanView: View {
                 StagingReviewView(staging: staging, collection: collection, store: store, wants: wants)
             }
         }
-        .task { await model.run(source: source) }
+        // A borrowed viewfinder hands the card to its caller and immediately re-arms, because the
+        // caller is working through a pile. Clearing is what unfreezes `handle(_:)` — without it
+        // the first card read would be the only card read.
+        .onChange(of: model.lookedUpCardId) { _, id in
+            guard let onLookUp, let id else { return }
+            onLookUp(id)
+            Task { await model.clearLookedUpCard() }
+        }
+        .task {
+            model.forcesLookUp = onLookUp != nil
+            await model.run(source: source)
+        }
     }
 
     /// Both scanner settings behind one chip: "Add · MP", or just "Look up".
@@ -158,10 +183,12 @@ struct ScanView: View {
 
             if showingSettings {
                 VStack(spacing: 8) {
-                    modePicker
+                    // No mode picker on a borrowed viewfinder: Add mode would file a stranger's
+                    // card into the tin, so it isn't a choice on offer here.
+                    if onLookUp == nil { modePicker }
                     // Only in Add mode: look-up stages nothing, so a condition for the thing it
                     // isn't recording would be one more control saying nothing.
-                    if !model.isLookUpMode {
+                    if !model.isLookingUp {
                         conditionPicker
                         sourcePicker
                     }
@@ -177,7 +204,7 @@ struct ScanView: View {
     /// nothing is being recorded. The source only appears when set — an absent claim shouldn't
     /// take up room saying it's absent.
     private var settingsSummary: String {
-        guard !model.isLookUpMode else { return "Look up" }
+        guard !model.isLookingUp else { return "Look up" }
         var s = "Add · \(model.stagingCondition.rawValue)"
         if let via = model.stagingVia { s += " · \(via.shortLabel)" }
         return s
@@ -241,7 +268,9 @@ struct ScanView: View {
     /// Bridges the model's looked-up card id to `.sheet(item:)`. Dismissing clears it AND resets
     /// the scanner, so the next frame reads fresh.
     private var lookedUpBinding: Binding<CardID?> {
-        Binding(get: { model.lookedUpCardId.map { CardID(raw: $0) } },
+        // Never presents when the card has somewhere else to be: the caller took it in
+        // `onChange` above, and a detail sheet over their screen is not what they asked for.
+        Binding(get: { onLookUp == nil ? model.lookedUpCardId.map { CardID(raw: $0) } : nil },
                 set: { if $0 == nil { Task { await model.clearLookedUpCard() } } })
     }
 
@@ -277,53 +306,6 @@ private struct ConfidenceRing: View {
         .frame(width: 44, height: 44)
         .accessibilityLabel("Match confidence")
         .accessibilityValue("\(Int(value * 100)) percent")
-    }
-}
-
-/// Variant A chooser (approved 2026-07-15): a dark bottom sheet with a 2×2 grid of card
-/// images + name + "Set · Year · #num/total", and a "None of these" escape that resumes
-/// scanning. Options are frozen by ScanSession while this is visible.
-private struct AmbiguousChooser: View {
-    let model: ScanModel
-    let options: [ChooserOption]
-
-    var body: some View {
-        VStack(spacing: 10) {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                ForEach(options) { option in
-                    Button { Task { await model.chooseAmbiguous(cardId: option.id) } } label: {
-                        VStack(spacing: 6) {
-                            CardImageView(card: option.card, quality: "low")
-                                .frame(maxWidth: 96)
-                            VStack(spacing: 1) {
-                                Text(option.card?.name ?? option.id)
-                                    .font(.caption.bold()).foregroundStyle(.white)
-                                    .lineLimit(1).minimumScaleFactor(0.8)
-                                Text(option.caption)
-                                    .font(.caption2).foregroundStyle(.white.opacity(0.65))
-                                    .lineLimit(1).minimumScaleFactor(0.7)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(8)
-                        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.12)))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            Button {
-                Task { await model.dismissChooser() }
-            } label: {
-                Text("None of these — keep scanning")
-                    .font(.footnote.weight(.medium)).foregroundStyle(.white)
-                    .frame(maxWidth: .infinity).padding(.vertical, 9)
-                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.28)))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(12)
-        .background(.black.opacity(0.88), in: RoundedRectangle(cornerRadius: 20))
     }
 }
 
@@ -368,7 +350,8 @@ private struct StagingTray: View {
                 if let caption = knowledge?.caption {
                     Text(caption)
                         .font(.caption2.weight(.medium))
-                        .foregroundStyle(knowledge?.wanted == true ? Color.pink : Color.green)
+                        .foregroundStyle(knowledge?.wanted == true
+                                         ? Color.statusWishlist : Color.statusPositive)
                         .lineLimit(1)
                 }
             }

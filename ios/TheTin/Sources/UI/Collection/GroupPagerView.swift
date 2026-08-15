@@ -60,7 +60,8 @@ struct GroupPagerView: View {
                     EntryFormView(card: card, groups: model.groups, existing: entry,
                                   variants: model.variantsByCard[entry.cardId] ?? [],
                                   conditions: model.conditionsByCard[entry.cardId] ?? [],
-                                  matrix: model.matrixByCard[entry.cardId] ?? []) { updated in
+                                  matrix: model.matrixByCard[entry.cardId] ?? [],
+                                  onDelete: { await model.deleteEntry(id: $0.id) }) { updated in
                         await model.saveEntry(updated)
                     }
                 }
@@ -177,7 +178,7 @@ private struct EntryCardPage: View {
                     Image(systemName: delta >= 0 ? "arrow.up" : "arrow.down").font(.caption2.bold())
                     Text(abs(delta), format: .currency(code: "USD"))
                 }
-                .foregroundStyle(delta >= 0 ? .green : .red)
+                .foregroundStyle(delta >= 0 ? Color.statusPositive : Color.statusNegative)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(delta >= 0 ? "up" : "down") \(abs(delta).formatted(.currency(code: "USD"))) since you bought it")
             }

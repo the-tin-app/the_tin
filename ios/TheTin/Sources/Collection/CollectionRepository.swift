@@ -19,9 +19,24 @@ protocol CollectionRepository {
     /// file once per card (same reason `addEntries` exists).
     func applyEntryEdits(updated: [CollectionEntry], deletedIds: [String]) async throws
     func deleteEntry(id: String) async throws
-    /// Replace the entire collection in one shot (iCloud backup restore — preserves ids,
+
+    /// The sealed products you own. Its own stream, not folded into `entriesStream`, because a
+    /// sealed box is not a card: it has no condition, grade, printing or card id, and every one
+    /// of the ~forty consumers of `entriesStream` would have had to learn to skip it.
+    func sealedStream() -> AsyncStream<[SealedEntry]>
+    func addSealed(_ entry: SealedEntry) async throws
+    func updateSealed(_ entry: SealedEntry) async throws
+    func deleteSealed(id: String) async throws
+
+    /// Replace the entire collection in one shot (iCloud backup restore, undo — preserves ids,
     /// which createGroup/addEntry cannot).
-    func replaceAll(groups: [CardGroup], entries: [CollectionEntry]) async throws
+    ///
+    /// `sealed` is REQUIRED, not defaulted. A caller that rebuilt the file from groups + entries
+    /// alone would silently delete every sealed product in the tin, and a default would let that
+    /// happen quietly at each of the two call sites (undo and restore) rather than failing to
+    /// compile until each has said what it means to do with sealed.
+    func replaceAll(groups: [CardGroup], entries: [CollectionEntry],
+                    sealed: [SealedEntry]) async throws
 }
 
 /// Fully functional fake for tests and previews.
@@ -29,8 +44,10 @@ protocol CollectionRepository {
 final class InMemoryCollectionRepository: CollectionRepository {
     private(set) var groups: [CardGroup] = []
     private(set) var entries: [CollectionEntry] = []
+    private(set) var sealed: [SealedEntry] = []
     private var groupContinuations: [UUID: AsyncStream<[CardGroup]>.Continuation] = [:]
     private var entryContinuations: [UUID: AsyncStream<[CollectionEntry]>.Continuation] = [:]
+    private var sealedContinuations: [UUID: AsyncStream<[SealedEntry]>.Continuation] = [:]
 
     nonisolated func groupsStream() -> AsyncStream<[CardGroup]> {
         AsyncStream { continuation in
@@ -58,9 +75,23 @@ final class InMemoryCollectionRepository: CollectionRepository {
         }
     }
 
+    nonisolated func sealedStream() -> AsyncStream<[SealedEntry]> {
+        AsyncStream { continuation in
+            Task { @MainActor in
+                let key = UUID()
+                self.sealedContinuations[key] = continuation
+                continuation.onTermination = { _ in
+                    Task { @MainActor in self.sealedContinuations[key] = nil }
+                }
+                continuation.yield(self.sealed)
+            }
+        }
+    }
+
     private func notify() {
         for c in groupContinuations.values { c.yield(groups) }
         for c in entryContinuations.values { c.yield(entries) }
+        for c in sealedContinuations.values { c.yield(sealed) }
     }
 
     func createGroup(name: String) async throws -> String {
@@ -126,9 +157,27 @@ final class InMemoryCollectionRepository: CollectionRepository {
         notify()
     }
 
-    func replaceAll(groups: [CardGroup], entries: [CollectionEntry]) async throws {
+    func addSealed(_ entry: SealedEntry) async throws {
+        sealed.append(entry)
+        notify()
+    }
+
+    func updateSealed(_ entry: SealedEntry) async throws {
+        guard let i = sealed.firstIndex(where: { $0.id == entry.id }) else { return }
+        sealed[i] = entry
+        notify()
+    }
+
+    func deleteSealed(id: String) async throws {
+        sealed.removeAll { $0.id == id }
+        notify()
+    }
+
+    func replaceAll(groups: [CardGroup], entries: [CollectionEntry],
+                    sealed: [SealedEntry]) async throws {
         self.groups = groups
         self.entries = entries
+        self.sealed = sealed
         notify()
     }
 }

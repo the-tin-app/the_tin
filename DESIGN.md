@@ -209,12 +209,77 @@ with a Card Gold card inside. The loading loop (lid opens, card rises, settles s
 open-tin pose. This is the app's one theatrical moment — don't add others.
 
 ### The Funding Bar (signature component)
-Always-on, never-blocking support strip on `.thinMaterial`: collapsed to a single
-caption line by default, expanding to a capsule progress meter + small prominent
-"Support" button. Nothing in the app is gated by it, and its copy must never imply a
-donation unlocks anything.
+Never-blocking support strip on `.thinMaterial`: collapsed to a single caption line by
+default, expanding to a capsule progress meter + small prominent "Support" button.
+Nothing in the app is gated by it, and its copy must never imply a donation unlocks
+anything.
 
-## 6. Do's and Don'ts
+**The Tin tab only, and it scrolls.** It was on all five tabs and every screen pushed from
+them, which spent ~24pt off the top of the entire app — including the scanner viewfinder
+and search results, where the relationship it asks about is not what the user is doing. It
+lives where the collection lives; Settings carries the full Support section for everywhere
+else. Generosity is visible in the design, not repeated on every screen.
+
+It is a **row of the tin's list, not chrome pinned above it**. On `safeAreaInset` it was
+cemented to the top of the screen: scroll your collection and the ask stayed, permanently
+holding the line above your tin's value. An ask that gates nothing should be visible when
+you arrive and gone while you're working. As a row it scrolls away and comes back when you
+scroll home.
+
+**One banner above content, never a stack.** The offline and reduced-data notices could
+both render, with the scanner-pack prompt above them as a third. Offline wins — it is the
+one the user can't act on, and it dates the prices explicitly.
+
+## 6. Lexicon
+
+The app invents nouns — tin, divider, Movers, Watching, Hunting, Grail, the pack — and a
+first-run report (2026-08-12) named six things a non-collector could not work out.
+Four were naming and navigation defects, not missing explanation. This table is the
+fix that stops the fifth: **one concept, one word, everywhere it appears.**
+
+| Say | Never say | What it means |
+|---|---|---|
+| **Tin** | collection, library | Everything you own. The Tin tab, and the total on it. |
+| **Divider** | group, folder, binder, tab | A named tray inside the tin. `CardGroup` is the type; nobody sees that word. |
+| **Sealed** | box, product | Unopened product you own. Its own section, never a divider. |
+| **Wishlist** | Wanted, Want List, wants | The door: cards and sets you're after. One screen, three segments. |
+| **Sets** | set goals, collecting | Wishlist segment: sets you're completing, tracked as a gap. |
+| **Singles** | wishlist cards | Wishlist segment: individual cards you chose, with a target and a priority. |
+| **Hunting** | watching, searching | Wishlist segment: cards you are *actively buying*, with a budget and an eBay search. A hunt runs until switched off. |
+| **Grail** | favourite, top pick | The card you'd most want, whether or not you're buying one now. A priority above High — **not** a hunt. |
+| **Watching** | alerts, notifications | The **news**: what the cards you care about have been doing. Never a list of cards to act on — it links to Hunting, it does not repeat it. |
+| **For Trade** | spares, duplicates | Copies you've said you'll part with. |
+| **Movers** | trends, gainers | What prices did over the selected window — yours, or the market's. |
+| **The pack** | scanner data, model | The downloadable fingerprint pack the camera scanner needs. |
+| **Catalog** | database, card data | The offline card data. Downloaded in one of three **sizes**, never "tiers" in user copy. |
+
+### Named Rules
+
+**The One Name Rule.** A concept gets one user-facing spelling. The pinned row and the
+screen it opens must say the same word — that failure shipped once, with one tap
+producing three different screen titles depending on a persisted segment choice.
+
+**The rename isn't done until the quotes are.** Renaming a screen does not rename the
+places that quote it. "Want List" survived as the title of the printed wishlist PDF long
+after the door was renamed. `VocabularyTests.banned` is the ratchet: add every retired
+name to it, and the next one fails a test instead of a first run.
+
+**Nothing may promise speed.** Hunting reaches the user through eBay's saved-search
+email, which is daily. No copy — tip, footer, button, or notification — may imply faster.
+`TipsTests.testNoTipPromisesSpeed` guards the tips; `HuntingListView`'s footer is the one
+place that explains the mechanism.
+
+**The shared page is the one surface outside this table.** `site/functions/l.js` writes its
+own copy for a recipient who does not have the app — "2 cards wanted", not "Wishlist" —
+and that is correct: a stranger is reading a list, not using your tin. It is also asserted
+by `site/tests/shared-list.test.mjs`. The app's lexicon stops at the app.
+
+`ShareList.Kind` carries no display name for that reason; it is the wire discriminator and
+nothing else. It did carry one — `var title` returning "Want List", with no call sites at
+all — and that is the shape this rule is really about: a retired name survives longest
+where nothing reads it.
+
+## 7. Do's and Don'ts
 
 ### Do:
 - **Do** use semantic system colors and system controls everywhere; the chrome is the

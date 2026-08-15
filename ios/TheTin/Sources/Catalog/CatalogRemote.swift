@@ -13,9 +13,10 @@ struct CatalogManifest: Codable, Equatable {
     /// Sponsors who asked to be listed. Served, never compiled in, so a name can be added or
     /// removed without an App Store review cycle. Absent in legacy JSON and while nobody is listed.
     let supporters: [Supporter]?
-    /// Which tier these bytes are. Self-host stamps its configured tier; Firebase (casual-only
-    /// backup) stamps "casual". Part of the installed-catalog identity so switching tiers at the
-    /// same version still re-downloads (see `CatalogUpdater.ensureLatest`). Absent in legacy JSON.
+    /// Which tier these bytes are — both the self-hosted NAS and the R2 backup stamp their own
+    /// configured tier (the backup carries all three, unlike the old casual-only Firebase copy).
+    /// Part of the installed-catalog identity so switching tiers at the same version still
+    /// re-downloads (see `CatalogUpdater.ensureLatest`). Absent in legacy JSON.
     let tier: String?
 
     init(version: Int, path: String, sha256: String, sizeBytes: Int, generatedAt: String,
@@ -59,21 +60,26 @@ extension CatalogRemote {
 }
 
 enum AppConfig {
-    /// The org's GCP policy blocks public-read GCS buckets, so the catalog can't be served from
-    /// `storage.googleapis.com` directly. It's instead served publicly via the Firebase Storage
-    /// rules layer (project `hobby-tcg`), which is fronted by the Firebase Storage REST/download
-    /// endpoint rather than a raw bucket URL — see `HTTPCatalogRemote.downloadURL`.
-    static let catalogBaseURL = URL(string: "https://firebasestorage.googleapis.com/v0/b/hobby-tcg.firebasestorage.app/o")!
+    /// The R2 backup origin, read through a Cloudflare Worker that verifies a Firebase App Check
+    /// token. Serves the SAME object layout and the SAME tiered manifest as the NAS, which is why
+    /// one remote type serves both. Its auth chain is deliberately independent of the NAS's, so a
+    /// fresh install can still authenticate here while the NAS is down.
+    ///
+    /// ⚠️ Shipped builds pin this hostname. Changing it strands every install that has it.
+    static let backupBaseURL = URL(string: "https://backupthetin.reyes.ai")!
 
     /// External sponsorship page. Opened in Safari — donations are NEVER processed in-app, and
     /// nothing is unlocked by them, which is what keeps the "Support" affordance App Store-
     /// compliant. Whatever links here must be *named* correctly wherever it's linked from: a
     /// button naming one platform that opens another reads as a scam.
-    static let supportURL = URL(string: "https://github.com/sponsors/the-tin-app")!
+    // Personal listing, not the org one: GitHub refuses an ORGANISATION payout to an individual
+    // Stripe account, which left `sponsors/the-tin-app` pending indefinitely (2026-08-12).
+    static let supportURL = URL(string: "https://github.com/sponsors/treyes133")!
 
     /// Self-hosted `catalog-server` (Cloudflare Tunnel hostname). Non-nil ⇒ the failover composite
-    /// tries the NAS first and falls back to Firebase; a wrong/undeployed host just fast-fails to
-    /// Firebase. Confirmed against the deployed tunnel route (see the client design spec).
+    /// tries the NAS first and falls back to the R2 backup origin; a wrong/undeployed host just
+    /// fast-fails to the backup. Confirmed against the deployed tunnel route (see the client design
+    /// spec).
     ///
     /// DEBUG builds attest in the App Attest *development* environment, which the production server
     /// (APP_ATTEST_ENVIRONMENT=production) rejects. Point a debug build at a development-environment
@@ -88,12 +94,26 @@ enum AppConfig {
         return URL(string: "https://apithetin.reyes.ai")
     }()
 
-    /// Per-request timeout on every self-host call; on expiry the composite falls back to Firebase.
+    /// Per-request timeout on the SMALL self-host calls (manifest, health, challenge, attest); on
+    /// expiry the composite falls back to the R2 backup origin. Small and deliberate: these are
+    /// short JSON round-trips and 5 s is how fast we want the failover decision made.
     static let selfHostTimeout: TimeInterval = 5
+
+    /// Timeout for a catalog ARTIFACT download, which is 26–179 MB and cannot share the number
+    /// above. `URLRequest.timeoutInterval` is an *idle* timeout — it fires after N seconds with no
+    /// bytes, however healthy the transfer — so 5 s aborted any download that stalled briefly on a
+    /// home upstream. Measured 2026-08-11 on the served zone: the NAS delivered a mean of 36.9 MB
+    /// per `average-v39.sqlite.gz` request against 51.43 MB on the object, i.e. **72% of the bytes**,
+    /// with **zero 5xx in six days** — the edge logs 200 because the status ships with the headers,
+    /// which is exactly why this hid. Roughly 13% of catalog downloads then re-fetched the whole
+    /// artifact from R2. The control that proves it: `OriginFingerprintRemote` never sets
+    /// `timeoutInterval`, so its 52.4 MB parts run on URLSession's 60 s default over the same box,
+    /// tunnel and hours — and complete at 100%.
+    static let artifactTimeout: TimeInterval = 60
 
     /// Which catalog tier the self-hosted client downloads: "casual" | "average" | "expert".
     /// User-changeable in Settings, persisted in UserDefaults; defaults to the average archetype
-    /// (today's price + a weekly history sparkline). Read by SelfHostedCatalogRemote at construction.
+    /// (today's price + a weekly history sparkline). Read by OriginCatalogRemote at construction.
     static var catalogTier: String {
         get {
             let raw = UserDefaults.standard.string(forKey: catalogTierKey) ?? ""
@@ -101,7 +121,37 @@ enum AppConfig {
         }
         set { UserDefaults.standard.set(newValue, forKey: catalogTierKey) }
     }
-    private static let catalogTierKey = "catalogTier"
+    // A persisted defaults key, never shown. Renaming it resets every user's chosen catalog size
+    // to average — same reason `wantedScope` keeps its retired name.
+    private static let catalogTierKey = "catalogTier"  // vocab-ok: storage key, not user copy
+
+    /// The two price lines from the For You first-run picker.
+    ///
+    /// `nil` means **never asked**, which is exactly the condition for showing the picker. A user
+    /// who taps Skip is stored as `PriceTiers.default` so the skip is remembered and never asked
+    /// again — one value, no second bookkeeping flag.
+    ///
+    /// Editable afterwards from Settings, which is the whole reason the per-card "Too expensive"
+    /// thumbs-down could be deleted: price now lives in one visible, changeable place instead of
+    /// accumulating as an invisible cut.
+    static var priceTiers: PriceTiers? {
+        get {
+            let d = UserDefaults.standard
+            guard d.object(forKey: routineKey) != nil else { return nil }
+            return PriceTiers(routineCeiling: d.double(forKey: routineKey),
+                              occasionalCeiling: d.double(forKey: occasionalKey)).normalized
+        }
+        set {
+            let d = UserDefaults.standard
+            guard let newValue = newValue?.normalized else {
+                d.removeObject(forKey: routineKey); d.removeObject(forKey: occasionalKey); return
+            }
+            d.set(newValue.routineCeiling, forKey: routineKey)
+            d.set(newValue.occasionalCeiling, forKey: occasionalKey)
+        }
+    }
+    private static let routineKey = "discoverRoutineCeiling"
+    private static let occasionalKey = "discoverOccasionalCeiling"
 
     /// Grading fee used by the "Grade it?" panel (PSA bulk-tier default), user-editable inline.
     /// Clamped to GradingROI.feeRange on read and write. `object(forKey:)` rather than
@@ -115,15 +165,50 @@ enum AppConfig {
     }
     private static let gradingFeeKey = "gradingFeeUsd"
 
-    /// Wishlist price alerts master switch (Settings toggle). Default OFF per spec — the
-    /// snapshot is still maintained while off so re-enabling works instantly.
     /// Set once the user dismisses the Discover invitation to set up the scanner. The offer stays
     /// available from Settings and the Scan tab — dismissing silences the nudge, not the feature.
     static let scannerPromptDismissedKey = "scannerPromptDismissed"
 
-    static var priceAlertsEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "priceAlertsEnabled") }
-        set { UserDefaults.standard.set(newValue, forKey: "priceAlertsEnabled") }
+    /// The FAQ and contact page. The app had no route to help of any kind: no FAQ, no contact, no
+    /// explanation of how scanning or the catalog tiers work, in a product whose own vocabulary
+    /// (dividers, tiers, the pack) has to be learned.
+    static let helpURL = URL(string: "https://thetinapp.com/support/")!
+
+    /// Cards opened recently, newest first, capped at `recentCardsLimit`.
+    ///
+    /// The card-shop loop is: look up five cards in a row, then want the second one back. Search
+    /// kept no history, nothing else in the app did either, and the back stack is gone the moment
+    /// you change tab — so the only way back was to remember the name and retype it.
+    ///
+    /// Card ids only. This is a list of catalog rows, not behaviour: it says nothing about what
+    /// was bought, wanted or owned, it never leaves the device, and clearing it is a matter of
+    /// opening twenty other cards.
+    static var recentCardIds: [String] {
+        get { UserDefaults.standard.stringArray(forKey: recentCardsKey) ?? [] }
+        set {
+            UserDefaults.standard.set(Array(newValue.prefix(recentCardsLimit)), forKey: recentCardsKey)
+        }
+    }
+
+    /// Move a card to the front of the recents list, de-duplicating it. Re-opening the same card
+    /// must not fill the list with one id.
+    static func recordRecentCard(_ id: String) {
+        var ids = recentCardIds
+        ids.removeAll { $0 == id }
+        ids.insert(id, at: 0)
+        recentCardIds = ids
+    }
+
+    static let recentCardsLimit = 20
+    private static let recentCardsKey = "recentCardIds"
+
+    /// The catalog price date (`yyyy-MM-dd`) the user last saw on the Watching screen. Drives
+    /// the Tin row's dot via `WatchingModel.hasUnseen`; written when the screen loads, so
+    /// visiting is what clears it. A date rather than a count because, with no event log, a
+    /// count would be permanent state that never cleared.
+    static var watchingLastSeenAsOf: String? {
+        get { UserDefaults.standard.string(forKey: "watchingLastSeenAsOf") }
+        set { UserDefaults.standard.set(newValue, forKey: "watchingLastSeenAsOf") }
     }
 
     /// Scanner mode: false = stage each lock as a draft for the tin (default), true = just show
@@ -146,57 +231,33 @@ enum AppConfig {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "scanCondition") }
     }
 
-    /// Alert sensitivity in whole percent — 5, 10, or 20; anything else reads as the default 10.
-    static var priceAlertSensitivityPct: Int {
+    /// The binder shape the virtual binder opens on. Sticky because which binder you own is a
+    /// property of you, not of one scan — and the setup screen is the only thing standing between
+    /// the user and the camera, so it should already have the right answer in it.
+    static var binderShape: BinderShape {
         get {
-            let raw = UserDefaults.standard.integer(forKey: "priceAlertSensitivityPct")
-            return [5, 10, 20].contains(raw) ? raw : 10
+            let d = UserDefaults.standard
+            guard d.object(forKey: binderRowsKey) != nil else { return .default }
+            return BinderShape(rows: d.integer(forKey: binderRowsKey),
+                               cols: d.integer(forKey: binderColsKey))
         }
-        set { UserDefaults.standard.set(newValue, forKey: "priceAlertSensitivityPct") }
+        set {
+            UserDefaults.standard.set(newValue.rows, forKey: binderRowsKey)
+            UserDefaults.standard.set(newValue.cols, forKey: binderColsKey)
+        }
     }
+    private static let binderRowsKey = "binderRows"
+    private static let binderColsKey = "binderCols"
+
+    #if DEBUG
+    /// DEBUG-only: force every request to the PRIMARY origin to fail, so the R2 backup path can be
+    /// exercised without taking the real server down. Checked per REQUEST rather than at
+    /// construction, so flipping it takes effect immediately — needing a relaunch mid-test is what
+    /// makes an outage switch useless. Never compiled into Release.
+    static var simulatePrimaryOutage: Bool {
+        get { UserDefaults.standard.bool(forKey: "simulatePrimaryOutage") }
+        set { UserDefaults.standard.set(newValue, forKey: "simulatePrimaryOutage") }
+    }
+    #endif
 }
 
-struct HTTPCatalogRemote: CatalogRemote {
-    let baseURL: URL
-    var session: URLSession = .shared
-
-    func fetchManifest() async throws -> CatalogManifest {
-        let m = try JSONDecoder().decode(CatalogManifest.self, from: try await get("catalog/manifest.json"))
-        // Firebase is the casual-only backup; stamp it so tier-identity checks are correct.
-        return m.tier == nil ? m.withTier(CatalogTier.casual.rawValue) : m
-    }
-
-    func fetchData(path: String) async throws -> Data {
-        try await get(path)
-    }
-
-    func fetchData(path: String, onBytes: @escaping @Sendable (Int) -> Void) async throws -> Data {
-        try await get(path, onBytes: onBytes)
-    }
-
-    /// Builds a Firebase Storage download URL for object `path`, per the Firebase Storage REST
-    /// API: `<base>/<percent-encoded-object-path>?alt=media`. The object path must collapse to a
-    /// single path segment — every `/` in it is percent-encoded to `%2F` — and `alt=media` makes
-    /// the endpoint return raw bytes instead of metadata JSON.
-    static func downloadURL(base: URL, path: String) -> URL? {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        guard let enc = path.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
-        return URL(string: "\(base.absoluteString)/\(enc)?alt=media")
-    }
-
-    private func get(_ path: String,
-                     onBytes: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
-        guard let url = Self.downloadURL(base: baseURL, path: path) else { throw CatalogError.badResponse }
-        let request = await StorageAuth.authorizedRequest(url: url)
-        let (data, response): (Data, URLResponse)
-        if let onBytes {
-            (data, response) = try await session.dataReportingProgress(for: request, onBytes: onBytes)
-        } else {
-            (data, response) = try await session.data(for: request)
-        }
-        guard let http = response as? HTTPURLResponse else { throw CatalogError.badResponse }
-        guard http.statusCode == 200 else { throw CatalogError.httpStatus(http.statusCode) }
-        return data
-    }
-}

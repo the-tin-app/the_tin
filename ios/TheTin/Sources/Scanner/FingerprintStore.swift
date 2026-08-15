@@ -96,6 +96,32 @@ final class FingerprintStore {
         }
     }
 
+    /// Every requested card's geometry in ONE read.
+    ///
+    /// ⚠️ `cardFP(id:)` opens its own `dbQueue.read` — a separate transaction per candidate — and the
+    /// binder's matcher calls it up to 160 times for a single cell, all of them inside one logical
+    /// operation. `DatabaseQueue` serializes reads, so those also defeat any attempt to match
+    /// candidates concurrently. One `IN (…)` fetch removes both problems.
+    func cardFPs(ids: [String]) throws -> [String: StoredCardFP] {
+        guard !ids.isEmpty else { return [:] }
+        return try dbQueue.read { db in
+            var out: [String: StoredCardFP] = [:]
+            let sql = """
+                SELECT card_id, kp_count, keypoints, descriptors FROM card_fp
+                WHERE card_id IN (\(databaseQuestionMarks(count: ids.count)))
+                """
+            let rows = try Row.fetchCursor(db, sql: sql, arguments: StatementArguments(ids))
+            while let r = try rows.next() {
+                let id: String = r["card_id"]
+                let n: Int = r["kp_count"]
+                out[id] = StoredCardFP(cardId: id,
+                                       keypointsXY: Self.keypointsToPixels(r["keypoints"], count: n),
+                                       descriptors: r["descriptors"], count: n)
+            }
+            return out
+        }
+    }
+
     // MARK: blob decode (inverse of fpcore.packing)
 
     private static func decodeF16LE(_ data: Data) -> [Float16] {

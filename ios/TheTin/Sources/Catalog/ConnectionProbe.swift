@@ -12,8 +12,8 @@ struct ConnectionStatus: Equatable {
     var selfHostVersion: Int?
     /// Download size per tier key ("casual"/"average"/"expert"), from the NAS manifest.
     var tierSizes: [String: Int] = [:]
-    var firebaseReachable = false
-    var firebaseVersion: Int?
+    var backupReachable = false
+    var backupVersion: Int?
 }
 
 extension AppModel {
@@ -22,7 +22,13 @@ extension AppModel {
     func probeConnections() async -> ConnectionStatus {
         var s = ConnectionStatus()
 
-        if let base = AppConfig.selfHostBaseURL {
+        #if DEBUG
+        let simulatingOutage = AppConfig.simulatePrimaryOutage
+        #else
+        let simulatingOutage = false
+        #endif
+
+        if let base = AppConfig.selfHostBaseURL, !simulatingOutage {
             s.selfHostConfigured = true
 
             var req = URLRequest(url: base.appendingPathComponent("health"))
@@ -39,11 +45,16 @@ extension AppModel {
                 s.selfHostVersion = info.version
                 s.tierSizes = info.sizes
             }
+        } else if AppConfig.selfHostBaseURL != nil {
+            // Simulated outage: still report the box as configured (so the row shows, not "—"),
+            // but neither alive nor auth-OK — exactly what a real outage would look like, so the
+            // Settings screen doesn't contradict what every real request is about to do.
+            s.selfHostConfigured = true
         }
 
-        if let m = try? await HTTPCatalogRemote(baseURL: AppConfig.catalogBaseURL).fetchManifest() {
-            s.firebaseReachable = true
-            s.firebaseVersion = m.version
+        if let m = try? await AppModel.backupRemote().fetchManifest() {
+            s.backupReachable = true
+            s.backupVersion = m.version
         }
 
         return s

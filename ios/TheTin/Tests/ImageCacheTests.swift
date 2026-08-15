@@ -20,6 +20,15 @@ final class ImageCacheTests: XCTestCase {
         func setPayload(_ d: Data) { payload = d }
     }
 
+    /// Every cache here injects a fake downloader, so none of them should care whether the MACHINE
+    /// running the suite has wifi. `ImageCache` now refuses to start a request when there is no
+    /// route; pinning it forward keeps that from turning the suite into a network-dependent one.
+    /// (Same reasoning as pinning a persisted default forward rather than saving and restoring it.)
+    private func makeCache(directory: URL,
+                           download: @escaping @Sendable (URL) async throws -> Data) -> ImageCache {
+        ImageCache(directory: directory, download: download, isOnline: { true })
+    }
+
     private func tempDir() throws -> URL {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -30,7 +39,7 @@ final class ImageCacheTests: XCTestCase {
 
     func testMissDownloadsPersistsAndReturns() async throws {
         let spy = DownloadSpy()
-        let cache = ImageCache(directory: try tempDir(), download: { try await spy.fetch($0) })
+        let cache = makeCache(directory: try tempDir(), download: { try await spy.fetch($0) })
 
         let data = await cache.image(for: url)
 
@@ -41,7 +50,7 @@ final class ImageCacheTests: XCTestCase {
 
     func testSecondCallServedFromDiskWithoutDownloading() async throws {
         let spy = DownloadSpy()
-        let cache = ImageCache(directory: try tempDir(), download: { try await spy.fetch($0) })
+        let cache = makeCache(directory: try tempDir(), download: { try await spy.fetch($0) })
 
         _ = await cache.image(for: url)
         let again = await cache.image(for: url)
@@ -54,7 +63,7 @@ final class ImageCacheTests: XCTestCase {
     func testDownloadFailureReturnsNilAndPersistsNothing() async throws {
         let spy = DownloadSpy()
         await MainActor.run {}     // no-op; keeps structure uniform
-        let cache = ImageCache(directory: try tempDir(), download: { url in
+        let cache = makeCache(directory: try tempDir(), download: { url in
             throw URLError(.notConnectedToInternet)
         })
         _ = spy
@@ -64,7 +73,7 @@ final class ImageCacheTests: XCTestCase {
 
         // A subsequent successful call still works (nothing poisoned).
         let spy2 = DownloadSpy()
-        let cache2 = ImageCache(directory: try tempDir(), download: { try await spy2.fetch($0) })
+        let cache2 = makeCache(directory: try tempDir(), download: { try await spy2.fetch($0) })
         let ok = await cache2.image(for: url)
         XCTAssertEqual(ok, ImageCacheTests.jpeg)
     }
@@ -74,7 +83,7 @@ final class ImageCacheTests: XCTestCase {
         // download returns junk (not persisted), then a real image on retry.
         let spy = DownloadSpy()
         await spy.setPayload(Data("{\"error\":403}".utf8))
-        let cache = ImageCache(directory: try tempDir(), download: { try await spy.fetch($0) })
+        let cache = makeCache(directory: try tempDir(), download: { try await spy.fetch($0) })
 
         let bad = await cache.image(for: url)
         XCTAssertNil(bad, "non-image bytes are not returned or persisted")
@@ -86,7 +95,7 @@ final class ImageCacheTests: XCTestCase {
 
     func testConcurrentSameURLDownloadsOnce() async throws {
         let spy = DownloadSpy()
-        let cache = ImageCache(directory: try tempDir(), download: { try await spy.fetch($0) })
+        let cache = makeCache(directory: try tempDir(), download: { try await spy.fetch($0) })
 
         // Fire many concurrent requests for the same URL before any completes.
         await withTaskGroup(of: Data?.self) { group in
@@ -100,7 +109,7 @@ final class ImageCacheTests: XCTestCase {
 
     func testClearEmptiesCacheAndZeroesSize() async throws {
         let spy = DownloadSpy()
-        let cache = ImageCache(directory: try tempDir(), download: { try await spy.fetch($0) })
+        let cache = makeCache(directory: try tempDir(), download: { try await spy.fetch($0) })
 
         _ = await cache.image(for: url)
         var bytes = await cache.totalBytes()
@@ -122,7 +131,7 @@ final class ImageCacheTests: XCTestCase {
     /// final request parks for good. Written while hunting the 2026-07-27 "art won't download"
     /// report — it exonerated the permit arithmetic, which is exactly why it's worth keeping.
     func testGateReleasesEverySlotEvenWhenDownloadsFail() async throws {
-        let cache = ImageCache(directory: try tempDir(), download: { url in
+        let cache = makeCache(directory: try tempDir(), download: { url in
             if url.absoluteString.hasSuffix("2.jpg") || url.absoluteString.hasSuffix("5.jpg") {
                 throw URLError(.notConnectedToInternet)
             }
@@ -179,7 +188,7 @@ extension ImageCacheTests {
     func testDownloadsAreCappedRatherThanAllStartingAtOnce() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let spy = ConcurrencySpy()
-        let cache = ImageCache(directory: dir, download: { try await spy.fetch($0) })
+        let cache = makeCache(directory: dir, download: { try await spy.fetch($0) })
 
         let urls = (0..<30).map { URL(string: "https://example.test/card\($0).jpg")! }
         let all = Task {
@@ -236,7 +245,7 @@ extension ImageCacheTests {
     func testCacheHitsServeWithoutTouchingTheDownloader() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let spy = DownloadSpy()
-        let cache = ImageCache(directory: dir, download: { try await spy.fetch($0) })
+        let cache = makeCache(directory: dir, download: { try await spy.fetch($0) })
         let url = URL(string: "https://example.test/one.jpg")!
         _ = await cache.image(for: url)
         let afterFirst = await spy.count()
@@ -277,7 +286,7 @@ extension ImageCacheTests {
     /// looking at. Off-screen requests still complete, in the gaps.
     func testFreedSlotGoesToTheNewestRequestNotTheOldest() async throws {
         let spy = OrderSpy()
-        let cache = ImageCache(directory: FileManager.default.temporaryDirectory
+        let cache = makeCache(directory: FileManager.default.temporaryDirectory
                                    .appendingPathComponent(UUID().uuidString),
                                download: { try await spy.fetch($0) })
 
@@ -316,5 +325,37 @@ extension ImageCacheTests {
                        "a freed slot must go to the newest request; went to \(admitted.lastPathComponent)")
 
         newest.cancel(); running.cancel()
+    }
+
+    // MARK: - No route
+
+    /// A convention hall is not airplane mode — it is a captive portal, so requests do not fail,
+    /// they HANG for the full 60 s timeout. 36 binder pockets then queue three deep behind the
+    /// download gate and the offline fact sheet arrives minutes later, or never.
+    func testAMissWithNoRouteAnswersImmediatelyWithoutTouchingTheNetwork() async throws {
+        let spy = DownloadSpy()
+        let cache = ImageCache(directory: try tempDir(),
+                               download: { try await spy.fetch($0) }, isOnline: { false })
+
+        let data = await cache.image(for: url)
+
+        XCTAssertNil(data)
+        let calls = await spy.count()
+        XCTAssertEqual(calls, 0, "a doomed request was started anyway")
+    }
+
+    /// The guard must gate STARTING a request, never serving one already on disk — otherwise going
+    /// offline would blank every card the device has ever downloaded, which is the whole asset.
+    func testACacheHITStillServesWithNoRoute() async throws {
+        let dir = try tempDir()
+        let spy = DownloadSpy()
+        _ = await makeCache(directory: dir, download: { try await spy.fetch($0) }).image(for: url)
+
+        let offline = ImageCache(directory: dir, download: { _ in
+            XCTFail("a cache hit must never reach the downloader"); return Data()
+        }, isOnline: { false })
+
+        let served = await offline.image(for: url)
+        XCTAssertEqual(served, Self.jpeg)
     }
 }

@@ -17,6 +17,31 @@ struct FrameOutcome {
     var confirmationsNeeded: Int = 0
 }
 
+/// Decides when the camera may drop to its idle frame rate. Pure policy, no camera and no CV,
+/// so the rule that governs the scanner's power draw is checkable without either.
+///
+/// The scanner is left open and face-up on a table between stacks of cards. At the capture
+/// session's default rate that idle time costs a document-segmentation pass ~22 times a second
+/// against a tabletop, plus the ISP behind it, indefinitely — which is what makes the phone hot
+/// during a long look-up session.
+struct CameraThrottle {
+    /// Consecutive empty frames before idling. Comfortably above `LockConfig.graceMisses` (12),
+    /// which is the run of dropouts a card being held by hand is already expected to produce —
+    /// idle below that and a mid-scan flicker would throttle the camera during a real scan.
+    static let emptyFramesBeforeIdle = 30
+    private var empty = 0
+    private(set) var isIdle = false
+
+    /// Returns the frame rate the camera should now be at, as `isIdle`.
+    mutating func update(cardVisible: Bool, modal: Bool) -> Bool {
+        // A modal sheet idles immediately AND holds the empty count at zero, so dismissing it
+        // returns to the scanning rate on the very next frame instead of after a fresh streak.
+        empty = (cardVisible || modal) ? 0 : empty + 1
+        isIdle = modal || empty >= Self.emptyFramesBeforeIdle
+        return isIdle
+    }
+}
+
 /// Owns the stateful/heavy per-frame CV cascade (detect → quality-gate → fingerprint →
 /// OCR gate → match → session) off the main actor so live 30fps camera capture doesn't
 /// jank the UI. `ScanModel` only reads the `FrameOutcome` back on main.
@@ -219,6 +244,9 @@ final class ScanModel {
     private let staging: ScanStagingStore
     private let store: CatalogStore
     private let pipeline: ScanPipeline
+    /// Written on every frame and read by nothing on screen — kept out of Observation so it
+    /// can't register a dependency at camera rate.
+    @ObservationIgnored private var throttle = CameraThrottle()
 
     /// Shown while nothing is detected. The frame rectangle on screen already says this, so
     /// the view suppresses it — named here so the two can't drift apart.
@@ -320,6 +348,17 @@ final class ScanModel {
             if !isLookUpMode { lookedUpCardId = nil }
         }
     }
+    /// Pins the scanner to look-up for callers that have somewhere else to put the card — a trade
+    /// reads a stranger's card onto the table, and staging it would file someone else's property
+    /// into your tin.
+    ///
+    /// Deliberately NOT `isLookUpMode = true`: that setter persists, so borrowing the scanner for
+    /// one card would silently rewrite the mode the user picked for the Scan tab. This is the
+    /// caller's requirement, held for as long as the caller is on screen; `isLookUpMode` stays
+    /// the user's preference and is what the mode picker still reads and writes.
+    var forcesLookUp = false
+    /// The mode the pipeline actually obeys.
+    var isLookingUp: Bool { forcesLookUp || isLookUpMode }
     /// The condition new drafts are staged at. Every capture used to be Near Mint with nothing
     /// asked and nothing shown, so a played collection valued itself as mint — and since the
     /// review screen's per-card menu is a per-card tap, nobody was ever going to correct 300 of
@@ -340,6 +379,19 @@ final class ScanModel {
     /// which also resets the scanner so the next card (or the same one again) can be read.
     var lookedUpCardId: String?
 
+    /// Is something actually on screen over the viewfinder? This is what the frame loop throttles
+    /// on, and it is NOT the same question as "did we just recognise a card".
+    ///
+    /// ⚠️ A borrowed viewfinder (`forcesLookUp`) sets `lookedUpCardId` as a **handoff, not a
+    /// presentation**: the trade picker takes the card in `onChange` and clears it, and nothing is
+    /// ever presented over the camera. Counting that as modal idled the camera to 2fps on every
+    /// single card — and since the wake-up frame then arrives at the idle rate, it cost up to half
+    /// a second of dead viewfinder per card, in the one flow whose entire point is working through
+    /// a pile without pause. The chooser stays modal in both worlds: it really is on screen.
+    var isModalPresented: Bool {
+        (lookedUpCardId != nil && !forcesLookUp) || !ambiguous.isEmpty
+    }
+
     init(matcher: Matcher, detector: CardDetector, textGate: TextGate, narrowing: CandidateNarrowing,
          staging: ScanStagingStore, store: CatalogStore, fingerThrottle: Int = 4,
          minFocus: Double = 40) {
@@ -353,7 +405,18 @@ final class ScanModel {
 
     func run(source: FrameSource) async {
         for await pb in source.stream() {
+            // A chooser or a presented look-up card is modal, and `handle` already discards every
+            // event while one is up — but the cascade behind that event ran anyway. In look-up
+            // mode that is most of a session: the whole time you spend reading the card you just
+            // scanned, the phone is grinding OCR + ORB + RANSAC on frames whose results are
+            // thrown away on arrival. Skip the work, not just the result.
+            let modal = isModalPresented
+            if modal {
+                source.setIdle(throttle.update(cardVisible: false, modal: true))
+                continue
+            }
             let out = await pipeline.process(pb)          // runs OFF the main actor
+            source.setIdle(throttle.update(cardVisible: !out.noCard, modal: false))
             if out.noCard {
                 guidance = Self.idleGuidance; bestGuess = nil; bestGuessName = nil
                 confirmations = 0
@@ -378,6 +441,14 @@ final class ScanModel {
         // running underneath, and a second lock landing while the sheet is up would swap the card
         // out from under you (or, with `.sheet(item:)`, silently fail to re-present). Cleared by
         // `clearLookedUpCard()` on dismiss, which also resets the session.
+        //
+        // ⚠️ DO NOT narrow this to `isModalPresented`, however tempting the symmetry looks. There is
+        // no sheet at all on a borrowed viewfinder, and this guard is still what makes that path
+        // correct: it discards events for the few ms between `stage()` setting the id and
+        // `ScanView`'s `onChange` Task clearing it, so one card cannot be handed to a trade twice.
+        // The throttle asks "is something on screen" and must exclude a handoff; this asks "has a
+        // card already been claimed" and must not. Same field, two different questions — which is
+        // the overload that produced the #154/#155 collision in the first place (#156).
         if lookedUpCardId != nil { return }
         switch event {
         case .idle: break
@@ -408,7 +479,7 @@ final class ScanModel {
     private func stage(cardId: String) {
         ambiguous = []
         let card = try? store.card(id: cardId)
-        guard !isLookUpMode else {
+        guard !isLookingUp else {
             lookedUpCardId = cardId
             guidance = Self.idleGuidance
             return

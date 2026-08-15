@@ -2,13 +2,20 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Settings sheet. Shows app version, live connection status to the self-hosted server and the
-/// Firebase backup, the data-tier picker (with per-tier contents + download size), plus the
+/// R2 backup, the data-tier picker (with per-tier contents + download size), plus the
 /// existing Support / Data / Storage sections.
 struct SettingsView: View {
     @Bindable var app: AppModel
     let pack: ScannerPackModel
     @State private var model = SettingsModel()
     @State private var confirmingClear = false
+    @State private var editingPriceTiers = false
+    /// Mirrors `AppConfig.priceTiers` so the row updates the moment the sheet saves.
+    @State private var priceTiers = AppConfig.priceTiers
+    #if DEBUG
+    @State private var confirmingCatalogWipe = false
+    @State private var confirmingPackRewind = false
+    #endif
     @State private var confirmingPackDelete = false
     @State private var confirmingPackCellular = false
     @State private var restoreCandidate: BackupSnapshot?
@@ -21,6 +28,10 @@ struct SettingsView: View {
     @State private var importInFlight = false
     @State private var showingReport = false
     @AppStorage(SheetPDF.contactLineKey) private var contactLine = ""
+    @AppStorage(LabelSheet.offsetXKey) private var labelOffsetX = 0.0
+    @AppStorage(LabelSheet.offsetYKey) private var labelOffsetY = 0.0
+    @FocusState private var labelOffsetFocused: Bool
+    @State private var printingAlignment = false
     @Environment(\.dismiss) private var dismiss
 
     private var funding: FundingDisplay { app.funding }
@@ -29,15 +40,19 @@ struct SettingsView: View {
     /// tipped the type-checker into "unable to type-check this expression in reasonable time".
     @ViewBuilder private var sections: some View {
         appSection
+        discoverSection
         connectionSection
         tierSection
         scannerPackSection
         activitySection
-        alertsSection
         supportSection
         dataSection
         printoutSection
+        labelsSection
         storageSection
+        #if DEBUG
+        debugSection
+        #endif
     }
 
     var body: some View {
@@ -46,13 +61,26 @@ struct SettingsView: View {
                 sections
             }
             .navigationTitle("Settings")
+            .labelCalibrationFlow(isActive: $printingAlignment)
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+                // A number-pad field has no return key, so inside a List there is otherwise NO
+                // way to dismiss the keyboard — no tap-outside, no return.
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { labelOffsetFocused = false }
+                }
             }
             .task {
                 await model.refresh()
+                // Without this, Settings reports whatever the pack looked like at cold launch:
+                // `pack.refresh()` ran once in RootView's `.task` and nowhere else, so a pack
+                // published while the app was running never showed up here however many times
+                // you opened this screen. That is "I looked and saw nothing".
+                await pack.refresh()
                 await model.probeConnections(app: app)
                 await app.backup?.refreshStatus()
             }
@@ -70,7 +98,7 @@ struct SettingsView: View {
             } message: {
                 // Naming what is NOT lost matters more than naming what is: people assume
                 // deleting anything in a collection app deletes their collection.
-                Text("Camera scanning stops working until you download it again. Your collection isn't affected.")
+                Text("Camera scanning stops working until you download it again. Your tin isn't affected.")
             }
             .confirmationDialog("Download over cellular?", isPresented: $confirmingPackCellular,
                                 titleVisibility: .visible) {
@@ -79,6 +107,24 @@ struct SettingsView: View {
             } message: {
                 Text("You're not on Wi-Fi. This may count against your data plan — you can pause and resume anytime.")
             }
+            #if DEBUG
+            .confirmationDialog("Delete the installed catalog and re-download it?",
+                                isPresented: $confirmingCatalogWipe, titleVisibility: .visible) {
+                Button("Delete & re-download", role: .destructive) {
+                    Task { await app.debugDeleteCatalogAndRedownload() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Your tin, wishlist and scanner pack aren't affected.")
+            }
+            .confirmationDialog("Pretend the installed scanner pack is one version older?",
+                                isPresented: $confirmingPackRewind, titleVisibility: .visible) {
+                Button("Rewind recorded version") { pack.debugRewindInstalledVersion() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The pack file isn't touched, so nothing re-downloads until you tap Update — which then pulls the full pack. Relaunch to see it.")
+            }
+            #endif
             .confirmationDialog(manualRestoreTitle, isPresented: $confirmingRestore,
                                 titleVisibility: .visible) {
                 Button("Replace collection", role: .destructive) {
@@ -110,12 +156,40 @@ struct SettingsView: View {
             // A CSV opened in The Tin from Files / AirDrop lands here rather than in the picker:
             // RootView presents Settings on the route token, and this runs the same import the
             // button does, so the result sheet and skipped-rows export behave identically.
+            // BOTH import routes share one `.task`, and that is a type-checker constraint, not a
+            // style choice: adding a second `.task` here failed the build outright with "unable to
+            // type-check this expression in reasonable time" — the same budget this file's
+            // `sections` property was already split out of `body` to stay inside. One more
+            // modifier on this chain is genuinely not affordable.
+            //
+            // `pendingImportURL` first: it carries a file somebody already chose, so it outranks a
+            // bare request to go choose one.
             .task(id: app.importRouteToken) {
-                guard let url = app.pendingImportURL else { return }
-                app.pendingImportURL = nil
-                await runImport(.success(url))
+                if let url = app.pendingImportURL {
+                    app.pendingImportURL = nil
+                    await runImport(.success(url))
+                    return
+                }
+                // The empty tin's "Import a list" — no file picked yet, so put the picker up, then
+                // clear the request. Clearing it on the MODEL is the whole fix: a `@State` counter
+                // here resets every time this sheet is rebuilt, so it re-fired on every visit to
+                // Settings. See `AppModel.wantsImportPicker`.
+                if app.wantsImportPicker {
+                    app.wantsImportPicker = false
+                    importing = true
+                }
             }
             .sheet(item: $importSummary) { ImportResultSheet(summary: $0) }
+            // ⚠️ Attached HERE, on the List, not on the Section that owns the row. A `Section` is
+            // re-identified whenever its siblings change — and this screen has sections that appear
+            // and disappear (scanner pack, debug) — which detaches an attached sheet and dismisses
+            // it. Observed on device: the editor opened and closed itself after ~2 seconds.
+            .sheet(isPresented: $editingPriceTiers) {
+                ForYouSeedView(initial: priceTiers) {
+                    priceTiers = AppConfig.priceTiers
+                    editingPriceTiers = false
+                }
+            }
             .alert("Import failed", isPresented: Binding(get: { importError != nil },
                                                          set: { if !$0 { importError = nil } })) {
                 Button("OK") { importError = nil }
@@ -131,10 +205,50 @@ struct SettingsView: View {
 
     @AppStorage(Appearance.storageKey) private var appearance = Appearance.system
 
+    /// The one place price lives.
+    ///
+    /// ⚠️ This section is what made deleting the per-card "Too expensive" thumbs-down safe. That
+    /// gesture accumulated an *invisible* price cut nobody could review or undo; these two numbers
+    /// say the same thing where the user can see them and change them. Shipping the deletion without
+    /// this row would have left no way to state a price preference at all.
+    private var discoverSection: some View {
+        Section {
+            Button { editingPriceTiers = true } label: {
+                HStack {
+                    Label("What you'd spend", systemImage: "slider.horizontal.3")
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    if let tiers = priceTiers {
+                        Text("$\(Int(tiers.routineCeiling)) · $\(Int(tiers.occasionalCeiling))")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    } else {
+                        Text("Not set").foregroundStyle(.secondary)
+                    }
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+        } header: {
+            Text("Discover")
+        } footer: {
+            Text("Sorts For You into what you'd grab without thinking, what's worth a think, and what you'd plan for. Once you've recorded a few purchases, what you actually paid takes over.")
+        }
+    }
+
     private var appSection: some View {
         Section("App") {
             Picker("Appearance", selection: $appearance) {
                 ForEach(Appearance.allCases, id: \.self) { Text($0.label) }
+            }
+            // The app had no route to help of any kind — no FAQ, no contact, nothing explaining
+            // dividers, catalog tiers or the scanner pack, in a product whose own vocabulary has
+            // to be learned. The page already exists; nothing in the app pointed at it.
+            Link(destination: AppConfig.helpURL) {
+                HStack {
+                    Text("Help & FAQ")
+                    Spacer()
+                    Image(systemName: "arrow.up.right").font(.caption2).foregroundStyle(.tertiary)
+                }
             }
             LabeledContent("Version", value: Self.appVersion)
         }
@@ -153,8 +267,8 @@ struct SettingsView: View {
             StatusRow(title: "Self-hosted", systemImage: "server.rack",
                       ok: model.connection.map { $0.selfHostAlive && $0.selfHostAuthOK },
                       detail: selfHostDetail)
-            StatusRow(title: "Backup (Firebase)", systemImage: "externaldrive.badge.icloud",
-                      ok: model.connection.map { $0.firebaseReachable }, detail: firebaseDetail)
+            StatusRow(title: "Backup", systemImage: "externaldrive.badge.icloud",
+                      ok: model.connection.map { $0.backupReachable }, detail: backupDetail)
             LabeledContent("Active source", value: activeSourceText)
         } header: {
             HStack {
@@ -169,15 +283,15 @@ struct SettingsView: View {
             }
         } footer: {
             if onBackupSource {
-                Text("The backup source only provides the Small catalog (latest prices, no history). Anything richer you already downloaded stays available on this device.")
+                Text("The backup source carries the same catalog as the self-hosted one, including your chosen size.")
             }
         }
     }
 
-    /// True when catalog data is coming from the Firebase backup instead of the self-hosted
+    /// True when catalog data is coming from the R2 backup instead of the self-hosted
     /// server — either the last update actually fell back, or the probe shows auth failing.
     private var onBackupSource: Bool {
-        if app.activeSource == .firebase { return true }
+        if app.activeSource == .backup { return true }
         if let c = model.connection { return c.selfHostConfigured && !c.selfHostAuthOK }
         return false
     }
@@ -191,15 +305,15 @@ struct SettingsView: View {
         return parts.joined(separator: " · ")
     }
 
-    private var firebaseDetail: String {
+    private var backupDetail: String {
         guard let c = model.connection else { return "…" }
-        return c.firebaseReachable ? Self.versionText(c.firebaseVersion) : "Unreachable"
+        return c.backupReachable ? Self.versionText(c.backupVersion) : "Unreachable"
     }
 
     private var activeSourceText: String {
         switch app.activeSource {
         case .selfHosted: return "Self-hosted"
-        case .firebase: return "Backup (Firebase)"
+        case .backup: return "Backup"
         case nil: return "—"
         }
     }
@@ -230,6 +344,9 @@ struct SettingsView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                // The checkmark is the only thing distinguishing the installed tier from the other
+                // two, and it says nothing to VoiceOver on its own — see `BrowseFilterSheet`.
+                .accessibilityAddTraits(tier.rawValue == app.currentTier ? .isSelected : [])
                 .disabled(app.tierChange == .downloading)
             }
         } header: {
@@ -246,10 +363,10 @@ struct SettingsView: View {
         case .done:
             Text("Downloaded. Restart The Tin to finish switching.")
         case .failed(let msg):
-            Text(msg).foregroundStyle(.red)
+            Text(msg).foregroundStyle(Color.statusNegative)
         case .idle:
             if onBackupSource {
-                Text("On the backup source only the Small catalog can download.\(installedTierNote)")
+                Text("The backup source carries your chosen size too.\(installedTierNote)")
             } else {
                 Text("Just a download-size choice — every option is free. Change it anytime.")
             }
@@ -318,7 +435,7 @@ struct SettingsView: View {
         case .ready where pack.updateAvailable:
             Text("A newer scanner pack is available. The one you have keeps working until you update.")
         case .ready:
-            Text("Used to identify cards from the camera. Deleting it frees the space and leaves your collection untouched.")
+            Text("Used to identify cards from the camera. Deleting it frees the space and leaves your tin untouched.")
         case .paused(_, .cellular):
             Text("Paused automatically because you're not on Wi-Fi. Your progress is saved either way.")
         default:
@@ -350,39 +467,10 @@ struct SettingsView: View {
                         Text(line)
                             .font(.caption.monospaced())
                             .foregroundStyle(line.contains("failed") || line.contains("FAILED")
-                                             ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                                             ? AnyShapeStyle(Color.statusNegative)
+                                             : AnyShapeStyle(.secondary))
                     }
                 }
-            }
-        }
-    }
-
-    // MARK: Wishlist price alerts
-
-    private var alertsSection: some View {
-        Section {
-            Toggle("Wishlist price alerts", isOn: Binding(
-                get: { model.alertsEnabled },
-                set: { on in Task { await model.setAlertsEnabled(on) } }))
-            if model.alertsEnabled {
-                Picker("Sensitivity", selection: Binding(
-                    get: { model.alertSensitivityPct },
-                    set: { model.setAlertSensitivity($0) })) {
-                    Text("5%").tag(5)
-                    Text("10%").tag(10)
-                    Text("20%").tag(20)
-                }
-            }
-        } header: {
-            Text("Alerts")
-        } footer: {
-            if model.alertsDenied {
-                Text("Notifications are off for The Tin. Enable them in iOS Settings to get price alerts.")
-            } else {
-                // Target hits are named explicitly: they don't obey the sensitivity picker above
-                // it, and a target you set months ago is the one alert here you're actually
-                // waiting for.
-                Text("Get notified when a wishlist card drops to the target price you set, or when its price moves by the amount above. Alerts arrive when new prices download — not real-time.")
             }
         }
     }
@@ -402,6 +490,9 @@ struct SettingsView: View {
         let conditionsByCard = collection.conditionsByCard
         let matrixByCard = collection.matrixByCard
         let gradedByPrintingByCard = collection.gradedByPrintingByCard
+        // `allSealed` for the same reason as `allEntries`: an export is the whole file.
+        let sealed = collection.allSealed
+        let sealedProducts = collection.sealedProducts
         return await Task.detached {
             let ids = Array(Set(entries.map(\.cardId)))
             let cards = Dictionary(uniqueKeysWithValues: ((try? store.cards(ids: ids)) ?? []).map { ($0.id, $0) })
@@ -411,7 +502,8 @@ struct SettingsView: View {
                 prices: prices, variantsByCard: variantsByCard,
                 conditionsByCard: conditionsByCard,
                 matrixByCard: matrixByCard,
-                gradedByPrintingByCard: gradedByPrintingByCard))
+                gradedByPrintingByCard: gradedByPrintingByCard,
+                sealed: sealed, sealedProducts: sealedProducts))
         }.value
     }
 
@@ -477,6 +569,11 @@ struct SettingsView: View {
                 let entries = await fileImportedEntries(result, into: collection)
                 await collection.addEntries(entries)
             }
+            // Sealed isn't filed behind a divider — it has its own section — so these land as
+            // they are, with no "Imported <date>" pile to re-file from.
+            for entry in result.sealed {
+                await collection.saveSealed(entry)
+            }
             var skippedURL: URL?
             if !result.skipped.isEmpty {
                 let out = FileManager.default.temporaryDirectory
@@ -499,11 +596,13 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("The Tin is free and works offline. Chip in to help cover the price-data and hosting costs — nothing is locked either way.")
                     .font(.footnote).foregroundStyle(.secondary)
-                if FundingModel.isLive {
+                // Meter gated on money raised, not on `isLive` — see that flag's doc comment.
+                // It appears on its own the day the first sponsorship lands, no build needed.
+                if funding.raisedCents > 0 {
                     FundedMeter(fundedPct: funding.fundedPct)
                     Text("\(FundingModel.dollars(funding.raisedCents)) of \(FundingModel.dollars(funding.monthlyGoalCents)) per month")
                         .font(.caption).foregroundStyle(.secondary)
-                } else {
+                } else if !FundingModel.isLive {
                     Text("Community funding is almost ready — coming soon!")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -514,10 +613,14 @@ struct SettingsView: View {
                 // and opening another reads as a scam. Both live in this one commit for that reason.
                 Link("Sponsor The Tin on GitHub", destination: AppConfig.supportURL)
             }
-            // Shown once the served list has names, or once funding is live. Data-driven on
-            // purpose: the first listed sponsor makes this appear with no app update, and until
-            // then nobody is sent to a guaranteed-empty screen.
-            if !app.supporters.isEmpty || FundingModel.isLive {
+            // Shown once the served list has names. Data-driven on purpose: the first listed
+            // sponsor makes this appear with no app update, and until then nobody is sent to a
+            // guaranteed-empty screen.
+            //
+            // ⚠️ This used to read `|| FundingModel.isLive`, which broke the very promise the
+            // comment makes the moment that flag went true — `supporters.json` is empty and is
+            // the resting state, so every user would have been offered a blank screen.
+            if !app.supporters.isEmpty {
                 NavigationLink("Supporters") { SupportersView(supporters: app.supporters) }
             }
         }
@@ -545,6 +648,26 @@ struct SettingsView: View {
             }
             if let backup = app.backup {
                 LabeledContent("iCloud Backup", value: Self.backupStatusText(backup.status))
+                // One backup file, last writer wins — so a second device holding older data
+                // would quietly overwrite the newer one. It refuses now and says so here.
+                if let conflict = backup.conflict {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("A newer backup from another device",
+                              systemImage: "exclamationmark.icloud")
+                            .font(.subheadline.weight(.semibold))
+                        Text("\(conflict.entryCount) entries, backed up \(conflict.exportedAt.formatted(date: .abbreviated, time: .shortened)). This device hasn't taken it on, so it isn't backing up — that would overwrite it.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Button("Restore the newer backup") {
+                        Task {
+                            do { try await backup.acceptConflict() }
+                            catch { restoreError = error.localizedDescription }
+                        }
+                    }
+                    Button("Back up this device instead", role: .destructive) {
+                        Task { await backup.overwriteConflict() }
+                    }
+                }
                 Button("Back Up Now") { Task { await backup.backUpNow() } }
                 Button("Restore from backup…") { Task { await prepareManualRestore(backup) } }
             }
@@ -588,7 +711,56 @@ struct SettingsView: View {
         } header: {
             Text("Printout contact line")
         } footer: {
-            Text("Shown in the header of printed trade sheets, want lists, and collection reports. Leave empty to omit.")
+            Text("Shown in the header of printed trade sheets, wishlists, and collection reports. Leave empty to omit.")
+        }
+    }
+
+    /// The calibration knob for a physical process. The stock's margins are derived arithmetic,
+    /// not measured, and printers differ in unprintable margin and feed alignment — so a layout
+    /// that is arithmetically perfect still lands 1–2 mm off and no amount of care in the code
+    /// fixes it. Print the alignment page, measure the error, type it here.
+    /// ⚠️ Its own `struct`, not another computed property on this view. `sections` above already
+    /// had to be split out of `body` because ten sections tipped the type checker into "unable to
+    /// type-check this expression in reasonable time"; an eleventh built from generic
+    /// `LabeledContent` + `TextField(value:format:)` sent it away for seven minutes with no error
+    /// and no output. A child View is a fresh, small inference context and costs nothing.
+    private var labelsSection: some View {
+        LabelsSettingsSection(offsetX: $labelOffsetX, offsetY: $labelOffsetY,
+                              focused: $labelOffsetFocused,
+                              onPrintAlignment: { printingAlignment = true })
+    }
+
+    fileprivate struct LabelsSettingsSection: View {
+        @Binding var offsetX: Double
+        @Binding var offsetY: Double
+        var focused: FocusState<Bool>.Binding
+        let onPrintAlignment: () -> Void
+
+        var body: some View {
+            Section {
+                row("Shift right", value: $offsetX)
+                row("Shift down", value: $offsetY)
+                Button("Print alignment page", action: onPrintAlignment)
+            } header: {
+                Text("Card labels")
+            } footer: {
+                Text("Millimetres; negative values shift the other way. Print the alignment page on plain paper at 100% (not \"scale to fit\"), hold it against a label sheet, and enter the error you measure.")
+            }
+        }
+
+        private func row(_ title: String, value: Binding<Double>) -> some View {
+            HStack {
+                Text(title)
+                Spacer()
+                // `.numbersAndPunctuation`, not `.decimalPad`: the offset can be negative and the
+                // decimal pad has no minus sign. Either way there is no return key, which is why
+                // SettingsView carries a keyboard-toolbar Done bound to `focused`.
+                TextField("0", value: value, format: .number)
+                    .keyboardType(.numbersAndPunctuation)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+                    .focused(focused)
+            }
         }
     }
 
@@ -598,6 +770,28 @@ struct SettingsView: View {
             Button("Clear image cache", role: .destructive) { confirmingClear = true }
         }
     }
+
+    // MARK: Debug
+
+    #if DEBUG
+    private var debugSection: some View {
+        Section {
+            Toggle("Simulate primary outage", isOn: Binding(
+                get: { AppConfig.simulatePrimaryOutage },
+                set: { AppConfig.simulatePrimaryOutage = $0 }))
+            Button("Delete catalog & re-download", role: .destructive) {
+                confirmingCatalogWipe = true
+            }
+            .disabled(app.catalogDownloadProgress != nil)
+            Button("Rewind recorded pack version") { confirmingPackRewind = true }
+                .disabled(pack.installedVersion == nil || pack.isDownloading)
+        } header: {
+            Text("Debug")
+        } footer: {
+            Text("Forces the self-hosted origin to fail so the backup origin can be tested. \"Delete catalog & re-download\" wipes the installed catalog and pulls a fresh one, honoring the outage switch above. \"Rewind recorded pack version\" drops the recorded scanner-pack version by one without touching the pack file, so a pack update can be rehearsed against the live server — relaunch to pick it up. Debug builds only.")
+        }
+    }
+    #endif
 }
 
 /// One backend's reachability: label, one-line detail, and a colored dot (gray until probed).
@@ -617,10 +811,13 @@ private struct StatusRow: View {
         }
     }
 
+    /// A 9pt dot is a graphic, not text — but it is the ONLY thing distinguishing a healthy
+    /// connection row from a failed one, and systemGreen at 2.22:1 misses even the 3:1 floor for
+    /// meaning-bearing graphics. Same tokens as the text, so a green dot and a green number agree.
     private var dotColor: Color {
         switch ok {
-        case .some(true): return .green
-        case .some(false): return .red
+        case .some(true): return .statusPositive
+        case .some(false): return .statusNegative
         case nil: return .gray
         }
     }
@@ -637,6 +834,7 @@ struct ImportSummary: Identifiable {
 private struct ImportResultSheet: View {
     let summary: ImportSummary
     @Environment(\.dismiss) private var dismiss
+    @State private var sharing: SharePayload?
 
     var body: some View {
         NavigationStack {
@@ -648,9 +846,14 @@ private struct ImportResultSheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let url = summary.skippedURL {
-                    ShareLink("Share skipped rows (CSV)", item: url)
+                    // Not a `ShareLink` — see `ShareSheet`. This one is the least likely to have
+                    // been broken (a plain row, already inside a presented sheet) and the least
+                    // likely to be noticed if it were: it only appears after an import that
+                    // skipped rows. Converted with the rest rather than left as the odd one out.
+                    Button("Share skipped rows (CSV)") { sharing = SharePayload(url: url) }
                 }
             }
+            .sheet(item: $sharing) { ShareSheet(items: [$0.url]) }
             .navigationTitle("Import complete")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

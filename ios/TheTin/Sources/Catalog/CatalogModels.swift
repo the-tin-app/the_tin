@@ -22,6 +22,49 @@ struct Attack: Equatable, Codable {
     let name: String
     let damage: String? // printed damage, e.g. "30", "60+", "20×" — text, not numeric
     let cost: [String]  // energy type names, e.g. ["Grass", "Colorless"]
+    /// The printed effect text. ⚠️ A real `Optional`, not a defaulted non-optional: a defaulted
+    /// property still makes synthesized `Decodable` DEMAND the key, so every `attacks` blob written
+    /// before this field existed would fail to decode and the card would silently lose its attacks.
+    /// Same convention as `CollectionEntry.forTrade` and `BackupSnapshot.setGoals`.
+    var effect: String? = nil
+}
+
+/// A Pokémon Power / Ability / Ancient Trait — whatever the card calls it, in `type`.
+struct CardAbility: Equatable, Codable {
+    let name: String
+    var type: String? = nil
+    var effect: String? = nil
+}
+
+/// A weakness or resistance: the type it applies to, and the printed modifier ("×2", "-30").
+/// The value is TEXT because that is how it is printed — never arithmetic.
+struct CardTypeValue: Equatable, Codable {
+    let type: String
+    let value: String
+}
+
+/// Everything else printed on the card, from the `card.detail` JSON column.
+///
+/// One column rather than eight, following the `attacks` precedent: `CatalogStore.cardRecord`
+/// already handles "missing column or bad JSON reads as nothing", every card query is `SELECT *`
+/// so no SQL changes, and a field added later never costs another schema migration.
+///
+/// ⚠️ Every collection is a real `Optional`, for the same reason `Attack.effect` is. The pipeline
+/// writes this with `JSON.stringify`, which OMITS undefined keys — so a card with no abilities has
+/// no `abilities` key at all, and a defaulted non-optional array would fail the whole decode.
+struct CardDetail: Equatable, Codable {
+    /// "Pokemon" / "Trainer" / "Energy" — decides which half of the sheet is even applicable.
+    var category: String? = nil
+    var stage: String? = nil
+    var evolveFrom: String? = nil
+    var abilities: [CardAbility]? = nil
+    var weaknesses: [CardTypeValue]? = nil
+    var resistances: [CardTypeValue]? = nil
+    var retreat: Int? = nil
+    var regulationMark: String? = nil
+    /// Trainers carry their rules text at the top level and have no attacks.
+    var trainerType: String? = nil
+    var effect: String? = nil
 }
 
 struct CardRecord: Identifiable, Equatable {
@@ -39,6 +82,9 @@ struct CardRecord: Identifiable, Equatable {
     // Default keeps the memberwise init source-compatible; catalogs older than the
     // attacks column (or non-Pokémon cards) simply have none.
     var attacks: [Attack] = []
+    /// The rest of the printed card. nil on catalogs older than the `detail` column — the fact
+    /// sheet then renders what it has and omits the rows it cannot fill.
+    var detail: CardDetail?
 
     /// Prefer the TCGdex asset base (+ webp variant, e.g. "/high.webp"). When TCGdex has no art,
     /// derive the public TCGplayer-CDN image straight from the product id — same CDN sealed products
@@ -53,6 +99,17 @@ struct CardRecord: Identifiable, Equatable {
         }
         if let imageUrl { return URL(string: imageUrl) }
         return nil
+    }
+
+    /// Art for a WEB page — the share preview and the printed label's landing page, both of which
+    /// are stateless and can only show what the URL hands them.
+    ///
+    /// PNG/JPEG on purpose: og:image renderers (iMessage, WhatsApp) have spotty webp support, so
+    /// this is NOT `imageURL(quality:)`. Only the TCGdex branch differs — the TCGplayer-CDN and
+    /// legacy branches are already JPEG, so they're reused rather than restated.
+    var webArtURL: URL? {
+        if let imageBase { return URL(string: "\(imageBase)/high.png") }
+        return imageURL(quality: "high")
     }
 }
 

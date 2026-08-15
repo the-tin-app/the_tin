@@ -70,8 +70,9 @@ extension FingerprintRemote {
 }
 
 /// No source configured. Unreachable in a shipping build — `AppConfig.selfHostBaseURL` is a
-/// parsed constant — but representable, so fail closed with "scanner unavailable" rather than
-/// force-unwrapping. (The pack is served only from the self-hosted NAS; see `ScannerPackModel`.)
+/// parsed constant, and `ScannerPackModel.liveRemote()` falls back to the R2 backup rather than
+/// this type when the NAS host is unset — but representable, so fail closed with "scanner
+/// unavailable" rather than force-unwrapping.
 struct UnavailableFingerprintRemote: FingerprintRemote {
     func fetchManifest() async throws -> FingerprintManifest { throw CatalogError.badResponse }
     func fetchData(path: String) async throws -> Data { throw CatalogError.badResponse }

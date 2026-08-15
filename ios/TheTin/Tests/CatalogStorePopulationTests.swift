@@ -12,12 +12,19 @@ final class CatalogStorePopulationTests: XCTestCase {
                 CREATE TABLE population(card_id TEXT NOT NULL, grader TEXT NOT NULL, grade TEXT NOT NULL,
                   count INTEGER, gem_rate REAL, total_population INTEGER, as_of TEXT NOT NULL,
                   PRIMARY KEY(card_id, grader, grade));
-                INSERT INTO population VALUES ('c1','PSA','9',900,0.42,5000,'2026-07-11');
-                INSERT INTO population VALUES ('c1','PSA','10',2100,0.42,5000,'2026-07-11');
-                INSERT INTO population VALUES ('c1','PSA','9.5',3,0.42,5000,'2026-07-11');
+                -- ⚠️ gem_rate is a PERCENTAGE here (42.0 = 42%), because that is what the
+                -- catalog actually stores: 665,643 non-null rows on the served average tier
+                -- span 0.0–100.0. This fixture used to say 0.42, and the assertions below
+                -- passed against a store that returned it unchanged — so the suite encoded the
+                -- opposite contract from production and certified the bug that shipped as
+                -- "2740% gem" on the card screen. The store now divides by 100, which is why
+                -- these same assertions still expect 0.42.
+                INSERT INTO population VALUES ('c1','PSA','9',900,42.0,5000,'2026-07-11');
+                INSERT INTO population VALUES ('c1','PSA','10',2100,42.0,5000,'2026-07-11');
+                INSERT INTO population VALUES ('c1','PSA','9.5',3,42.0,5000,'2026-07-11');
                 INSERT INTO population VALUES ('c1','BGS','10',12,NULL,60,'2026-07-11');
                 INSERT INTO population VALUES ('c1','BGS','9',0,NULL,60,'2026-07-11');
-                INSERT INTO population VALUES ('c1','CGC','10',500,0.6,9000,'2026-07-11');
+                INSERT INTO population VALUES ('c1','CGC','10',500,60.0,9000,'2026-07-11');
                 """)
             } else {
                 try db.execute(sql: "CREATE TABLE card(id TEXT PRIMARY KEY);")
@@ -33,7 +40,7 @@ final class CatalogStorePopulationTests: XCTestCase {
         XCTAssertEqual(rows.map(\.grade), ["10", "9.5", "9"]) // ORDER BY CAST(grade AS REAL) DESC, PSA only
         let top = try XCTUnwrap(rows.first)
         XCTAssertEqual(top.count, 2100)
-        XCTAssertEqual(top.gemRate, 0.42)
+        XCTAssertEqual(try XCTUnwrap(top.gemRate), 0.42, accuracy: 1e-9)  // 42.0% → fraction
         XCTAssertEqual(top.totalPopulation, 5000)
     }
 
@@ -45,7 +52,7 @@ final class CatalogStorePopulationTests: XCTestCase {
         // Highest grade first within a company.
         XCTAssertEqual(groups[0].rows.map(\.grade), ["10", "9.5", "9"])
         XCTAssertEqual(groups[0].totalPopulation, 5000)
-        XCTAssertEqual(groups[0].gemRate, 0.42)
+        XCTAssertEqual(try XCTUnwrap(groups[0].gemRate), 0.42, accuracy: 1e-9)
         // Zero-count grades dropped so companies don't render empty half-grade bars.
         let bgs = try XCTUnwrap(groups.first { $0.grader == "BGS" })
         XCTAssertEqual(bgs.rows.map(\.grade), ["10"])
