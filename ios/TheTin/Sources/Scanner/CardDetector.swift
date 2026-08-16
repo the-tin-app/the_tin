@@ -60,13 +60,28 @@ enum EditorPlate {
         let ci = CIImage(cgImage: cg).oriented(forExifOrientation: exif(image.imageOrientation))
         let handler = VNImageRequestHandler(ciImage: ci, options: [:])
         guard let rectified = CardRectifier.rectify(ci: ci, handler: handler),
-              rectified.confidence > 0,
-              // The tuple-returning form: the DEGREES are what the wide render needs, and the
-              // unhinted convenience overload throws them away.
-              let oriented = OrientationNormalizer.orientUpright(rectified.corrected,
-                                                                 context: context, preferred: nil)
+              rectified.confidence > 0
         else { return nil }
-        return jpeg(ci: ci, quad: rectified.quad, degrees: oriented.degrees, context: context)
+        return jpeg(ci: ci, quad: rectified.quad,
+                    degrees: uprightDegrees(rectified.corrected.extent), context: context)
+    }
+
+    /// Portrait, always — the card comes out the way it went in.
+    ///
+    /// ⚠️ Deliberately NOT `OrientationNormalizer.orientUpright`, which is what the scanner uses.
+    /// That resolves 0° vs 180° by comparing fast-OCR confidence between the two, and on a single
+    /// still it guessed wrong and saved the card upside down (Tomas, device, 2026-08-15). The
+    /// scanner survives a bad guess because the next frame re-decides; a photo taken once does
+    /// not. And a 180° flip is never merely cosmetic here — it swaps left with right, turning
+    /// 55/45 into 45/55.
+    ///
+    /// A flip is also never *needed*: the user is photographing a card they are holding, the
+    /// right way up. The only axis that can genuinely be wrong is portrait vs landscape — the
+    /// quad's "top" edge being the card's side — so that is the only one corrected. Someone who
+    /// shoots a card sideways gets it rotated to vertical, and if that lands upside down the
+    /// answer is to retake it rather than to let OCR guess on every photo.
+    static func uprightDegrees(_ extent: CGRect) -> Int {
+        extent.width > extent.height ? 90 : 0
     }
 
     /// `UIImage.imageOrientation` → the EXIF constant `CIImage.oriented` wants. A camera photo
