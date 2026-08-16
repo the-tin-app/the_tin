@@ -46,7 +46,46 @@ enum EditorPlate {
 
     static func jpeg(pixelBuffer: CVPixelBuffer, quad: CardQuad, degrees: Int,
                      context: CIContext) -> Data? {
-        let ci = CIImage(cvPixelBuffer: pixelBuffer)
+        jpeg(ci: CIImage(cvPixelBuffer: pixelBuffer), quad: quad, degrees: degrees, context: context)
+    }
+
+    /// Finds the card in a STILL photo and renders the same picture a scan lock produces, so a
+    /// card already in the tin is measured on exactly the same footing as one being scanned.
+    ///
+    /// Nil when no card-shaped quad is found. The caller keeps the original photo in that case:
+    /// eight hand-placed lines still measure it, just with more work, and refusing outright would
+    /// mean a card that cannot be photographed well can never be measured at all.
+    static func fromPhoto(_ image: UIImage, context: CIContext) -> Data? {
+        guard let cg = image.cgImage else { return nil }
+        let ci = CIImage(cgImage: cg).oriented(forExifOrientation: exif(image.imageOrientation))
+        let handler = VNImageRequestHandler(ciImage: ci, options: [:])
+        guard let rectified = CardRectifier.rectify(ci: ci, handler: handler),
+              rectified.confidence > 0,
+              // The tuple-returning form: the DEGREES are what the wide render needs, and the
+              // unhinted convenience overload throws them away.
+              let oriented = OrientationNormalizer.orientUpright(rectified.corrected,
+                                                                 context: context, preferred: nil)
+        else { return nil }
+        return jpeg(ci: ci, quad: rectified.quad, degrees: oriented.degrees, context: context)
+    }
+
+    /// `UIImage.imageOrientation` → the EXIF constant `CIImage.oriented` wants. A camera photo
+    /// carries its rotation as metadata, and skipping this measures a sideways card.
+    private static func exif(_ o: UIImage.Orientation) -> Int32 {
+        switch o {
+        case .up: return 1
+        case .down: return 3
+        case .left: return 8
+        case .right: return 6
+        case .upMirrored: return 2
+        case .downMirrored: return 4
+        case .leftMirrored: return 5
+        case .rightMirrored: return 7
+        @unknown default: return 1
+        }
+    }
+
+    static func jpeg(ci: CIImage, quad: CardQuad, degrees: Int, context: CIContext) -> Data? {
         let wide = quad.expanded(by: margin)
         guard let f = CIFilter(name: "CIPerspectiveCorrection") else { return nil }
         f.setValue(ci, forKey: kCIInputImageKey)

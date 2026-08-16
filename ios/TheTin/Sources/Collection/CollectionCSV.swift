@@ -12,7 +12,12 @@ enum CollectionCSV {
     static let header = ["card_id", "name", "set_id", "set_name", "number", "rarity", "qty",
                          "variant", "condition", "grade", "price_paid", "acquired_at",
                          "acquired_from", "added_at", "divider", "current_value", "value_as_of",
-                         "for_trade", "sold_at", "sold_for", "acquired_via", "tcgplayer_id"]
+                         "for_trade", "sold_at", "sold_for", "acquired_via", "tcgplayer_id",
+                         // Appended for the reason every column before them was: importers read
+                         // this by position as often as by name. Two columns rather than one
+                         // "55/45 L-R · 53/47 T-B" string, so a spreadsheet can sort on either
+                         // axis without anyone parsing it back apart.
+                         "centering_lr", "centering_tb"]
 
     /// ISO 8601 with time, UTC — every exported date column uses this.
     static let iso: ISO8601DateFormatter = {
@@ -53,6 +58,12 @@ enum CollectionCSV {
     }
 
     private static func money(_ v: Double?) -> String { v.map { String(format: "%.2f", $0) } ?? "" }
+    /// "55/45" — the same rounding `Centering.summary` prints, so the file and the screen never
+    /// disagree by a point.
+    private static func pair(_ share: Double) -> String {
+        let first = Int((share * 100).rounded())
+        return "\(first)/\(100 - first)"
+    }
     private static func date(_ d: Date?) -> String { d.map(iso.string(from:)) ?? "" }
 
     /// One row per entry. Catalog joins come in as prebuilt dictionaries (caller fetches once);
@@ -84,7 +95,9 @@ enum CollectionCSV {
                     groupName[e.groupId] ?? "", money(value),
                     value == nil ? "" : (price?.asOf ?? ""),
                     e.isForTrade ? "true" : "",
-                    date(e.soldAt), money(e.soldFor), e.acquiredVia ?? "", ""]
+                    date(e.soldAt), money(e.soldFor), e.acquiredVia ?? "", "",
+                    e.centering.map { pair($0.horizontal) } ?? "",
+                    e.centering.map { pair($0.vertical) } ?? ""]
         }
         return data([header] + rows + sealedRows(sealed, products: sealedProducts, sets: sets))
     }
@@ -109,7 +122,10 @@ enum CollectionCSV {
                     money(s.pricePaid), date(s.acquiredAt), s.acquiredFrom ?? "", date(s.addedAt),
                     "", money(value), value == nil ? "" : (p?.asOf ?? ""),
                     "", date(s.soldAt), money(s.soldFor), s.acquiredVia ?? "",
-                    String(s.productId)]
+                    String(s.productId),
+                    // A sealed box has no borders to centre. Blank, but present: every row has
+                    // to be the same width as the header or the file is malformed.
+                    "", ""]
         }
     }
 
