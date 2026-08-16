@@ -7,6 +7,11 @@ import SwiftUI
 /// The picture goes in `EntryPhotos.centering`, so `PhotoStore`'s iCloud mirror carries it and a
 /// restore brings it back with everything else — a saved ratio whose picture didn't survive would
 /// be a number with nothing behind it, and nobody could check it again.
+///
+/// ⚠️ **This view presents NOTHING** — the same rule, and the same reason, as `EntryPhotosSection`
+/// above it. A `.sheet` attached inside a `Form` `Section` opened and then closed itself on the
+/// next re-render (device, 2026-08-15); the editor lives in `centeringEditor(...)`, attached to
+/// the form's ROOT.
 struct EntryCenteringSection: View {
     let entryId: String
     @Binding var photos: EntryPhotos
@@ -16,8 +21,11 @@ struct EntryCenteringSection: View {
     @Binding var request: PhotoRequest?
     var photoStore: PhotoStore = .live()
 
-    @State private var editing = false
+    /// Owned by the form, because the presentation it drives has to be attached to the form's
+    /// root — see `centeringEditor(...)`.
+    @Binding var editing: Bool
     /// True only between choosing a photo source and that photo landing. See `shouldOpenEditor`.
+    /// Not a presentation, so it can safely stay here.
     @State private var awaitingCapture = false
 
     /// Whether a change to the stored picture should throw the editor open.
@@ -31,10 +39,7 @@ struct EntryCenteringSection: View {
         awaitingCapture && new != nil && new != old
     }
 
-    private var plate: UIImage? {
-        photos.centering.flatMap { UIImage(contentsOfFile: photoStore.url(entryId: entryId,
-                                                                          file: $0).path) }
-    }
+    private var hasPlate: Bool { photos.centering != nil }
 
     var body: some View {
         Section {
@@ -44,7 +49,7 @@ struct EntryCenteringSection: View {
                         .accessibilityLabel(centering.spokenSummary)
                 }
             }
-            if plate != nil {
+            if hasPlate {
                 Button("Adjust the lines") { editing = true }
             }
             Menu {
@@ -79,7 +84,40 @@ struct EntryCenteringSection: View {
                 editing = true
             }
         }
-        .sheet(isPresented: $editing) {
+    }
+}
+
+extension View {
+    /// The centring editor, attached to the FORM'S ROOT.
+    ///
+    /// ⚠️ Not inside the section that opens it. A `.sheet` on a `Form` `Section` presented and
+    /// then dismissed itself immediately as the form re-rendered — the same class of bug the
+    /// photo picker hit before it moved to `photoCapture(...)`, and the confirmation dialogs in
+    /// `StagingReviewView` before they were anchored on their buttons.
+    func centeringEditor(entryId: String, photos: EntryPhotos, centering: Binding<Centering?>,
+                         isPresented: Binding<Bool>,
+                         photoStore: PhotoStore = .live()) -> some View {
+        modifier(CenteringEditorModifier(entryId: entryId, photos: photos, centering: centering,
+                                         isPresented: isPresented, photoStore: photoStore))
+    }
+}
+
+private struct CenteringEditorModifier: ViewModifier {
+    let entryId: String
+    let photos: EntryPhotos
+    @Binding var centering: Centering?
+    @Binding var isPresented: Bool
+    let photoStore: PhotoStore
+
+    /// Loaded when the sheet opens rather than on every render: this reads a ~250 KB JPEG off
+    /// disk and decodes it, and the form re-renders on every keystroke in it.
+    private var plate: UIImage? {
+        photos.centering.flatMap { UIImage(contentsOfFile: photoStore.url(entryId: entryId,
+                                                                          file: $0).path) }
+    }
+
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: $isPresented) {
             NavigationStack {
                 if let plate {
                     CenteringEditorView(plate: plate, initial: centering) { centering = $0 }
