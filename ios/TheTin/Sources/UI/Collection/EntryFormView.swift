@@ -48,6 +48,10 @@ struct EntryFormView: View {
     /// the entry saved under another.
     @State private var entryId = ""
     @State private var photos = EntryPhotos()
+    @State private var centering: Centering? = nil
+    /// Owned here, not in the section, because the sheet it drives must hang off the Form's root
+    /// — see `centeringEditor(...)`. Same reason `photoRequest` lives here.
+    @State private var editingCentering = false
     /// Which photo tile was tapped. Lives here, not in the section, because the presentation it
     /// drives has to be attached to the Form's root — see `photoCapture(...)`.
     @State private var photoRequest: PhotoRequest?
@@ -63,7 +67,8 @@ struct EntryFormView: View {
         [groupId, newGroupName, String(qty), condition.rawValue, variant.rawValue,
          grade.map(String.init(describing:)) ?? "", pricePaidText, gradingFeeText,
          hasAcquiredDate ? acquiredAt.description : "", acquiredFrom, String(forTrade),
-         acquiredVia?.rawValue ?? "", photos.all.joined(separator: ",")]
+         acquiredVia?.rawValue ?? "", photos.all.joined(separator: ","),
+         centering?.summary ?? ""]
     }
     private var isDirty: Bool { snapshot != baseline }
 
@@ -132,6 +137,8 @@ struct EntryFormView: View {
                 Text("Collects this copy in your trade list, which you can share as a link or print as a sheet.")
             }
             EntryPhotosSection(entryId: entryId, photos: $photos, request: $photoRequest)
+            EntryCenteringSection(entryId: entryId, photos: $photos, centering: $centering,
+                                  request: $photoRequest, editing: $editingCentering)
             // A visible row rather than a second toolbar item or a long-press on Save: printing
             // the sticker for the card you just filed is the next physical step, and a verb you
             // have to already know about is one nobody finds. Offered on edits too — the QR
@@ -166,6 +173,10 @@ struct EntryFormView: View {
         // ⚠️ On the Form, NOT on the section above. Attached to the Section this presented and
         // instantly dismissed itself, closing the whole entry sheet with it (device, 2026-08-10).
         .photoCapture(entryId: entryId, photos: $photos, request: $photoRequest)
+        // ⚠️ On the Form, NOT on the section that opens it — same rule as the line above. A
+        // `.sheet` inside a `Section` presented and then closed itself on the next re-render.
+        .centeringEditor(entryId: entryId, photos: photos, centering: $centering,
+                         isPresented: $editingCentering)
         .navigationTitle(existing == nil ? "Save to tin" : "Edit entry")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -258,6 +269,7 @@ struct EntryFormView: View {
     private func populate() {
         entryId = existing?.id ?? UUID().uuidString
         photos = existing?.photos ?? EntryPhotos()
+        centering = existing?.centering
         if let existing {
             groupId = existing.groupId
             qty = existing.qty
@@ -328,7 +340,10 @@ struct EntryFormView: View {
                 // nil rather than an empty set when nothing was taken, so an entry that was
                 // never photographed stays byte-identical to what it was before this field
                 // existed — the same rule `forTrade` follows above.
-                photos: photos.isEmpty ? nil : photos)
+                photos: photos.isEmpty ? nil : photos,
+                // Same nil-when-absent rule as `photos`: an unmeasured entry stays byte-identical
+                // to what it was before this field existed.
+                centering: centering)
             guard await onSave(entry) else { return }
             dismiss()
             if forTrade, !wasForTrade {

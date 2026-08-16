@@ -187,6 +187,103 @@ final class CenteringTests: XCTestCase {
         }
     }
 
+    /// A still photo must come back the way it went in. The scanner resolves 0 vs 180 by
+    /// comparing OCR confidence between the two, which on one still guessed wrong and saved the
+    /// card upside down (device, 2026-08-15) — and a flip is not cosmetic here: it swaps left
+    /// with right, so 55/45 becomes 45/55.
+    func testAPhotoIsNeverFlippedEndForEnd() {
+        // Portrait card, a bright marker across its top third.
+        let w = 400, h = 600, stride = w * 4
+        var buf = [UInt8](repeating: 0, count: stride * h)
+        for y in 0..<h {
+            for x in 0..<w {
+                let i = y * stride + x * 4
+                let onCard = (60..<340).contains(x) && (80..<520).contains(y)
+                let marker = onCard && y < 160          // near the TOP of the card
+                buf[i] = onCard ? (marker ? 255 : 40) : 210         // B
+                buf[i + 1] = onCard ? (marker ? 255 : 40) : 210     // G
+                buf[i + 2] = onCard ? (marker ? 255 : 40) : 210     // R
+                buf[i + 3] = 255
+            }
+        }
+        let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+        let provider = CGDataProvider(data: Data(buf) as CFData)!
+        let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
+                         bytesPerRow: stride, space: cs,
+                         bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                                  | CGBitmapInfo.byteOrder32Little.rawValue),
+                         provider: provider, decode: nil, shouldInterpolate: false,
+                         intent: .defaultIntent)!
+
+        guard let jpeg = EditorPlate.fromPhoto(UIImage(cgImage: cg), context: CIContext()),
+              let out = UIImage(data: jpeg)?.cgImage else {
+            // Detection is Vision's call and can legitimately find nothing in a synthetic plate;
+            // the decision function below is the part this test exists to pin.
+            XCTAssertEqual(EditorPlate.uprightDegrees(CGRect(x: 0, y: 0, width: 400, height: 600)), 0)
+            return
+        }
+        XCTAssertGreaterThan(out.height, out.width, "the picture must come out portrait")
+        XCTAssertTrue(brighterHalf(of: out) == .top,
+                      "the marker started at the top of the card and must still be there")
+    }
+
+    /// Portrait stays as-is; only a landscape correction is rotated. Nothing here may return 180.
+    func testUprightNeverAsksForAFlip() {
+        XCTAssertEqual(EditorPlate.uprightDegrees(CGRect(x: 0, y: 0, width: 400, height: 600)), 0)
+        XCTAssertEqual(EditorPlate.uprightDegrees(CGRect(x: 0, y: 0, width: 600, height: 400)), 90)
+        for size in [(400, 600), (600, 400), (500, 500)] {
+            let d = EditorPlate.uprightDegrees(CGRect(x: 0, y: 0, width: size.0, height: size.1))
+            XCTAssertNotEqual(d, 180, "a photo must never be turned end for end")
+            XCTAssertNotEqual(d, 270, "nor rotated past vertical")
+        }
+    }
+
+    private enum Half { case top, bottom }
+
+    /// Which half of the image carries more light — enough to tell "flipped" from "not".
+    private func brighterHalf(of cg: CGImage) -> Half {
+        // `rowBytes`, not `stride` — a local named `stride` shadows the `stride(from:to:by:)`
+        // used to sample columns below.
+        let w = cg.width, h = cg.height, rowBytes = w * 4
+        var buf = [UInt8](repeating: 0, count: rowBytes * h)
+        let ctx = CGContext(data: &buf, width: w, height: h, bitsPerComponent: 8,
+                            bytesPerRow: rowBytes, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                        | CGBitmapInfo.byteOrder32Little.rawValue)!
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var top = 0.0, bottom = 0.0
+        for y in 0..<h {
+            for x in stride(from: 0, to: w, by: 4) {
+                let i = y * rowBytes + x * 4
+                let lum = Double(buf[i]) + Double(buf[i + 1]) + Double(buf[i + 2])
+                if y < h / 2 { top += lum } else { bottom += lum }
+            }
+        }
+        return top >= bottom ? .top : .bottom
+    }
+
+    /// Opening the entry form assigns the saved photos into it — a nil to filename change. That
+    /// must not be mistaken for "the user just took a photo", or the form throws the editor open
+    /// on the previously saved picture about a second after you enter it, which is what happened
+    /// on device (2026-08-15).
+    func testOpeningTheFormDoesNotReopenTheEditor() {
+        // populate(): entry's saved picture arrives, nobody asked for a camera.
+        XCTAssertFalse(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: false, old: nil, new: "saved-last-week.jpg"))
+        // Re-populating with the same value is not a capture either.
+        XCTAssertFalse(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: false, old: "a.jpg", new: "a.jpg"))
+        // A picture the user actually asked for does open it — the flow this exists for.
+        XCTAssertTrue(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: true, old: nil, new: "just-taken.jpg"))
+        // Replacing an existing picture opens it too.
+        XCTAssertTrue(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: true, old: "old.jpg", new: "new.jpg"))
+        // A capture that produced nothing (cancelled picker) opens nothing.
+        XCTAssertFalse(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: true, old: "old.jpg", new: nil))
+    }
+
     func testSkewIsZeroForASquareOnQuadAndRisesWithTilt() {
         let square = CardQuad(topLeft: CGPoint(x: 0, y: 100), topRight: CGPoint(x: 70, y: 100),
                               bottomLeft: CGPoint(x: 0, y: 0), bottomRight: CGPoint(x: 70, y: 0))

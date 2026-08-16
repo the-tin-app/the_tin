@@ -46,7 +46,61 @@ enum EditorPlate {
 
     static func jpeg(pixelBuffer: CVPixelBuffer, quad: CardQuad, degrees: Int,
                      context: CIContext) -> Data? {
-        let ci = CIImage(cvPixelBuffer: pixelBuffer)
+        jpeg(ci: CIImage(cvPixelBuffer: pixelBuffer), quad: quad, degrees: degrees, context: context)
+    }
+
+    /// Finds the card in a STILL photo and renders the same picture a scan lock produces, so a
+    /// card already in the tin is measured on exactly the same footing as one being scanned.
+    ///
+    /// Nil when no card-shaped quad is found. The caller keeps the original photo in that case:
+    /// eight hand-placed lines still measure it, just with more work, and refusing outright would
+    /// mean a card that cannot be photographed well can never be measured at all.
+    static func fromPhoto(_ image: UIImage, context: CIContext) -> Data? {
+        guard let cg = image.cgImage else { return nil }
+        let ci = CIImage(cgImage: cg).oriented(forExifOrientation: exif(image.imageOrientation))
+        let handler = VNImageRequestHandler(ciImage: ci, options: [:])
+        guard let rectified = CardRectifier.rectify(ci: ci, handler: handler),
+              rectified.confidence > 0
+        else { return nil }
+        return jpeg(ci: ci, quad: rectified.quad,
+                    degrees: uprightDegrees(rectified.corrected.extent), context: context)
+    }
+
+    /// Portrait, always — the card comes out the way it went in.
+    ///
+    /// ⚠️ Deliberately NOT `OrientationNormalizer.orientUpright`, which is what the scanner uses.
+    /// That resolves 0° vs 180° by comparing fast-OCR confidence between the two, and on a single
+    /// still it guessed wrong and saved the card upside down (Tomas, device, 2026-08-15). The
+    /// scanner survives a bad guess because the next frame re-decides; a photo taken once does
+    /// not. And a 180° flip is never merely cosmetic here — it swaps left with right, turning
+    /// 55/45 into 45/55.
+    ///
+    /// A flip is also never *needed*: the user is photographing a card they are holding, the
+    /// right way up. The only axis that can genuinely be wrong is portrait vs landscape — the
+    /// quad's "top" edge being the card's side — so that is the only one corrected. Someone who
+    /// shoots a card sideways gets it rotated to vertical, and if that lands upside down the
+    /// answer is to retake it rather than to let OCR guess on every photo.
+    static func uprightDegrees(_ extent: CGRect) -> Int {
+        extent.width > extent.height ? 90 : 0
+    }
+
+    /// `UIImage.imageOrientation` → the EXIF constant `CIImage.oriented` wants. A camera photo
+    /// carries its rotation as metadata, and skipping this measures a sideways card.
+    private static func exif(_ o: UIImage.Orientation) -> Int32 {
+        switch o {
+        case .up: return 1
+        case .down: return 3
+        case .left: return 8
+        case .right: return 6
+        case .upMirrored: return 2
+        case .downMirrored: return 4
+        case .leftMirrored: return 5
+        case .rightMirrored: return 7
+        @unknown default: return 1
+        }
+    }
+
+    static func jpeg(ci: CIImage, quad: CardQuad, degrees: Int, context: CIContext) -> Data? {
         let wide = quad.expanded(by: margin)
         guard let f = CIFilter(name: "CIPerspectiveCorrection") else { return nil }
         f.setValue(ci, forKey: kCIInputImageKey)

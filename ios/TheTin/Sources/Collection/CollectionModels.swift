@@ -189,6 +189,12 @@ enum AcquiredVia: String, Codable, CaseIterable, Identifiable {
 struct EntryPhotos: Codable, Equatable {
     var front: String? = nil
     var back: String? = nil
+    /// The rectified, margined picture the centring editor draws its lines on. A named slot
+    /// rather than a separate store: `all`/`labelled` drive `PhotoStore.needed`, the iCloud
+    /// mirror and the printed report, so hanging it here means backup and restore need no code
+    /// of their own — and a measurement whose picture didn't survive a restore would be a number
+    /// with nothing behind it.
+    var centering: String? = nil
     /// Dense and capped at `maxDetails`. Dense so the form's tiles never show a hole.
     var details: [String] = []
 
@@ -197,7 +203,7 @@ struct EntryPhotos: Codable, Equatable {
     /// Which of the four tiles a photo belongs to. Defined here rather than in the view so the
     /// tile↔model mapping is testable without rendering anything.
     enum Slot: Hashable {
-        case front, back, detail(Int)
+        case front, back, centering, detail(Int)
     }
 
     /// Every photo with the label the report prints under it, in print order. The single
@@ -209,6 +215,7 @@ struct EntryPhotos: Codable, Equatable {
         var out: [(label: String, file: String)] = []
         if let front { out.append((label: "Front", file: front)) }
         if let back { out.append((label: "Back", file: back)) }
+        if let centering { out.append((label: "Centering", file: centering)) }
         out += details.enumerated().map { (label: "Detail \($0.offset + 1)", file: $0.element) }
         return out
     }
@@ -220,6 +227,7 @@ struct EntryPhotos: Codable, Equatable {
         switch slot {
         case .front: return front
         case .back: return back
+        case .centering: return centering
         case .detail(let i): return i < details.count ? details[i] : nil
         }
     }
@@ -230,6 +238,7 @@ struct EntryPhotos: Codable, Equatable {
         switch slot {
         case .front: front = file
         case .back: back = file
+        case .centering: centering = file
         case .detail(let i):
             if let file {
                 if i < details.count { details[i] = file }
@@ -343,6 +352,11 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
     /// documents above — a defaulted non-optional makes synthesized `Decodable` demand the key.
     var photos: EntryPhotos? = nil
 
+    /// Border ratios for this copy, placed by hand in the centring editor. Optional for the same
+    /// decode reason as `photos`. Being on the entry is what puts it in `collection.json`, which
+    /// IS the backup snapshot — so it restores with everything else and needs no separate path.
+    var centering: Centering? = nil
+
     var isForTrade: Bool { forTrade == true }
     var isSold: Bool { soldAt != nil }
 
@@ -366,6 +380,10 @@ struct CollectionEntry: Identifiable, Equatable, Codable {
             // Deliberately `isEmpty`, not `!= nil`: opening the form and backing out must not
             // permanently split a stack.
             || !(photos?.isEmpty ?? true)
+            // Centring is measured from one physical copy's own borders. Folding a measured copy
+            // into a x2 would attach its ratios to a card nobody measured — the same silent
+            // destruction the photo clause above prevents.
+            || centering != nil
     }
 
     /// True when `other` is the *same copy* as this one: same card, same divider, same printing,

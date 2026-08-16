@@ -60,6 +60,61 @@ final class PhotoStoreMirrorTests: XCTestCase {
             }
     }
 
+    /// The centring picture has to ride the same mirror as every other photo, or a restored
+    /// device shows a ratio with nothing behind it and no way to check it again. `needed` is what
+    /// drives the pull, so a slot missing from it is a slot that never restores.
+    func testTheCentringPictureIsMirroredLikeAnyOtherPhoto() {
+        var entry = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "", qty: 1,
+                                    condition: nil, grade: nil, pricePaid: nil, acquiredAt: nil,
+                                    acquiredFrom: nil, addedAt: Date())
+        entry.photos = EntryPhotos(front: "f.jpg", centering: "c.jpg")
+
+        let needed = PhotoStore.needed(from: [entry])
+        XCTAssertEqual(needed["e1"]?.sorted(), ["c.jpg", "f.jpg"],
+                       "the centring picture must be pulled on restore like any other photo")
+    }
+
+    /// A measured copy is its own acquisition: folding it into a x2 would attach one card's
+    /// borders to another card nobody measured.
+    func testAMeasuredCopyDoesNotFoldIntoAQuantity() {
+        var measured = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "", qty: 1,
+                                       condition: nil, grade: nil, pricePaid: nil, acquiredAt: nil,
+                                       acquiredFrom: nil, addedAt: Date())
+        XCTAssertFalse(measured.hasAcquisitionDetail, "precondition: nothing per-copy yet")
+        measured.centering = Centering(left: 40, right: 20, top: 30, bottom: 60)
+        XCTAssertTrue(measured.hasAcquisitionDetail)
+    }
+
+    /// The measurement lives on the entry, and the entry IS the backup snapshot — so this is the
+    /// whole of "centring is backed up". A decode that drops it would lose it silently.
+    func testCentringSurvivesTheBackupEncodeDecode() throws {
+        var entry = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "", qty: 1,
+                                    condition: nil, grade: nil, pricePaid: nil, acquiredAt: nil,
+                                    acquiredFrom: nil, addedAt: Date())
+        entry.centering = Centering(outerLeft: 10, innerLeft: 65, outerRight: 5, innerRight: 50,
+                                    outerTop: 8, innerTop: 61, outerBottom: 3, innerBottom: 50)
+        entry.photos = EntryPhotos(centering: "c.jpg")
+
+        let round = try JSONDecoder().decode(CollectionEntry.self,
+                                             from: try JSONEncoder().encode(entry))
+        XCTAssertEqual(round.centering, entry.centering)
+        XCTAssertEqual(round.photos?.centering, "c.jpg")
+        // The eight lines survive, not just the ratio: reopening the editor has to put them back
+        // where they were left, or "adjust" means "start again".
+        XCTAssertEqual(round.centering?.outerLeft, 10)
+        XCTAssertEqual(round.centering?.innerLeft, 65)
+    }
+
+    /// A collection.json written before centring existed must still decode — the same rule every
+    /// optional field on this type follows.
+    func testAnEntryWrittenBeforeCentringExistedStillDecodes() throws {
+        let legacy = """
+        {"id":"e1","cardId":"swsh7-215","groupId":"","qty":1,"addedAt":0}
+        """
+        let entry = try JSONDecoder().decode(CollectionEntry.self, from: Data(legacy.utf8))
+        XCTAssertNil(entry.centering)
+    }
+
     func testMirrorUpCopiesThePhotoIntoTheContainer() throws {
         let store = makeStore(local: "a", mirror: TempDirStore(dir: container))
         let file = try store.save(solid(), entryId: "e1")
