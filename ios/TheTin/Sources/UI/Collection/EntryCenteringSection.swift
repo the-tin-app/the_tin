@@ -17,6 +17,19 @@ struct EntryCenteringSection: View {
     var photoStore: PhotoStore = .live()
 
     @State private var editing = false
+    /// True only between choosing a photo source and that photo landing. See `shouldOpenEditor`.
+    @State private var awaitingCapture = false
+
+    /// Whether a change to the stored picture should throw the editor open.
+    ///
+    /// ⚠️ `awaitingCapture` is the whole point. Without it this fired on `populate()` — which
+    /// assigns the entry's saved photos into the form on open, a nil → filename change — so
+    /// merely opening the form launched the editor a second later, on whatever picture was last
+    /// saved. That reads as the app reopening an old photo at random (Tomas, device, 2026-08-15).
+    /// Only a picture the user just asked for may open anything.
+    static func shouldOpenEditor(awaitingCapture: Bool, old: String?, new: String?) -> Bool {
+        awaitingCapture && new != nil && new != old
+    }
 
     private var plate: UIImage? {
         photos.centering.flatMap { UIImage(contentsOfFile: photoStore.url(entryId: entryId,
@@ -35,10 +48,16 @@ struct EntryCenteringSection: View {
                 Button("Adjust the lines") { editing = true }
             }
             Menu {
-                Button { request = PhotoRequest(slot: .centering, source: .camera) } label: {
+                Button {
+                    awaitingCapture = true
+                    request = PhotoRequest(slot: .centering, source: .camera)
+                } label: {
                     Label("Take a photo", systemImage: "camera")
                 }
-                Button { request = PhotoRequest(slot: .centering, source: .library) } label: {
+                Button {
+                    awaitingCapture = true
+                    request = PhotoRequest(slot: .centering, source: .library)
+                } label: {
                     Label("Choose a photo", systemImage: "photo.on.rectangle")
                 }
             } label: {
@@ -55,7 +74,10 @@ struct EntryCenteringSection: View {
         // Opening the editor is the point of taking the photo, so a new picture goes straight
         // there rather than leaving the user to find a second button.
         .onChange(of: photos.centering) { old, new in
-            if new != nil, new != old { editing = true }
+            if Self.shouldOpenEditor(awaitingCapture: awaitingCapture, old: old, new: new) {
+                awaitingCapture = false
+                editing = true
+            }
         }
         .sheet(isPresented: $editing) {
             NavigationStack {

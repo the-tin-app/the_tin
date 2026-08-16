@@ -262,6 +262,28 @@ final class CenteringTests: XCTestCase {
         return top >= bottom ? .top : .bottom
     }
 
+    /// Opening the entry form assigns the saved photos into it — a nil to filename change. That
+    /// must not be mistaken for "the user just took a photo", or the form throws the editor open
+    /// on the previously saved picture about a second after you enter it, which is what happened
+    /// on device (2026-08-15).
+    func testOpeningTheFormDoesNotReopenTheEditor() {
+        // populate(): entry's saved picture arrives, nobody asked for a camera.
+        XCTAssertFalse(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: false, old: nil, new: "saved-last-week.jpg"))
+        // Re-populating with the same value is not a capture either.
+        XCTAssertFalse(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: false, old: "a.jpg", new: "a.jpg"))
+        // A picture the user actually asked for does open it — the flow this exists for.
+        XCTAssertTrue(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: true, old: nil, new: "just-taken.jpg"))
+        // Replacing an existing picture opens it too.
+        XCTAssertTrue(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: true, old: "old.jpg", new: "new.jpg"))
+        // A capture that produced nothing (cancelled picker) opens nothing.
+        XCTAssertFalse(EntryCenteringSection.shouldOpenEditor(
+            awaitingCapture: true, old: "old.jpg", new: nil))
+    }
+
     func testSkewIsZeroForASquareOnQuadAndRisesWithTilt() {
         let square = CardQuad(topLeft: CGPoint(x: 0, y: 100), topRight: CGPoint(x: 70, y: 100),
                               bottomLeft: CGPoint(x: 0, y: 0), bottomRight: CGPoint(x: 70, y: 0))
