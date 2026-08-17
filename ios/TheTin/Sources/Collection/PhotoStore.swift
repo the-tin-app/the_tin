@@ -45,6 +45,20 @@ struct PhotoStore: Sendable {
         }
         let name = UUID().uuidString + ".jpg"
         try data.write(to: dir.appendingPathComponent(name), options: .atomic)
+        // ⚠️ **Mirrored HERE, not by the caller.** This used to be the caller's job and exactly one
+        // of the two callers remembered: the photo-tile capture did, and filing a measured scan
+        // (`CollectionModel.adoptedPlate`) did not — so a centring picture written by the scan path
+        // existed locally, was referenced by the entry, and was never uploaded. Restore then had
+        // nothing to bring back, which is a saved ratio with no picture behind it: the one outcome
+        // `EntryCenteringSection` exists to prevent (Tomas, device restore, 2026-08-17).
+        //
+        // A rule every caller has to remember is a rule that gets forgotten the moment a third
+        // caller appears. Saving a photo and keeping it are the same operation.
+        //
+        // Detached because the copy into the iCloud container is disk work and `save` is called
+        // from the UI; `mirrorSweep` is what covers this failing (offline, no container yet).
+        let store = self
+        Task.detached(priority: .utility) { store.mirrorUp(entryId: entryId, file: name) }
         return name
     }
 
@@ -115,6 +129,46 @@ struct PhotoStore: Sendable {
         } catch {
             PhotoDiag.record("mirrorUp", "FAILED \(entryId)/\(file): \(error)")
         }
+    }
+
+    /// Upload every file an entry references that iCloud does not have yet. The mirror image of
+    /// `mirrorDown`, and driven by the same `needed` map for the same reason.
+    ///
+    /// `mirrorUp` at save time is fire-and-forget with no retry, so a photo taken while iCloud was
+    /// unavailable — offline, container not yet provisioned, a failed write — was **never uploaded
+    /// again, ever**. There was no pass anywhere that noticed. Restore would then bring back an
+    /// entry whose photo simply did not exist in the cloud.
+    ///
+    /// It also repairs data already on disk, which is why it exists rather than just fixing `save`:
+    /// every centring picture filed from the scan tray before that fix is sitting locally, unknown
+    /// to iCloud, and nothing else would ever send it.
+    ///
+    /// Cheap to re-run: it only writes what is missing remotely, so the steady state is one
+    /// `fileExists` per referenced photo.
+    func mirrorSweep(needed: [String: [String]]) {
+        guard !needed.isEmpty else { return }
+        guard let mirror, let container = mirror.containerURL() else {
+            PhotoDiag.record("mirrorSweep", "no iCloud container")
+            return
+        }
+        let fm = FileManager.default
+        var pushed = 0, alreadyThere = 0, noLocalCopy = 0
+        for (entryId, files) in needed {
+            for file in files {
+                guard fm.fileExists(atPath: url(entryId: entryId, file: file).path) else {
+                    // Normal on a freshly restored device: the entry references a photo this
+                    // device has not pulled yet. `mirrorDown` owns that direction.
+                    noLocalCopy += 1
+                    continue
+                }
+                let remote = remoteURL(container: container, entryId: entryId, file: file)
+                guard !fm.fileExists(atPath: remote.path) else { alreadyThere += 1; continue }
+                mirrorUp(entryId: entryId, file: file)
+                pushed += 1
+            }
+        }
+        PhotoDiag.record("mirrorSweep",
+                         "pushed=\(pushed) alreadyInICloud=\(alreadyThere) localMissing=\(noLocalCopy)")
     }
 
     /// The files these entries reference, as `entryId → [filename]`. Entries with no photos are

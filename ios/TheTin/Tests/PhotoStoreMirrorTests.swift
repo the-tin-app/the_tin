@@ -63,6 +63,66 @@ final class PhotoStoreMirrorTests: XCTestCase {
     /// The centring picture has to ride the same mirror as every other photo, or a restored
     /// device shows a ratio with nothing behind it and no way to check it again. `needed` is what
     /// drives the pull, so a slot missing from it is a slot that never restores.
+    /// ⚠️ **Saving a photo must UPLOAD it.** The mirror test below only ever checked that a
+    /// centring picture would be *pulled* on restore — the download half — and passed the whole
+    /// time the upload was missing. `PhotoStore.save` wrote locally and left mirroring to the
+    /// caller; exactly one of the two callers did it, so every picture written by the scan-filing
+    /// path existed on the device, was referenced by the entry, and was never in iCloud. A restore
+    /// brought back the ratios with no photo behind them (Tomas, device restore, 2026-08-17).
+    func testSavingAPhotoPutsItInICloud() throws {
+        let store = PhotoStore(root: dir.appendingPathComponent("local"),
+                               mirror: TempDirStore(dir: dir.appendingPathComponent("cloud")))
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 28)).image { ctx in
+            UIColor.orange.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 20, height: 28))
+        }
+        let name = try store.save(image, entryId: "e1")
+
+        // `save` uploads on a detached task, so poll rather than assume it has landed.
+        let remote = dir.appendingPathComponent("cloud/photos/e1").appendingPathComponent(name)
+        let arrived = expectation(description: "photo reaches the mirror")
+        Task {
+            for _ in 0..<100 where !FileManager.default.fileExists(atPath: remote.path) {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            arrived.fulfill()
+        }
+        wait(for: [arrived], timeout: 5)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: remote.path),
+                      "a saved photo that never reaches iCloud restores as a missing picture")
+    }
+
+    /// The repair pass. `mirrorUp` at save time has no retry, so a photo written while iCloud was
+    /// unavailable was never uploaded again by anything — and every picture filed before the fix
+    /// above is in exactly that state. The sweep is what gets them out.
+    func testTheSweepUploadsAPhotoICloudNeverReceived() throws {
+        let local = dir.appendingPathComponent("local")
+        let cloud = dir.appendingPathComponent("cloud")
+        let store = PhotoStore(root: local, mirror: TempDirStore(dir: cloud))
+
+        // A photo on disk that the mirror has never seen — what a stranded entry looks like.
+        try FileManager.default.createDirectory(at: local.appendingPathComponent("e1"),
+                                                withIntermediateDirectories: true)
+        try Data("stranded".utf8).write(to: local.appendingPathComponent("e1/c.jpg"))
+        let remote = cloud.appendingPathComponent("photos/e1/c.jpg")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: remote.path))
+
+        store.mirrorSweep(needed: ["e1": ["c.jpg"]])
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: remote.path),
+                      "the sweep must repair a photo iCloud never received")
+        XCTAssertEqual(try Data(contentsOf: remote), Data("stranded".utf8))
+    }
+
+    /// A device that has just restored references photos it has not pulled yet. The sweep must not
+    /// treat those as work — that direction belongs to `mirrorDown`.
+    func testTheSweepIgnoresPhotosThisDeviceDoesNotHave() {
+        let store = PhotoStore(root: dir.appendingPathComponent("local"),
+                               mirror: TempDirStore(dir: dir.appendingPathComponent("cloud")))
+        store.mirrorSweep(needed: ["e1": ["never-seen.jpg"]])
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("cloud/photos/e1/never-seen.jpg").path))
+    }
+
     func testTheCentringPictureIsMirroredLikeAnyOtherPhoto() {
         var entry = CollectionEntry(id: "e1", cardId: "swsh7-215", groupId: "", qty: 1,
                                     condition: nil, grade: nil, pricePaid: nil, acquiredAt: nil,
