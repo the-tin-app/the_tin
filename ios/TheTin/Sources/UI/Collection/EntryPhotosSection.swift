@@ -218,7 +218,7 @@ private struct PhotoCaptureModifier: ViewModifier {
         }
         photos.set(name, slot)
         PhotoDiag.record("stored", "entry=\(entryId) file=\(name)")
-        let store = photoStore
-        Task.detached(priority: .utility) { store.mirrorUp(entryId: entryId, file: name) }
+        // The upload used to be here. It now lives in `PhotoStore.save`, because being the only
+        // caller that remembered it is what stranded every photo the scan path wrote.
     }
 }
