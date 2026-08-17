@@ -79,8 +79,8 @@ struct CenteringEditorView: View {
     /// Cyan and magenta because they have to stay legible over yellow borders, blue holo, black
     /// full-arts and a wooden table alike — neither turns up much in card art, and they read as
     /// two different things at a glance rather than two shades of one.
-    private static let outerColor = Color.cyan
-    private static let innerColor = Color(red: 1, green: 0.2, blue: 0.8)
+    static let outerColor = Color.cyan
+    static let innerColor = Color(red: 1, green: 0.2, blue: 0.8)
 
     private var plateSize: CGSize {
         CGSize(width: plate.size.width * plate.scale, height: plate.size.height * plate.scale)
@@ -97,10 +97,10 @@ struct CenteringEditorView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Text(current.summary)
-                .font(.title3.monospacedDigit().weight(.semibold))
-                .accessibilityLabel(current.spokenSummary)
-            statusChip
+            CenteringReadout(summary: current.summary, spoken: current.spokenSummary,
+                             active: active.map { (label: $0.label,
+                                                   px: Int(px($0).rounded()),
+                                                   isOuter: $0.isOuter) })
             // Shown once, on the first visit: without it the lens bow reads as the app being
             // wrong, on the one screen whose whole job is to be trusted.
             TipView(CenteringLensBowTip())
@@ -117,31 +117,6 @@ struct CenteringEditorView: View {
             }
         }
         .onAppear(perform: seed)
-    }
-
-    /// Names the line being moved and its current inset. Without it, eight lines of two colours
-    /// still leave "which one did I just grab?" unanswered the moment a finger covers the line.
-    private var statusChip: some View {
-        Group {
-            if let active {
-                HStack(spacing: 6) {
-                    Circle().fill(active.isOuter ? Self.outerColor : Self.innerColor)
-                        .frame(width: 9, height: 9)
-                    Text(active.label).fontWeight(.medium)
-                    Text("\(Int(px(active).rounded())) px").foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-            } else {
-                // Says where to line up, not just what to drag: the lens bows the card's edges
-                // slightly, so a straight line fits the middle of an edge or its ends, and
-                // matching every line at the middle is what keeps the bow out of the answer.
-                Text("Drag the handles — match each at the middle of its edge")
-            }
-        }
-        .font(.footnote)
-        .padding(.horizontal, 10).padding(.vertical, 5)
-        .background(.quaternary, in: Capsule())
-        .animation(.easeInOut(duration: 0.15), value: active)
     }
 
     private var legend: some View {
@@ -418,6 +393,93 @@ struct CenteringEditorView: View {
         case .innerRight: return min(max(v, px(.outerRight)), limit)
         case .innerTop: return min(max(v, px(.outerTop)), limit)
         case .innerBottom: return min(max(v, px(.outerBottom)), limit)
+        }
+    }
+}
+
+/// The editor's two live readouts: the ratio, and which line is under the finger.
+///
+/// ⚠️ **Its height is FIXED, and that is a correctness property, not styling.** Everything here
+/// changes on every frame of a drag, and it sits directly above `picture` in the same `VStack` —
+/// where `picture` is a `GeometryReader` taking whatever height is left. So any size change here
+/// reflows the stack, `base` (plate pixels → points) is recomputed, and **all eight lines move
+/// while one is under the finger**. The line's position ends up depending on the string length of
+/// its own readout.
+///
+/// That is what made dragging judder, and it is why zooming appeared to fix it: `px` moves ~2.8
+/// plate pixels per screen point at 1× against ~0.47 at 6×, so the readout's digits churn ~6×
+/// faster and the reflow fires ~6× more often (Tomas, device, 2026-08-17).
+///
+/// Hence, in order of how much each mattered:
+/// - **`lineLimit(1)` on both rows**, which is what actually holds the height still: a wrap is a
+///   whole extra line of reflow, and the ratio genuinely changes width ("5/95" vs "100/0"). NOT a
+///   hard `.frame(height:)` — pinning the box would hold the height by CLIPPING, which hides the
+///   problem at large Dynamic Type rather than fixing it, and makes the test tautological.
+/// - **No animation on the active swap.** The chip used to carry
+///   `.animation(.easeInOut(duration: 0.15), value: active)`, which *animated* the size change
+///   between the idle sentence and the chip — sweeping `base` for 150 ms at the start of every
+///   single drag.
+///
+/// Extracted from the editor so its size can be measured in a test without standing up a camera
+/// plate and an `onAppear` seed.
+struct CenteringReadout: View {
+    let summary: String
+    let spoken: String
+    /// The line under the finger, flattened to what actually gets drawn — so a test can drive it
+    /// without constructing editor state.
+    let active: (label: String, px: Int, isOuter: Bool)?
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(summary)
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .lineLimit(1)
+                .accessibilityLabel(spoken)
+            chip
+        }
+    }
+
+    /// Names the line being moved and its current inset. Without it, eight lines of two colours
+    /// still leave "which one did I just grab?" unanswered the moment a finger covers the line.
+    ///
+    /// ⚠️ **A `ZStack` with both states always laid out — deliberately NOT an `if`/`else`.**
+    ///
+    /// Two branches are two view identities with two independent sizes, and no amount of
+    /// line-limiting makes two different strings the same height at every Dynamic Type size:
+    /// shortening the sentence fixed `.large`, and `minimumScaleFactor` then re-broke it, because
+    /// shrink-to-fit text has a shorter line height than text that fits. Measured 10pt apart at
+    /// `.accessibility3` that way.
+    ///
+    /// Laying both out and hiding one makes the box the height of the TALLER state in *every*
+    /// state, at every type size, with no clipping and no magic constant. The cost is some
+    /// whitespace beside the shorter string, which is the right thing to spend.
+    private var chip: some View {
+        ZStack {
+            // Says where to line up, not just what to drag: the lens bows the card's edges
+            // slightly, so a straight line fits the middle of an edge or its ends, and matching
+            // every line at the middle is what keeps the bow out of the answer.
+            Text("Match each line at the middle of its edge")
+                .opacity(active == nil ? 1 : 0)
+                .accessibilityHidden(active != nil)
+            // Falls back to the LONGEST label so the hidden copy reserves a stable width too —
+            // a placeholder narrower than the real thing would let the capsule resize mid-drag.
+            row(active ?? (label: "Bottom card edge", px: 0, isOuter: true))
+                .opacity(active == nil ? 0 : 1)
+                .accessibilityHidden(active == nil)
+        }
+        .font(.footnote)
+        .lineLimit(1)
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .background(.quaternary, in: Capsule())
+    }
+
+    private func row(_ line: (label: String, px: Int, isOuter: Bool)) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(line.isOuter ? CenteringEditorView.outerColor
+                                       : CenteringEditorView.innerColor)
+                .frame(width: 9, height: 9)
+            Text(line.label).fontWeight(.medium)
+            Text("\(line.px) px").foregroundStyle(.secondary).monospacedDigit()
         }
     }
 }
