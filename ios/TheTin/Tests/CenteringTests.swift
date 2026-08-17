@@ -293,6 +293,45 @@ final class CenteringTests: XCTestCase {
         }
     }
 
+    /// A drag measures its translation from the line's value when the gesture began. That origin
+    /// is cleared in `onEnded`, which is not guaranteed to arrive — so an origin left over from a
+    /// different line must be discarded, not used. Using it teleported the newly grabbed line
+    /// straight to the previous line's position.
+    func testAStaleDragOriginIsNotUsedForADifferentLine() {
+        typealias Editor = CenteringEditorView
+        let stale = (line: Editor.Line.outerLeft, value: CGFloat(100))
+
+        XCTAssertEqual(Editor.dragBase(origin: stale, line: .outerLeft, current: 999), 100,
+                       "the line's own origin must survive for the life of its gesture")
+        XCTAssertEqual(Editor.dragBase(origin: stale, line: .innerRight, current: 400), 400,
+                       "a different line must start from where it actually is, not from 100")
+        XCTAssertEqual(Editor.dragBase(origin: nil, line: .outerTop, current: 42), 42,
+                       "no origin means this gesture is starting now")
+    }
+
+    /// The activation slop, as arithmetic. `DragGesture()` defaults to `minimumDistance: 10`, so
+    /// `translation` is already 10pt when `onChanged` first fires — and the editor applies the
+    /// whole translation to the position captured at that instant, so the line teleports by
+    /// `10 / scale` on activation. At 1× that is ~28 plate pixels against a border one or two
+    /// points wide on screen, which is why placing a line at 1× was not possible; at 6× it is
+    /// about one border width, which is why zooming looked like a fix.
+    ///
+    /// This pins the reasoning, not the API: `minimumDistance: 0` is what makes the number zero,
+    /// and there is no way to read that back off a `DragGesture`.
+    func testTheActivationSlopIsWhatMadeOneXUnusable() {
+        // A ~1000×1400 plate shown ~360pt wide — the real geometry on a phone.
+        let base = 360.0 / 1000.0
+        func teleport(slopPoints: Double, zoom: Double) -> Double { slopPoints / (base * zoom) }
+
+        XCTAssertEqual(teleport(slopPoints: 10, zoom: 1), 27.8, accuracy: 0.5,
+                       "the default 10pt slop is ~28 plate pixels at 1×")
+        XCTAssertLessThan(teleport(slopPoints: 10, zoom: 6), 5,
+                          "and under 5 at 6×, which is why zooming masked it")
+        // What the editor actually ships.
+        XCTAssertEqual(teleport(slopPoints: 0, zoom: 1), 0,
+                       "with minimumDistance 0 there is no slop to apply, at any zoom")
+    }
+
     private enum Half { case top, bottom }
 
     /// Which half of the image carries more light — enough to tell "flipped" from "not".

@@ -26,8 +26,11 @@ struct CenteringEditorView: View {
     /// what is dragged is what is saved with no rounding trip through view coordinates.
     @State private var inset: [Line: CGFloat] = [:]
     @State private var seeded = false
-    /// The dragged line's value when its gesture began. See the gesture below.
-    @State private var dragOrigin: CGFloat?
+    /// The dragged line's value when its gesture began, **tagged with which line it belongs to**.
+    /// See `dragBase`. This used to be a bare `CGFloat?` shared by all eight knobs, on the
+    /// reasoning that only one line can be under a finger at a time — true, but it is reset only
+    /// in `onEnded`, and `onEnded` does not always arrive.
+    @State private var dragOrigin: (line: Line, value: CGFloat)?
     /// The line under the finger, or the last one moved — drives the readout and the highlight.
     @State private var active: Line?
 
@@ -39,6 +42,10 @@ struct CenteringEditorView: View {
     /// A border can be a couple of pixels wide on a 1400px picture, so the useful range goes well
     /// past what a photo viewer needs — at 6× a single plate pixel is a comfortable target.
     private static let zoomRange: ClosedRange<CGFloat> = 1...6
+
+    /// The stationary space every knob's drag is measured in. See where it is attached — a knob
+    /// measured in its own space feeds its output back into its input.
+    static let plateSpace = "centeringPlate"
 
     enum Line: Hashable, CaseIterable {
         case outerLeft, innerLeft, outerRight, innerRight
@@ -154,6 +161,22 @@ struct CenteringEditorView: View {
             .offset(pan)
             .frame(width: geo.size.width, height: geo.size.height)
             .clipped()
+            // ⚠️ **The coordinate space every knob's drag is measured in, and it has to be THIS
+            // view.** A `DragGesture` reports `translation` relative to the view it is attached
+            // to; the knobs are attached to their own line, and the line is moved by that very
+            // drag. So each event moved the knob, which shifted the space the next event was
+            // measured in, which moved it back — a two-point limit cycle at the event rate, with
+            // an amplitude equal to the line's own displacement.
+            //
+            // Measured on device (2026-08-17): `scale`, `shownH` and the drag origin all held
+            // perfectly steady while `translation` alternated −76 / −82, swinging the line 15
+            // plate pixels — and 15 × 0.469 = 7pt, exactly the translation's own wobble. The
+            // input was the output.
+            //
+            // This frame is outside `scaleEffect`/`offset`, so it does not move for a zoom, a pan
+            // or a line — which makes `translation` mean what the rest of the code assumes it
+            // means: screen points, hence still `/ scale` and not `/ base`.
+            .coordinateSpace(name: Self.plateSpace)
             .contentShape(Rectangle())
             // ⚠️ ONE plain `.gesture`, and deliberately NOT `.simultaneousGesture`. Simultaneous
             // means "recognise alongside whatever else does", so a drag that started on a line
@@ -315,6 +338,24 @@ struct CenteringEditorView: View {
     /// So the push is a preference, not a promise. Clamped to keep the whole target on the
     /// picture, which costs a pair some separation only in the corner case where they were
     /// unreachable anyway.
+    /// Where a drag of `line` should measure its translation from.
+    ///
+    /// A gesture's `translation` is cumulative from where it began, so it has to be added to the
+    /// line's value at that moment — held in `dragOrigin` for the life of the gesture.
+    ///
+    /// ⚠️ **The origin must be checked against the line it was recorded for.** It is cleared in
+    /// `onEnded`, and `onEnded` is not guaranteed: a gesture that loses to another recogniser, or
+    /// whose view goes away mid-drag, simply stops. The next knob grabbed then measured from the
+    /// PREVIOUS line's origin and jumped straight to it — which is what "it feels like it's trying
+    /// to jump to something" was (Tomas, device, 2026-08-17). A stale origin is discarded rather
+    /// than trusted, so the worst case is one gesture starting from the right place instead of
+    /// every later gesture starting from the wrong one.
+    static func dragBase(origin: (line: Line, value: CGFloat)?, line: Line,
+                         current: CGFloat) -> CGFloat {
+        guard let origin, origin.line == line else { return current }
+        return origin.value
+    }
+
     static func knobDistance(lineDistance d: CGFloat, isOuter: Bool,
                              extent: CGFloat, zoom: CGFloat) -> CGFloat {
         let radius = knobRadius(zoom: zoom)
@@ -357,16 +398,26 @@ struct CenteringEditorView: View {
         .offset(x: vertical ? perpendicular : 0, y: vertical ? 0 : perpendicular)
         // `translation` is cumulative from where the gesture began, so it must be applied to the
         // value AT THAT MOMENT, not to the running value — adding it every frame compounds and the
-        // line races away from the finger. One shared origin is enough: only one line can be under
-        // a finger at a time.
+        // line races away from the finger.
         //
         // `highPriorityGesture`, so a touch that lands on this knob beats the container's
         // pinch/pan outright instead of racing it.
+        //
+        // ⚠️ **`minimumDistance: 0`, and that is the whole difference between placing a line and
+        // fighting it.** `DragGesture()` defaults to 10, so `onChanged` does not fire until the
+        // finger has already travelled 10pt — and `translation` is 10pt when it does, applied on
+        // top of the position captured at that same instant. The line therefore TELEPORTS by
+        // `10 / scale` the moment the gesture activates: ~28 plate pixels at 1×, against a printed
+        // border that is one or two points wide on screen. It lands five to ten border-widths from
+        // the finger, which is why lining it up at 1× was not possible, and why a slow drag was
+        // worst — the slop is spent slowly and then applied all at once (Tomas, device,
+        // 2026-08-17). At 6× the same 10pt is about one border width, which is why zooming looked
+        // like a fix.
         .highPriorityGesture(
-            DragGesture()
+            DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.plateSpace))
                 .onChanged { g in
-                    let base = dragOrigin ?? px(line)
-                    if dragOrigin == nil { dragOrigin = base }
+                    let base = Self.dragBase(origin: dragOrigin, line: line, current: px(line))
+                    dragOrigin = (line, base)
                     active = line
                     let delta = vertical ? g.translation.width : g.translation.height
                     inset[line] = clamp(base + sign * delta / scale, line)
