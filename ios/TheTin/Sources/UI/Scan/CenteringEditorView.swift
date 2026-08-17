@@ -43,6 +43,10 @@ struct CenteringEditorView: View {
     /// past what a photo viewer needs — at 6× a single plate pixel is a comfortable target.
     private static let zoomRange: ClosedRange<CGFloat> = 1...6
 
+    /// The stationary space every knob's drag is measured in. See where it is attached — a knob
+    /// measured in its own space feeds its output back into its input.
+    static let plateSpace = "centeringPlate"
+
     enum Line: Hashable, CaseIterable {
         case outerLeft, innerLeft, outerRight, innerRight
         case outerTop, innerTop, outerBottom, innerBottom
@@ -157,6 +161,22 @@ struct CenteringEditorView: View {
             .offset(pan)
             .frame(width: geo.size.width, height: geo.size.height)
             .clipped()
+            // ⚠️ **The coordinate space every knob's drag is measured in, and it has to be THIS
+            // view.** A `DragGesture` reports `translation` relative to the view it is attached
+            // to; the knobs are attached to their own line, and the line is moved by that very
+            // drag. So each event moved the knob, which shifted the space the next event was
+            // measured in, which moved it back — a two-point limit cycle at the event rate, with
+            // an amplitude equal to the line's own displacement.
+            //
+            // Measured on device (2026-08-17): `scale`, `shownH` and the drag origin all held
+            // perfectly steady while `translation` alternated −76 / −82, swinging the line 15
+            // plate pixels — and 15 × 0.469 = 7pt, exactly the translation's own wobble. The
+            // input was the output.
+            //
+            // This frame is outside `scaleEffect`/`offset`, so it does not move for a zoom, a pan
+            // or a line — which makes `translation` mean what the rest of the code assumes it
+            // means: screen points, hence still `/ scale` and not `/ base`.
+            .coordinateSpace(name: Self.plateSpace)
             .contentShape(Rectangle())
             // ⚠️ ONE plain `.gesture`, and deliberately NOT `.simultaneousGesture`. Simultaneous
             // means "recognise alongside whatever else does", so a drag that started on a line
@@ -394,7 +414,7 @@ struct CenteringEditorView: View {
         // 2026-08-17). At 6× the same 10pt is about one border width, which is why zooming looked
         // like a fix.
         .highPriorityGesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.plateSpace))
                 .onChanged { g in
                     let base = Self.dragBase(origin: dragOrigin, line: line, current: px(line))
                     dragOrigin = (line, base)
