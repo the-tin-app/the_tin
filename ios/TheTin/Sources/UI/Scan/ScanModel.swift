@@ -214,7 +214,10 @@ actor ScanPipeline {
         // pool-reuse invalidation above means it survives to be read by `currentPlate()`.
         if case .lock = event, let quad = frame.quad {
             lastPlate = timer.measure("editorPlate") {
-                EditorPlate.jpeg(pixelBuffer: pb, quad: quad, degrees: frame.degrees,
+                // `unflipped`, NOT `frame.degrees` — recognition keeps the full hint, the picture
+                // drops its 0°-vs-180° half. See `EditorPlate.unflipped`.
+                EditorPlate.jpeg(pixelBuffer: pb, quad: quad,
+                                 degrees: EditorPlate.unflipped(frame.degrees),
                                  context: editorContext)
             }
         }

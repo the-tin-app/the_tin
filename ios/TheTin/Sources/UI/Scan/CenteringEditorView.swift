@@ -318,6 +318,38 @@ struct CenteringEditorView: View {
     /// Sizes are divided by `zoom` because the whole stack is scaled: this keeps the knob at a
     /// constant size ON SCREEN, so zooming in to place a line precisely never shrinks the thing
     /// you place it with.
+    /// Radius of a knob's touch target, in the picture's own (pre-zoom) points. The rendered size
+    /// divides by `zoom` so the knob stays a constant 48pt on screen at every zoom level.
+    static func knobRadius(zoom: CGFloat) -> CGFloat { 24 / zoom }
+
+    /// How far from its own edge a knob sits, given the line it belongs to. Both in the picture's
+    /// coordinates, along the axis perpendicular to the line.
+    ///
+    /// The card-edge knob is pushed OUTWARD and the border knob INWARD, so a pair stays ~52pt
+    /// apart however thin the border is. But outward has somewhere to go only while there is
+    /// picture left to push into.
+    ///
+    /// ⚠️ **The picture is `.clipped()`, so a knob past its boundary is not merely cut off — it
+    /// stops being touchable at all.** `EditorPlate.margin` leaves 10% of the plate outside the
+    /// card, ~36pt on screen at 1×, against a 26pt push and a 24pt radius: the card-edge knob
+    /// lands ~10pt from the boundary, and drag that line any further out and the knob leaves the
+    /// picture. Zoom hides it completely — the margin scales with zoom while the knob stays 48pt
+    /// on screen — which is exactly the "can't grab it zoomed out, perfect zoomed in" that was
+    /// reported (Tomas, device, 2026-08-16).
+    ///
+    /// So the push is a preference, not a promise. Clamped to keep the whole target on the
+    /// picture, which costs a pair some separation only in the corner case where they were
+    /// unreachable anyway.
+    static func knobDistance(lineDistance d: CGFloat, isOuter: Bool,
+                             extent: CGFloat, zoom: CGFloat) -> CGFloat {
+        let radius = knobRadius(zoom: zoom)
+        let preferred = d + (isOuter ? -1 : 1) * 26 / zoom
+        // A picture too small to hold the target at all still gets a defined answer rather than an
+        // inverted range: centre it.
+        guard extent > radius * 2 else { return extent / 2 }
+        return min(max(preferred, radius), extent - radius)
+    }
+
     @ViewBuilder
     private func grabZone(_ line: Line, color: Color, isActive: Bool,
                           in shown: CGSize, vertical: Bool, scale: CGFloat) -> some View {
@@ -325,7 +357,12 @@ struct CenteringEditorView: View {
         // Which way is "out of the card" for this edge, then outward for the card edge and inward
         // for the border, so the two never stack.
         let outward: CGFloat = (line.alignment == .leading || line.alignment == .top) ? -1 : 1
-        let perpendicular = outward * (line.isOuter ? 1 : -1) * 26 / zoom
+        // Worked in distance-from-its-own-edge — the same quantity `px` stores — because that is
+        // the axis the clamp has to reason about; `-outward` turns it back into a view offset.
+        let lineDistance = px(line) * scale / zoom
+        let knob = Self.knobDistance(lineDistance: lineDistance, isOuter: line.isOuter,
+                                     extent: vertical ? shown.width : shown.height, zoom: zoom)
+        let perpendicular = -outward * (knob - lineDistance)
 
         ZStack {
             Circle().fill(color)
@@ -338,8 +375,9 @@ struct CenteringEditorView: View {
         .scaleEffect(isActive ? 1.3 : 1)
         .shadow(color: .black.opacity(0.5), radius: 2 / zoom)
         .animation(.easeOut(duration: 0.12), value: isActive)
-        // A 48pt target that stays 48pt on screen at every zoom level.
-        .frame(width: 48 / zoom, height: 48 / zoom)
+        // A 48pt target that stays 48pt on screen at every zoom level. Sized off `knobRadius` so
+        // it can never drift from the radius the clamp above reserves room for.
+        .frame(width: Self.knobRadius(zoom: zoom) * 2, height: Self.knobRadius(zoom: zoom) * 2)
         .contentShape(Circle())
         .offset(x: vertical ? perpendicular : 0, y: vertical ? 0 : perpendicular)
         // `translation` is cumulative from where the gesture began, so it must be applied to the

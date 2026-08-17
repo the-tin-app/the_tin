@@ -238,6 +238,61 @@ final class CenteringTests: XCTestCase {
         }
     }
 
+    /// The scan plate's counterpart to the rule above. The scanner's rotation carries an
+    /// OCR-confidence guess at 0-vs-180 that reaches a lock even when it's wrong — matching is
+    /// rotation-invariant — and the plate is rendered once and stored, so there is no later frame
+    /// to correct it. Geometry survives; the guess does not.
+    func testTheScanPlateKeepsTheRotationButNotTheFlip() {
+        XCTAssertEqual(EditorPlate.unflipped(0), 0)
+        XCTAssertEqual(EditorPlate.unflipped(90), 90, "a sideways card must still be stood up")
+        XCTAssertEqual(EditorPlate.unflipped(180), 0, "the flip is the guess — drop it")
+        XCTAssertEqual(EditorPlate.unflipped(270), 90)
+        for d in [0, 90, 180, 270] {
+            XCTAssertNotEqual(EditorPlate.unflipped(d), 180,
+                              "a stored plate must never be turned end for end")
+            XCTAssertNotEqual(EditorPlate.unflipped(d), 270)
+        }
+    }
+
+    /// The card-edge knob is pushed outward, and the picture is clipped — so on a line near the
+    /// plate's boundary the push has to give way, or the target lands off the picture and stops
+    /// being touchable. Zoom masked this completely: the margin grows with zoom, the knob doesn't.
+    func testTheCardEdgeKnobStaysOnThePicture() {
+        let extent: CGFloat = 360          // picture width in points at 1×
+        let radius = CenteringEditorView.knobRadius(zoom: 1)
+
+        // A card edge dragged right out to the plate boundary — the worst case, and the one that
+        // produced "I can't grab it" on device.
+        let atEdge = CenteringEditorView.knobDistance(lineDistance: 0, isOuter: true,
+                                                      extent: extent, zoom: 1)
+        XCTAssertGreaterThanOrEqual(atEdge, radius, "the whole target must be on the picture")
+
+        // The far side, for the border knob pushed inward.
+        let atFarEdge = CenteringEditorView.knobDistance(lineDistance: extent, isOuter: false,
+                                                         extent: extent, zoom: 1)
+        XCTAssertLessThanOrEqual(atFarEdge, extent - radius)
+
+        // Away from the boundary the 26pt push is untouched — the clamp must not cost separation
+        // in the ordinary case, or a pair of knobs starts stacking on a thin border.
+        let outer = CenteringEditorView.knobDistance(lineDistance: 120, isOuter: true,
+                                                     extent: extent, zoom: 1)
+        let inner = CenteringEditorView.knobDistance(lineDistance: 120, isOuter: false,
+                                                     extent: extent, zoom: 1)
+        XCTAssertEqual(outer, 120 - 26, accuracy: 0.001)
+        XCTAssertEqual(inner, 120 + 26, accuracy: 0.001)
+        XCTAssertEqual(inner - outer, 52, accuracy: 0.001)
+
+        // And it holds at every zoom, since the knob is a constant size on screen while the
+        // picture's coordinates shrink under it.
+        for zoom in [CGFloat(1), 2, 4, 6] {
+            let r = CenteringEditorView.knobRadius(zoom: zoom)
+            let d = CenteringEditorView.knobDistance(lineDistance: 0, isOuter: true,
+                                                     extent: extent, zoom: zoom)
+            XCTAssertGreaterThanOrEqual(d, r, "off the picture at \(zoom)×")
+            XCTAssertLessThanOrEqual(d, extent - r)
+        }
+    }
+
     private enum Half { case top, bottom }
 
     /// Which half of the image carries more light — enough to tell "flipped" from "not".

@@ -66,14 +66,31 @@ enum EditorPlate {
                     degrees: uprightDegrees(rectified.corrected.extent), context: context)
     }
 
-    /// Portrait, always — the card comes out the way it went in.
+    /// The scanner's own rotation with its 0°-vs-180° guess taken back out: 0 and 180 both mean
+    /// "portrait", 90 and 270 both mean "turn it upright". Geometry is kept, the guess is dropped.
     ///
-    /// ⚠️ Deliberately NOT `OrientationNormalizer.orientUpright`, which is what the scanner uses.
-    /// That resolves 0° vs 180° by comparing fast-OCR confidence between the two, and on a single
-    /// still it guessed wrong and saved the card upside down (Tomas, device, 2026-08-15). The
-    /// scanner survives a bad guess because the next frame re-decides; a photo taken once does
-    /// not. And a 180° flip is never merely cosmetic here — it swaps left with right, turning
-    /// 55/45 into 45/55.
+    /// ⚠️ **The scan plate does NOT survive a bad guess, and the note that used to sit below
+    /// claimed it did** — "the scanner survives a bad guess because the next frame re-decides".
+    /// Both halves of that are wrong for this picture (Tomas, device, 2026-08-16):
+    ///
+    /// - **A wrong guess reaches a lock.** `CardDetector`'s comment reasons that an upside-down
+    ///   plate collapses ORB inliers and self-corrects. It doesn't: the descriptors carry a
+    ///   keypoint `angle` (`DescriptorMatch`), so matching is rotation-invariant and an inverted
+    ///   plate identifies the card perfectly well. Recognition is right; the picture is upside
+    ///   down.
+    /// - **There is no next frame.** The plate is rendered ONCE, on the locking frame, and
+    ///   persisted beside the draft. "The next frame re-decides" is true of recognition and
+    ///   false of anything stored.
+    ///
+    /// And the guess is made on the FIRST frame that detects — possibly blurry, glared or half in
+    /// frame — then cached in `orientationHint` and reused for every frame after.
+    ///
+    /// A 180° flip is never merely cosmetic here: it swaps left with right, turning 55/45 into
+    /// 45/55. Nor is it ever *needed* — the user is holding a card the right way up.
+    static func unflipped(_ degrees: Int) -> Int { degrees % 180 }
+
+    /// Portrait, always — the card comes out the way it went in. The still-photo counterpart of
+    /// `unflipped`, for the path that has a raw extent rather than a scanner rotation.
     ///
     /// A flip is also never *needed*: the user is photographing a card they are holding, the
     /// right way up. The only axis that can genuinely be wrong is portrait vs landscape — the
