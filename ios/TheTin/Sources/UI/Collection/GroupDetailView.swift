@@ -59,6 +59,20 @@ struct GroupDetailView: View {
         var id: String { rawValue }
     }
 
+    /// The selection as it stood when Edit details… was tapped. Identifiable so flipping it
+    /// presents the sheet, the same shape as `LabelPrintRequest` and `PrintSheetRequest`.
+    ///
+    /// It carries the entries rather than re-reading them, because the sheet shows two counts —
+    /// how many cards this applies to, and how many already hold a value it would replace — and
+    /// those must keep describing the rows you ticked. Reading live, `finishSelecting()` empties
+    /// the selection before the sheet finishes dismissing, so the last thing you'd see is the
+    /// screen telling you it applied to nothing.
+    private struct BulkEditRequest: Identifiable {
+        let entries: [CollectionEntry]
+        let ids: Set<String>
+        let id = UUID()
+    }
+
     @Bindable var model: CollectionModel
     let group: CardGroup?   // nil = the whole tin ("Everything")
     let store: CatalogStore
@@ -75,6 +89,7 @@ struct GroupDetailView: View {
     @State private var editMode: EditMode = .inactive
     @State private var selection = Set<String>()
     @State private var choosingDestination = false
+    @State private var bulkEditing: BulkEditRequest?
     @State private var showingNewDivider = false
     @State private var newDividerName = ""
     @State private var sellingEntry: CollectionEntry?
@@ -115,12 +130,12 @@ struct GroupDetailView: View {
         }
         .searchable(text: $searchText, prompt: group == nil ? "Search by name, set, or number" : "Search this divider")
         // The title carries the selection state — the count is the feedback that ticking worked,
-        // and "Select cards to move" says what to do before anything is ticked.
+        // and "Select cards" says what to do before anything is ticked.
         // In edit mode the title says so. Without it the only signals are the missing chevrons and
         // a checkmark two taps deep in a menu — you would find out by tapping a card and getting
         // the wrong screen, which is the failure this mode exists to avoid in the other direction.
         .navigationTitle(isSelecting
-                         ? (selection.isEmpty ? "Select cards to move"
+                         ? (selection.isEmpty ? "Select cards"
                             : "\(Self.cardCount(selection.count)) selected")
                          : (rowTap == .edit ? "\(title) · Editing" : title))
         .navigationBarTitleDisplayMode(.inline)
@@ -139,6 +154,14 @@ struct GroupDetailView: View {
         }
         .alert("New divider", isPresented: $showingNewDivider) {
             newDividerAlertActions
+        }
+        .sheet(item: $bulkEditing) { req in
+            NavigationStack {
+                BulkEditSheet(entries: req.entries) { edit in
+                    await model.bulkEdit(ids: req.ids, edit)
+                    finishSelecting()
+                }
+            }
         }
         .printSheetFlow($printRequest)
         .onChange(of: model.catalogGeneration) { searchIndex.clear() }
@@ -174,21 +197,49 @@ struct GroupDetailView: View {
     /// Selection mode replaces the whole toolbar rather than adding to it: Sort and Print don't
     /// apply to a selection, and the actions that DO have to be the obvious things on screen.
     /// Nothing lives in `.bottomBar` — this view is inside a TabView, where the tab bar owns that
-    /// space and a bottom-bar item is easily missed or not shown at all.
+    /// space and a bottom-bar item renders behind it, un-tappable.
     @ToolbarContentBuilder private var detailToolbar: some ToolbarContent {
         if isSelecting {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Move…") { choosingDestination = true }
-                    .disabled(selection.isEmpty)
-                    .fontWeight(.semibold)
+                // A MENU, not three buttons. Move/Edit/Labels plus Done is four trailing items, and
+                // iPadOS silently DROPS the third rather than collapsing it (the same behaviour
+                // CollectionView documents, and how Settings once became unreachable) — so the
+                // action you reached for would simply not be there. Move costs one extra tap; the
+                // alternative is an action that vanishes on one device class and nowhere else.
+                Menu {
+                    // Select All lives IN the menu, and the menu itself is never disabled.
+                    //
+                    // It was a `.bottomBar` item, which this view cannot use: it sits inside a
+                    // TabView, and the tab bar owns that space — the button rendered *underneath*
+                    // the floating tab bar, greyed and un-tappable (seen on the simulator,
+                    // 2026-08-17; the comment below has said so since the toolbar was written).
+                    // It can't move up here as its own item either, because that would be a third
+                    // trailing item, which iPadOS silently drops.
+                    //
+                    // Enabling the menu only when something is ticked would make it unreachable
+                    // for the opposite reason: Select All is exactly what you want when nothing
+                    // is. So the MENU stays live and the three actions carry their own disabled
+                    // state.
+                    Button(allSelected ? "Deselect All" : "Select All") {
+                        selection = allSelected ? [] : Set(scope.map(\.id))
+                    }
+                    Divider()
+                    Button { choosingDestination = true }
+                        label: { Label("Move to…", systemImage: "tray.full") }
+                        .disabled(selection.isEmpty)
+                    Button { bulkEditing = BulkEditRequest(entries: selectedEntries, ids: selection) }
+                        label: { Label("Edit details…", systemImage: "square.and.pencil") }
+                        .disabled(selection.isEmpty)
+                    Button { app?.labelRequest = LabelPrintRequest(title: title, entries: selectedEntries) }
+                        label: { Label("Print labels…", systemImage: "qrcode") }
+                        .disabled(selection.isEmpty)
+                } label: {
+                    Text("Actions")
+                }
+                .fontWeight(.semibold)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") { finishMoving() }
-            }
-            ToolbarItem(placement: .bottomBar) {
-                Button(allSelected ? "Deselect All" : "Select All") {
-                    selection = allSelected ? [] : Set(scope.map(\.id))
-                }
+                Button("Done") { finishSelecting() }
             }
         } else {
             ToolbarItem {
@@ -268,6 +319,11 @@ struct GroupDetailView: View {
     private var isSelecting: Bool { editMode == .active }
     private var allSelected: Bool { !scope.isEmpty && selection.count == scope.count }
 
+    /// The ticked rows, in the order they're listed. Drawn from `scope` (which excludes sold
+    /// copies) rather than from the selection set, so a stale id left by a row that disappeared
+    /// under the sheet can't reach an edit or a label run.
+    private var selectedEntries: [CollectionEntry] { scope.filter { selection.contains($0.id) } }
+
     /// The selection binding, attached ONLY while selecting — `nil` disables List selection entirely.
     ///
     /// ⚠️ **iOS 27 regression, found on device 2026-08-12 and invisible on every iOS 26 simulator.**
@@ -301,7 +357,7 @@ struct GroupDetailView: View {
                 let id = await model.createGroup(name: name)
                 guard !id.isEmpty else { return }   // creation failed; it already alerted
                 await model.moveEntries(ids: moving, toGroup: id)
-                finishMoving()
+                finishSelecting()
             }
         }
         Button("Cancel", role: .cancel) { newDividerName = "" }
@@ -311,13 +367,14 @@ struct GroupDetailView: View {
         let moving = selection
         Task {
             await model.moveEntries(ids: moving, toGroup: groupId)
-            finishMoving()
+            finishSelecting()
         }
     }
 
-    /// Leave selection mode after a move — the moved rows are gone from this list (or folded
-    /// into another row), so keeping stale ids selected only invites a second wrong move.
-    private func finishMoving() {
+    /// Leave selection mode after a move or a bulk edit — the affected rows have moved, folded
+    /// into another row, or changed under you, so keeping stale ids selected only invites a
+    /// second wrong write against a selection that no longer means what it did.
+    private func finishSelecting() {
         selection.removeAll()
         editMode = .inactive
     }
