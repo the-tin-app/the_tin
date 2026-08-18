@@ -1,6 +1,6 @@
 // functions/src/pipeline/overnight-sweep-core.ts
 import type { Database as Db } from "better-sqlite3";
-import { normalizeNumber } from "./matcher";
+import { matchPptToOurCards, type OurCardRef } from "./matcher";
 import { PSA_COLUMNS } from "./ppt-export";
 import { parseWeeklyHistory, parseConditionHistory, parseLatestByCondition, parseLatestByVariant, parseMatrix, parseLiquidity, parseConditionSales, parseRawLow, parsePrimaryRaw } from "./ppt-history";
 import { parseGradedSales } from "./ppt-graded";
@@ -24,8 +24,6 @@ export interface OvernightSummary {
   stoppedEarly: boolean; stopReason?: string;
 }
 
-interface OurCard { id: string; number: string; name: string; }
-const normName = (n: string) => n.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS population(card_id TEXT NOT NULL, grader TEXT NOT NULL, grade TEXT NOT NULL,
@@ -92,7 +90,7 @@ export async function runOvernightSweep(
     VALUES (@id,@raw,@printing,@low,@as_of)
     ON CONFLICT(card_id) DO UPDATE SET
       raw_usd=@raw, raw_printing=@printing, low_usd=COALESCE(@low, low_usd), as_of=@as_of`);
-  const ourStmt = db.prepare("SELECT id, number, name FROM card WHERE set_id = ?");
+  const ourStmt = db.prepare("SELECT id, number, name, tcgplayer_id AS tcgplayerId FROM card WHERE set_id = ?");
 
   const sum: OvernightSummary = {
     setsDone: 0, historyRows: 0, gradedRows: 0, popRows: 0, condHistoryRows: 0, byCondRows: 0, byVariantRows: 0, matrixRows: 0, condSalesRows: 0, liquidityRows: 0, gradedSalesRows: 0, rawRows: 0, stoppedEarly: false,
@@ -101,18 +99,19 @@ export async function runOvernightSweep(
   // ---- Phase A: per set (history + graded) ----
   for (const s of sets) {
     if (ledger.setsDone.has(s.setId)) continue;
-    const our = ourStmt.all(s.setId) as OurCard[];
-    const byNum = new Map<string, OurCard[]>();
-    for (const c of our) { const k = normalizeNumber(c.number); (byNum.get(k) ?? byNum.set(k, []).get(k)!).push(c); }
+    const our = ourStmt.all(s.setId) as OurCardRef[];
 
     let cards: PptEnrichmentCard[];
     try { cards = await client.getSetEnrichment(s.pptName); }
     catch (e) { if (isStopError(e)) return { ...sum, stoppedEarly: true, stopReason: (e as Error).message }; throw e; }
 
     const write = db.transaction((list: PptEnrichmentCard[]) => {
+      // One-to-one, tcgPlayerId first. Every statement below writes per PPT card, so a number-only
+      // match let several PPT products pile onto one `card_id` — interleaved history, and a
+      // last-writer-wins race for raw/psa/liquidity between two different cards.
+      const matches = matchPptToOurCards(our, list);
       for (const pc of list) {
-        const cands = byNum.get(normalizeNumber(pc.cardNumber)) ?? [];
-        const m = cands.length === 1 ? cands[0] : cands.find((c) => normName(c.name) === normName(pc.name)) ?? null;
+        const m = matches.get(pc);
         if (!m) continue;
         for (const wp of parseWeeklyHistory(pc.priceHistory)) { insHist.run(m.id, wp.date, wp.rawUsd); sum.historyRows++; }
         const g = pc.gradedLatest;

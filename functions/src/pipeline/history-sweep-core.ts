@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { Database as Db } from "better-sqlite3";
-import { normalizeNumber } from "./matcher";
+import { matchPptToOurCards, type OurCardRef } from "./matcher";
 import { parseWeeklyHistory } from "./ppt-history";
 import type { PptHistoryCard } from "../upstream/ppt";
 
@@ -11,12 +11,11 @@ export interface SweepSet { setId: string; pptName: string; }
 export interface SweepProgress { doneSets: Set<string>; markDone(setId: string): void; }
 export interface SweepSummary { setsDone: number; rowsWritten: number; stoppedEarly: boolean; stopReason?: string; }
 
-interface OurCard { id: string; number: string; name: string; }
-function normName(n: string): string { return n.toLowerCase().replace(/[^a-z0-9]/g, ""); }
 
 /**
- * Fill `price_history` for each set not already in `progress.doneSets`. Matches each PPT history-card
- * to our card id by number (disambiguating same-number candidates by name), writes weekly USD rows
+ * Fill `price_history` for each set not already in `progress.doneSets`. Resolves PPT's cards onto
+ * ours one-to-one via `matchPptToOurCards` — a PPT set can hold several products per card number,
+ * and matching on number alone let every one of them write to the same `card_id`. Writes weekly USD rows
  * idempotently (INSERT OR REPLACE), and records each completed set. On a stop error (credit budget /
  * rate limit — decided by `isStopError`), returns with `stoppedEarly=true`; partial progress is durable.
  */
@@ -28,18 +27,13 @@ export async function runHistorySweep(
   isStopError: (e: unknown) => boolean,
 ): Promise<SweepSummary> {
   const ins = db.prepare("INSERT OR REPLACE INTO price_history(card_id, date, raw_usd) VALUES (?,?,?)");
-  const ourStmt = db.prepare("SELECT id, number, name FROM card WHERE set_id = ?");
+  const ourStmt = db.prepare("SELECT id, number, name, tcgplayer_id AS tcgplayerId FROM card WHERE set_id = ?");
   let setsDone = 0, rowsWritten = 0;
 
   for (const s of sets) {
     if (progress.doneSets.has(s.setId)) continue;
 
-    const our = ourStmt.all(s.setId) as OurCard[];
-    const byNum = new Map<string, OurCard[]>();
-    for (const c of our) {
-      const k = normalizeNumber(c.number);
-      (byNum.get(k) ?? byNum.set(k, []).get(k)!).push(c);
-    }
+    const our = ourStmt.all(s.setId) as OurCardRef[];
 
     let pptCards: PptHistoryCard[];
     try {
@@ -50,9 +44,9 @@ export async function runHistorySweep(
     }
 
     const write = db.transaction((cards: PptHistoryCard[]) => {
+      const matches = matchPptToOurCards(our, cards);
       for (const pc of cards) {
-        const cands = byNum.get(normalizeNumber(pc.cardNumber)) ?? [];
-        const match = cands.length === 1 ? cands[0] : cands.find((c) => normName(c.name) === normName(pc.name)) ?? null;
+        const match = matches.get(pc);
         if (!match) continue;
         for (const wp of parseWeeklyHistory(pc.priceHistory)) {
           ins.run(match.id, wp.date, wp.rawUsd);
