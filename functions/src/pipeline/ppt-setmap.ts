@@ -29,6 +29,11 @@ export const PPT_SET_ALIASES: Record<string, string> = {
   hgssp: "HGSS Promos",
   dpp: "Diamond and Pearl Promos",
   np: "Nintendo Promos",
+  // Base sets whose own release date belongs to a same-day PROMO set. Every card in both was
+  // priced from the promo set until 2026-08-18: 0 of 258 sv01 tcgplayer_ids and 0 of 127 dp1's
+  // agreed, and sv01-195 "Team Star Grunt" carried "Lillie's Clefairy ex"'s price.
+  sv01: "SV01: Scarlet & Violet Base Set",
+  dp1: "Diamond and Pearl",
   basep: "WoTC Promo",
   bog: "Best of Promos",
   // Energies
@@ -106,6 +111,12 @@ export function resolvePptSetName(ourSet: OurSet, pptSets: PptSetInfo[]): PptSet
   const od = day(ourSet.releaseDate);
   if (od) {
     const sameDay = pptSets.filter((p) => day(p.releaseDate) === od);
+    // ponytail: a lone same-day set is taken on the date alone, unchecked — `sm1` "Sun & Moon"
+    // and `exu` "Unseen Forces Unown Collection" are correct and name-UNrelated to their PPT
+    // sets, so a name gate here costs more than it saves. The two sets this got wrong (`dp1`,
+    // `sv01`, both stolen by their family's promo set) are aliased above, and `matchPptToOurCards`
+    // refuses per-card on a tcgplayer_id disagreement whatever this returns. Add a set-level
+    // id check here only if a mismap ever survives that.
     if (sameDay.length === 1) return sameDay[0];
     if (sameDay.length > 1) {
       const related = sameDay.find((p) => nameRelated(norm(p.name), on));
