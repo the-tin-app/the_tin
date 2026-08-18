@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// Camera preview + coverage ring + guidance + ambiguous chooser + a live staging tray
 /// (count, running value, haptic) with a Review entry point. Drives `ScanModel.run`.
@@ -14,7 +15,6 @@ struct ScanView: View {
     /// scanner to look-up, drops the tray and the mode picker (there is no mode to choose), and
     /// sends the card here instead of opening it in a detail sheet.
     var onLookUp: ((String) -> Void)? = nil
-    @State private var showingReview = false
     /// Collapsed by default — mode and condition are set once per stack, not per card.
     @State private var showingSettings = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -70,6 +70,10 @@ struct ScanView: View {
                     .buttonStyle(.plain)
                     .accessibilityHint("Clears the current scan and looks again")
                 }
+                // Taught here rather than in review: by the time the numbers are missing, it is
+                // too late to have held the phone differently. Add mode only — look-up stages
+                // nothing, so there would be no measurement to explain.
+                if onLookUp == nil, !model.isLookingUp { TipView(CenteringScanTip()) }
                 Spacer()
                 VStack(spacing: 8) {
                     // Lock-streak progress, not `coverage` — coverage was a flat 1.0 on every heavy
@@ -109,7 +113,7 @@ struct ScanView: View {
                         // that borrowed it, and a Review button here would route out of a sheet.
                         if onLookUp == nil, !model.isLookingUp || !staging.drafts.isEmpty {
                             StagingTray(staging: staging, store: store,
-                                        knowledge: latestKnowledge) { showingReview = true }
+                                        knowledge: latestKnowledge) { model.isReviewPresented = true }
                         }
                     } else {
                         // Variant A (approved 2026-07-15): bottom sheet, 2×2 card-image grid.
@@ -134,7 +138,7 @@ struct ScanView: View {
             guard new > old else { return nil }
             return latestKnowledge?.wanted == true ? .success : .impact(weight: .light)
         }
-        .sheet(isPresented: $showingReview) {
+        .sheet(isPresented: $model.isReviewPresented) {
             NavigationStack {
                 StagingReviewView(staging: staging, collection: collection, store: store, wants: wants)
             }

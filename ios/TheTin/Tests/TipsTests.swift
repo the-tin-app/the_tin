@@ -15,7 +15,23 @@ final class TipsTests: XCTestCase {
     private let all: [(String, String)] = [
         ("grail", GrailTip.body), ("hunting", HuntingTip.body),
         ("watching", WatchingTip.body), ("edit", EditCardTip.body),
+        ("centeringScan", CenteringScanTip.body), ("centeringReview", CenteringReviewTip.body),
+        ("centeringLensBow", CenteringLensBowTip.body),
     ]
+
+    /// ⚠️ The scanner measures centering and nothing else — no corners, edges or surface, and no
+    /// predicted grade. A tip that said "grade" would promise the one thing we deliberately do not
+    /// do, and it is the claim a cardholder would act on with real money.
+    func testTheCenteringTipsPromiseNoGrade() {
+        for (name, body) in [("centeringScan", CenteringScanTip.body),
+                             ("centeringReview", CenteringReviewTip.body),
+                             ("centeringLensBow", CenteringLensBowTip.body)] {
+            for word in ["PSA", "grade it", "will grade", "gem", "mint"] {
+                XCTAssertFalse(body.lowercased().contains(word.lowercased()),
+                               "\(name) tip implies grading with “\(word)”: \(body)")
+            }
+        }
+    }
 
     /// The two concepts are orthogonal and the copy has to say so — a grail you can't afford
     /// isn't hunting. See `WantEntry.swift`, where this distinction is defended.

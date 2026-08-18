@@ -135,6 +135,52 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(entry?.acquiredVia, "pulled")
     }
 
+    /// The seam between measuring in the tray and owning the card. The tray deletes a draft's
+    /// plate the instant the draft is removed, which the review screen does the moment this
+    /// commit succeeds — so if the measurement and its picture don't cross here, they are gone,
+    /// silently, at the exact moment the user thinks they filed them.
+    func testCommitScanCarriesTheMeasurementAndItsPicture() async throws {
+        let repo = InMemoryCollectionRepository()
+        let model = CollectionModel(repository: repo, store: try FixtureCatalog.make())
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        model.stagingPlatesDir = tmp
+        model.photoStore = PhotoStore(root: tmp.appendingPathComponent("photos", isDirectory: true))
+
+        let plate = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 56)).image { ctx in
+            UIColor.yellow.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 40, height: 56))
+        }
+        try XCTUnwrap(plate.jpegData(compressionQuality: 0.8)).write(to: tmp.appendingPathComponent("d9.jpg"))
+
+        let measured = Centering(outerLeft: 2, innerLeft: 8, outerRight: 2, innerRight: 6,
+                                 outerTop: 2, innerTop: 7, outerBottom: 2, innerBottom: 7)
+        let ok = await model.commitScan(
+            ScanDraft(id: "d9", cardId: "ex6-58", variant: .regular, condition: .nm, qty: 1,
+                      addedAt: Date(), priceUsdSnapshot: nil,
+                      centering: measured, plateFile: "d9.jpg"), to: .tin)
+        XCTAssertTrue(ok)
+
+        let entry = try XCTUnwrap(repo.entries.first)
+        XCTAssertEqual(entry.centering, measured)
+        let file = try XCTUnwrap(entry.photos?.centering, "the picture the lines were placed on")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: model.photoStore.url(entryId: entry.id, file: file).path))
+    }
+
+    /// The other half of the rule: an unmeasured draft must file exactly as it did before centring
+    /// existed, with no photo record invented for it.
+    func testCommitScanLeavesAnUnmeasuredDraftUntouched() async throws {
+        let repo = InMemoryCollectionRepository()
+        let model = CollectionModel(repository: repo, store: try FixtureCatalog.make())
+        _ = await model.commitScan(
+            ScanDraft(id: "d10", cardId: "ex6-58", variant: .regular, condition: .nm,
+                      qty: 1, addedAt: Date(), priceUsdSnapshot: nil), to: .tin)
+        XCTAssertNil(repo.entries.first?.centering)
+        XCTAssertNil(repo.entries.first?.photos)
+    }
+
     func testCommitScanToTinUsesEmptyGroupId() async throws {
         let repo = InMemoryCollectionRepository()
         let model = CollectionModel(repository: repo, store: try FixtureCatalog.make())

@@ -8,6 +8,10 @@ final class CollectionModel {
     private let store: CatalogStore
     /// Portfolio-history model, app-lifetime so its series cache survives screen pushes.
     let portfolio: PortfolioModel
+    /// Where a filed scan's centring picture is read from and written to. Injected so tests commit
+    /// drafts without touching Application Support.
+    var photoStore: PhotoStore = .live()
+    var stagingPlatesDir: URL = ScanStagingPaths.default().platesDir
     private(set) var groups: [CardGroup] = []
     /// The cards you own. **Sold copies are filtered out of this**, which is what gives roughly
     /// forty consumers — GroupStats, Movers, PortfolioHistory, ScanKnowledge, set completion, the
@@ -668,16 +672,38 @@ final class CollectionModel {
             guard !id.isEmpty else { return false }
             groupId = id
         }
-        let entry = CollectionEntry(id: UUID().uuidString, cardId: draft.cardId, groupId: groupId,
+        let entryId = UUID().uuidString
+        let entry = CollectionEntry(id: entryId, cardId: draft.cardId, groupId: groupId,
                                     qty: draft.qty, condition: draft.condition.rawValue, grade: nil,
                                     pricePaid: nil, acquiredAt: nil, acquiredFrom: nil, addedAt: Date(),
                                     variant: draft.variant.rawValue,
-                                    acquiredVia: draft.acquiredVia?.rawValue)
+                                    acquiredVia: draft.acquiredVia?.rawValue,
+                                    photos: adoptedPlate(draft, entryId: entryId),
+                                    centering: draft.centering)
         // Same merge rule as every other add path, but this one keeps its own error handling:
         // the review screen re-presents the failure and keeps the draft, so `write`'s global
         // alert would double up on it.
         do { try await addOrIncrement(entry); return true }
         catch { return false }
+    }
+
+    /// Copies a measured draft's scan plate into the entry's own photo store, so the picture the
+    /// ratios were placed on survives filing.
+    ///
+    /// The tray deletes a draft's plate the moment the draft goes (`ScanStagingStore.remove`), and
+    /// the review screen removes the draft as soon as this commit succeeds — so without a copy
+    /// here, filing a card measured in the tray left the ratios behind on a picture nobody could
+    /// see and the lines could never be re-placed on. `EntryCenteringSection` reads exactly this
+    /// slot to offer "Adjust the lines".
+    ///
+    /// Nil unless the draft was actually measured: an unmeasured draft must stay byte-identical to
+    /// what it was before centring existed, which is the same rule `EntryFormView` follows.
+    private func adoptedPlate(_ draft: ScanDraft, entryId: String) -> EntryPhotos? {
+        guard draft.centering != nil, let name = draft.plateFile,
+              let plate = UIImage(contentsOfFile: stagingPlatesDir.appendingPathComponent(name).path),
+              let file = try? photoStore.save(plate, entryId: entryId)
+        else { return nil }
+        return EntryPhotos(centering: file)
     }
 }
 
