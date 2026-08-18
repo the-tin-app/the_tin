@@ -16,13 +16,16 @@ maintained in spare time, for the love of the game.
 - Be decent — see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 - This is a hobby project: replies may take days, PRs may be declined,
   and there is no SLA. Nothing personal.
-- Tests required: run the suite for the area you touch — `cd functions &&
-  npx vitest run`, `cd catalog-server && npm test`, `cd fingerprint && pytest`,
-  or the iOS tests in Xcode.
+- Tests required: run the suite for the area you touch. CI runs all five
+  non-iOS suites on your PR; the commands are in the
+  [README](README.md#tests). The iOS suite runs from Xcode and CI can't, so
+  run it yourself if you touched `ios/`.
 - By contributing you agree your contribution is licensed under AGPL-3.0.
 
 ## Money
 
-The Tin is donation-funded with a public ledger. See the README for how
-the community fund works. Contributions of code and contributions of money
-are both appreciated and completely independent — neither buys the other.
+The Tin is funded through [GitHub Sponsors](https://github.com/sponsors/treyes133);
+[SPONSORS.md](SPONSORS.md) itemizes what that pays for and
+[GOVERNANCE.md](GOVERNANCE.md) covers how the money is handled. Contributions of
+code and contributions of money are both appreciated and completely independent
+— neither buys the other.
