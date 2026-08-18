@@ -7,11 +7,11 @@ import { CreditBudgetExceeded } from "../src/upstream/ppt";
 function makeDb() {
   const db = new Database(":memory:");
   db.exec(`
-    CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT NOT NULL, number TEXT NOT NULL, name TEXT NOT NULL);
+    CREATE TABLE card(id TEXT PRIMARY KEY, set_id TEXT NOT NULL, number TEXT NOT NULL, name TEXT NOT NULL, tcgplayer_id INTEGER);
     CREATE TABLE price_history(card_id TEXT NOT NULL, date TEXT NOT NULL, raw_usd REAL NOT NULL,
       PRIMARY KEY(card_id, date));
   `);
-  const ins = db.prepare("INSERT INTO card VALUES (?,?,?,?)");
+  const ins = db.prepare("INSERT INTO card(id, set_id, number, name) VALUES (?,?,?,?)");
   ins.run("swsh7-215", "swsh7", "215", "Umbreon VMAX");
   ins.run("swsh7-12", "swsh7", "12", "Metapod");
   ins.run("cel25-1", "cel25", "1", "Ho-Oh");
