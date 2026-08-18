@@ -10,6 +10,10 @@ export interface PptPrice {
 
 export interface PptCard {
   externalCatalogId: string | null;
+  /** Same `/cards` response as `getSetPrices`, so the TCGplayer product id is right there. It is
+   *  the only exact identity PPT gives us, and gap-fill needs it most: the sets it enriches are
+   *  promos and trainer kits, where PPT's `"<Name> - <Number> (<Print run>)"` never equals ours. */
+  tcgPlayerId?: number | null;
   cardNumber: string;
   name: string;
   imageUrl: string | null;
@@ -204,6 +208,7 @@ export class PptClient {
     this.budget.spend(cards.length);
     return cards.map((c) => ({
       externalCatalogId: c.externalCatalogId ?? null,
+      tcgPlayerId: c.tcgPlayerId ?? null,
       cardNumber: String(c.cardNumber),
       name: c.name,
       imageUrl: c.imageCdnUrl800 ?? c.imageCdnUrl ?? null,

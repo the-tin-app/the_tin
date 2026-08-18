@@ -417,6 +417,7 @@ async function main() {
       attacks: c.attacks ?? [], // pre-attacks metadata JSON lacks the field
       detail: c.detail, // ditto — undefined on a metadata JSON built before detailOf existed
       imageBase, rawUsd, rawEur,
+      tcgplayerId: c.tcgplayerIds[0] ?? null,
     };
     if (!cardsBySet.has(c.setId)) cardsBySet.set(c.setId, []);
     cardsBySet.get(c.setId)!.push(card);
@@ -467,7 +468,10 @@ async function main() {
           break;
         }
         const fills = computeFills(
-          gaps.map((c) => ({ id: c.id, localId: c.localId, name: c.name, hasImage: c.imageBase != null, hasPrice: c.rawUsd != null || c.rawEur != null })),
+          gaps.map((c) => ({
+            id: c.id, localId: c.localId, name: c.name, tcgplayerId: c.tcgplayerId,
+            hasImage: c.imageBase != null, hasPrice: c.rawUsd != null || c.rawEur != null,
+          })),
           pptCards,
         );
         // Prices + image URLs both fill in-memory. PPT hands us a PUBLIC tcgplayer-cdn URL —
