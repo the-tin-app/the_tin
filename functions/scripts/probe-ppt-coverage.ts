@@ -57,7 +57,7 @@ async function main() {
     ORDER BY s.release_date DESC`).all() as { id: string; name: string; releaseDate: string | null }[];
 
   const cardStmt = db.prepare(`
-    SELECT c.id, c.number AS localId, c.name,
+    SELECT c.id, c.number AS localId, c.name, c.tcgplayer_id AS tcgplayerId,
            (c.image_base IS NOT NULL) AS hasImage,
            (p.card_id IS NOT NULL) AS hasPrice
     FROM card c LEFT JOIN price_latest p ON p.card_id = c.id
@@ -71,7 +71,8 @@ async function main() {
   let truncated = false;
   for (const gs of gapSets) {
     const our: OurCard[] = (cardStmt.all(gs.id) as any[]).map((r) => ({
-      id: r.id, localId: r.localId, name: r.name, hasImage: !!r.hasImage, hasPrice: !!r.hasPrice,
+      id: r.id, localId: r.localId, name: r.name, tcgplayerId: r.tcgplayerId,
+      hasImage: !!r.hasImage, hasPrice: !!r.hasPrice,
     }));
     const pptSet = resolvePptSetName({ id: gs.id, name: gs.name, releaseDate: gs.releaseDate }, pptSets);
     let cov = { matched: 0, imageFillable: 0, priceFillable: 0 };
