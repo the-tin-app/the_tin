@@ -19,9 +19,17 @@ settings:
     # So this is load-bearing, not decorative: bump it for each App Store release, and check
     # /v1/apps/<id>/appStoreVersions before an upload rather than trusting a note. Build 30 failed
     # export against a closed 1.0.1 train for exactly that reason. 1.0.2 closed on 2026-08-09,
-    # and 1.0.3 on 2026-08-14 — verified via appStoreVersions immediately before this bump
+    # and 1.0.3 on 2026-08-14 — verified via appStoreVersions immediately before that bump
     # (READY_FOR_SALE / READY_FOR_DISTRIBUTION), not from this comment.
-    MARKETING_VERSION: 1.0.4
+    #
+    # ⚠️ 1.0.5 breaks that pattern and the reason matters. It was set on 2026-08-17 while 1.0.4 was
+    # still WAITING_FOR_REVIEW (verified via appStoreVersions, not assumed) — so unlike every bump
+    # above, the previous train is still OPEN. That is deliberate: `staging` stays at 1.0.4 so a
+    # review fix can still be cut against that open train, and this branch (staging-1.0.5) carries
+    # the next one. Two consequences, both of which bite at export rather than upload:
+    #   - No 1.0.5 appStoreVersion record exists yet. Create one before uploading from here.
+    #   - When 1.0.4 does go READY_FOR_SALE, `staging` is closed — anything still to ship moves here.
+    MARKETING_VERSION: 1.0.5
     CURRENT_PROJECT_VERSION: 1
 packages:
   GRDB:
