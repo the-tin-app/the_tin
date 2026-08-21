@@ -95,19 +95,12 @@ struct WatchingView: View {
         if !model.drops.isEmpty {
             Section("Wishlist — biggest drops") {
                 ForEach(model.drops) { drop in
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(drop.card.name).font(.headline).lineLimit(1)
-                            Text(drop.targetUsd.map {
-                                "You're watching for \($0.formatted(.currency(code: "USD").precision(.fractionLength(0))))"
-                            } ?? "No target set")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            if let usd = drop.marketUsd {
-                                Text(usd, format: .currency(code: "USD")).monospacedDigit()
-                            }
+                    NavigationLink(value: CardID(raw: drop.card.id)) {
+                        cardRow(card: drop.card, setName: drop.setName,
+                                caption: drop.targetUsd.map {
+                                    "You're watching for \($0.formatted(.currency(code: "USD").precision(.fractionLength(0))))"
+                                } ?? "No target set",
+                                marketUsd: drop.marketUsd) {
                             // Always a real drop here (past DiscoverConstants.dealsMaxPct7d),
                             // so this can never be the flat case.
                             Text(HuntRow.delta(drop.pct7d).text)
@@ -123,15 +116,13 @@ struct WatchingView: View {
         if !model.grails.isEmpty {
             Section {
                 ForEach(model.grails) { grail in
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(grail.card.name).font(.headline).lineLimit(1)
-                            Text("Up \(grail.trend.upWeeks) of the last \(grail.trend.totalWeeks) weeks")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if let usd = grail.marketUsd {
-                            Text(usd, format: .currency(code: "USD")).monospacedDigit()
+                    NavigationLink(value: CardID(raw: grail.card.id)) {
+                        cardRow(card: grail.card, setName: grail.setName,
+                                caption: "Up \(grail.trend.upWeeks) of the last \(grail.trend.totalWeeks) weeks",
+                                marketUsd: grail.marketUsd) {
+                            Text(HuntRow.delta(grail.trend.pct).text)
+                                .font(.caption)
+                                .foregroundStyle(grail.trend.pct < 0 ? .green : .red)
                         }
                     }
                 }
@@ -139,6 +130,35 @@ struct WatchingView: View {
                 Text("Your grails")
             } footer: {
                 Text("Two years of weekly history — the long view, not this week's noise.")
+            }
+        }
+    }
+
+    /// One identifiable card row, shared by drops and grails.
+    ///
+    /// ⚠️ The thumbnail and the `Set · number` line are not decoration. A wishlist can hold
+    /// three cards called Charizard, and a row showing only the name makes you go and work out
+    /// which one moved — which is exactly the errand this screen exists to save. Reported on
+    /// device 2026-08-01; the original mockup had the set and number and the first
+    /// implementation dropped them.
+    @ViewBuilder
+    private func cardRow<Trailing: View>(card: CardRecord, setName: String?, caption: String,
+                                         marketUsd: Double?,
+                                         @ViewBuilder trailing: () -> Trailing) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            CardImageView(card: card, quality: "low").frame(width: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(card.name).font(.headline).lineLimit(1)
+                Text([setName, "#\(card.number)"].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(caption).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                if let marketUsd {
+                    Text(marketUsd, format: .currency(code: "USD")).monospacedDigit()
+                }
+                trailing()
             }
         }
     }

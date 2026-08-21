@@ -79,15 +79,36 @@ final class CatalogStoreTests: XCTestCase {
         XCTAssertEqual(Set(cards.map(\.id)), ["sv1-25", "swsh7-94"])
     }
 
-    func testImageURLPrefersTcgdexWebpThenFallsBackToImageUrl() throws {
-        // `store` is the suite's fixture-backed CatalogStore from setUp.
-        // Card with a tcgdex image_base → webp URL wins.
-        let withBase = try XCTUnwrap(store.card(id: "swsh7-215"))
-        XCTAssertEqual(withBase.imageURL(quality: "high")?.absoluteString, "https://assets.tcgdex.net/en/swsh/swsh7/215/high.webp")
-        // Card with only a mirrored image_url → returned verbatim.
-        let withUrl = try XCTUnwrap(store.card(id: "swsh7-12"))
-        XCTAssertNil(withUrl.imageBase)
-        XCTAssertEqual(withUrl.imageURL(quality: "high"), URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/fixture_in_800x800.jpg"))
+    /// Precedence is tcgplayer → tcgdex → legacy `image_url`, and the FIRST of those is the whole
+    /// point: `assets.tcgdex.net` was measured at 4.5–42.5 s TTFB against tcgplayer-cdn's 0.21 s
+    /// (2026-08-02), so a card carrying both must take the fast host. Built from explicit records
+    /// rather than fixture rows so the assertion pins the precedence, not whichever columns the
+    /// fixture happens to populate.
+    func testImageURLPrefersTcgplayerThenTcgdexThenLegacyImageUrl() {
+        func card(base: String?, tcgplayerId: Int?, imageUrl: String? = nil) -> CardRecord {
+            CardRecord(id: "x", setId: "swsh7", number: "215", name: "Rayquaza", hp: nil, types: [],
+                       rarity: nil, artist: nil, imageBase: base, imageUrl: imageUrl,
+                       tcgplayerId: tcgplayerId)
+        }
+        let base = "https://assets.tcgdex.net/en/swsh/swsh7/215"
+
+        // Both sources → tcgplayer wins, at both sizes.
+        let both = card(base: base, tcgplayerId: 42)
+        XCTAssertEqual(both.imageURL(quality: "high")?.absoluteString,
+                       "https://tcgplayer-cdn.tcgplayer.com/product/42_in_800x800.jpg")
+        XCTAssertEqual(both.imageURL(quality: "low")?.absoluteString,
+                       "https://tcgplayer-cdn.tcgplayer.com/product/42_200w.jpg")
+
+        // No product id → tcgdex webp, which is still the source for ~16% of the catalog.
+        XCTAssertEqual(card(base: base, tcgplayerId: nil).imageURL(quality: "high")?.absoluteString,
+                       "https://assets.tcgdex.net/en/swsh/swsh7/215/high.webp")
+
+        // Neither → the legacy re-hosted URL, verbatim.
+        XCTAssertEqual(card(base: nil, tcgplayerId: nil, imageUrl: "https://legacy.example/x.jpg")
+                        .imageURL(quality: "high")?.absoluteString, "https://legacy.example/x.jpg")
+
+        // Nothing at all → no URL, so the placeholder renders instead of a spinner.
+        XCTAssertNil(card(base: nil, tcgplayerId: nil).imageURL(quality: "high"))
     }
 
     func testPriceHistoryReturnsRowsAscendingAndEmptyWhenNone() throws {
