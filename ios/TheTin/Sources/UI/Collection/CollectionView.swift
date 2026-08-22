@@ -514,6 +514,19 @@ final class CollectionModel {
         }
     }
 
+    /// Set the same facts on many cards in one write — the bulk sibling of `saveEntry`.
+    ///
+    /// The arithmetic and the twin fold live in `BulkEdit`, which owns no repository and no view;
+    /// this is only the write. One `applyEntryEdits` for the whole selection, so forty cards cost
+    /// one round trip and one stream notification rather than forty of each.
+    func bulkEdit(ids: Set<String>, _ edit: BulkEdit) async {
+        let (updated, deletedIds) = edit.apply(to: entries.filter { ids.contains($0.id) })
+        guard !updated.isEmpty else { return }
+        await write("edit the cards") {
+            try await repository.applyEntryEdits(updated: updated, deletedIds: deletedIds)
+        }
+    }
+
     // MARK: Sold / traded away
 
     /// Record that a copy has gone. Not a delete: the row keeps its card, its condition, its

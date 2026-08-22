@@ -57,21 +57,28 @@ history is premium, the export button costs a subscription. The Tin's goal is a
 collector-grade tracker where everything works, free, forever:
 
 - **Free, with no feature gates.** No ads, no premium tier, no scan limits.
-- **Private and offline-first.** Your collection lives on your device. Card
-  recognition runs entirely on-device — photos of your cards are never uploaded.
-- **Community funded, in the open.** Running costs are covered by donations with
-  a public ledger. Money and code are both welcome; neither buys influence.
+- **Private and offline-first.** Your collection lives on your device, backed up
+  to your own iCloud so a new phone can restore it — never to a server of ours.
+  Card recognition runs entirely on-device; camera frames never leave the phone.
+- **Community funded, in the open.** Running costs are covered by
+  [GitHub Sponsors](https://github.com/sponsors/treyes133); what they pay for is
+  itemized in [SPONSORS.md](SPONSORS.md). Money and code are both welcome;
+  neither buys influence.
 - **Open source.** The app and its backend are AGPL-3.0 — inspect it, fork it,
   self-host it.
 
 ## Status & roadmap
 
-**v1.0 is live on the App Store** as of 2026-07-31 — iPhone and iPad, iOS 17+.
+**The Tin is live on the App Store** — iPhone and iPad, iOS 17+. v1.0 shipped
+2026-07-31; 1.0.3 is the current public release.
 [Download it here](https://apps.apple.com/app/id6788516920).
 
-Next up: multi-device sync over iCloud, trading tools, and an Android translation
-of the app on Google Play. Bugs and feature requests are welcome in
-[issues](../../issues) — early reports get acted on fast.
+Next up: multi-device sync, trading tools, and an Android translation of the app
+on Google Play. (Sync was prototyped over CloudKit and abandoned — see
+[#97](../../pull/97) — so the shipping design is end-to-end-encrypted blobs the
+app uploads itself, which is also what makes an Android client possible.) Bugs
+and feature requests are welcome in [issues](../../issues) — early reports get
+acted on fast.
 
 ## Features
 
@@ -121,10 +128,12 @@ of the app on Google Play. Bugs and feature requests are welcome in
 | Directory | What it is |
 |---|---|
 | `ios/` | The SwiftUI app (Xcode project generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen) from `ios/project.yml`) |
-| `catalog-server/` | Self-hostable catalog server — a thin, App Attest–gated static file server (Docker) that serves the card catalog and scanner fingerprint pack |
-| `functions/` | The catalog data pipeline (Docker, `Dockerfile.pipeline`) — nightly build of the card-catalog SQLite from open data feeds, price enrichment, and 3-tier packaging/publishing |
+| `catalog-server/` | Self-hostable catalog server — a thin, App Attest–gated static file server (Docker) that serves the card catalog and scanner fingerprint pack ([setup](catalog-server/README.md)) |
+| `functions/` | The catalog data pipeline (Docker, `Dockerfile.pipeline`) — nightly build of the card-catalog SQLite from open data feeds, price enrichment, and 3-tier packaging/publishing (configuration in [`.env.example`](functions/.env.example)) |
 | `fingerprint/` | The scanner's fingerprint pipeline — builds the visual recognition pack (ORB descriptors + vector-quantized codebook) from catalog card images |
 | `test_images/` | Real card photos used by the scanner's accuracy evaluation (`test_images/images.csv` holds the ground-truth labels) |
+| `site/` | [thetinapp.com](https://thetinapp.com) — the static marketing, privacy and support pages, plus the Cloudflare Pages Functions behind share links (`/c/`, `/l`) |
+| `workers/` | `tin-backup`, a Cloudflare Worker that serves the catalog and fingerprint pack from R2 as a second origin when the primary server is down |
 
 Card metadata and raw prices come from open data sources —
 [TCGdex](https://tcgdex.dev), [tcgcsv](https://tcgcsv.com) (TCGplayer USD), and
@@ -144,12 +153,32 @@ The app builds and runs without any secrets. Firebase-backed extras (mirrored
 card images, the hosted catalog fallback) need your own Firebase project and a
 `GoogleService-Info.plist` (gitignored — the app treats it as optional).
 
-Backend tests:
+### Tests
+
+Six suites, all runnable from a fresh clone. CI runs the five non-iOS ones on
+every pull request (`.github/workflows/ci.yml`).
 
 ```bash
-cd catalog-server && npm install && npm test   # catalog server
-cd fingerprint && pytest                        # fingerprint pipeline
+cd functions        && npm ci && npm test              # catalog data pipeline
+cd catalog-server   && npm ci && npm test              # catalog server
+cd workers/tin-backup && npm ci && npm test            # R2 backup origin
+cd site             && node --test tests/*.test.mjs    # share-link Functions (no deps)
 ```
+
+The fingerprint pipeline needs **Python 3.11 specifically** — the pinned
+`opencv-python-headless` has no wheel for newer Pythons, and building it from
+source is impractical:
+
+```bash
+cd fingerprint
+python3.11 -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+pytest
+```
+
+The iOS suite runs from Xcode (⌘U) or `xcodebuild test`. On a memory-constrained
+Mac add `-parallel-testing-enabled NO`; the test hosts get killed otherwise and
+the run reports zero tests rather than a failure.
 
 ## Contributing
 
@@ -162,20 +191,28 @@ please open an issue before starting anything large.
 The repo follows a three-tier branch doctrine:
 
 ```
-feature/* ──PR──▶ staging ──promotion──▶ main
+feat|fix|chore|perf|docs/* ──PR──▶ staging ──promote/X.Y.Z-to-main──▶ main
 ```
 
-- **`main` — App Store releases.** Each release is tagged on the exact commit that
-  was archived and reviewed — `v1.0` points at the binary Apple approved.
-- **`staging` — TestFlight builds.** The long-lived integration branch that
+- **`main` — App Store releases.** Only ever updated by a promotion PR, never
+  pushed to directly. Each release is tagged on the exact commit Apple approved
+  (`v1.0.3`).
+- **`staging` — the open TestFlight train.** The long-lived integration branch
   internal testers run. Every TestFlight upload is archived from `staging` and
-  tagged with its release and TestFlight build number (`vX.Y.Z-buildN`), so any
-  commit can be traced to the build testers are holding.
-- **`feature/*` — feature branches.** All work happens here and rolls into
-  `staging` through pull requests — never directly into `main`.
+  tagged with its version and build number (`vX.Y.Z-buildN`), so any commit can
+  be traced to the build testers are holding.
+- **Work branches** — `feat/`, `fix/`, `chore/`, `perf/` or `docs/` prefixed.
+  All work happens here and rolls into `staging` through pull requests. Branch
+  from `staging`, never from `main`.
+- **`staging-X.Y.Z` — the next train, when two are open at once.** An App Store
+  version stops accepting new builds the moment it enters review, so when that
+  happens `staging` stays on the version under review (leaving room for a fix
+  review demands) and the next version's work collects on `staging-X.Y.Z` until
+  the outgoing train closes.
 
-**Promotion:** when a TestFlight build starts serving more than internal testers
-(open beta), that build's commit is promoted to `main` and tagged as a release.
+**Promotion:** once a version is approved and live on the App Store, its commit
+is promoted to `main` through a `promote/X.Y.Z-to-main` pull request and tagged
+as a release.
 
 ## License
 

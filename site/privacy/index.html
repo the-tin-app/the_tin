@@ -33,14 +33,15 @@
 <main class="doc">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p class="doc-date">Effective July 20, 2026 · Applies to The Tin for iOS</p>
+    <p class="doc-date">Effective August 17, 2026 · Applies to The Tin for iOS</p>
 
     <div class="callout">
       <p><strong>The short version:</strong> The Tin has no account, no analytics, and no
-      tracking. Your collection is stored on your device and never uploaded. What leaves
-      your phone is an anonymous identifier used to deliver card data, and — if the app
-      crashes — an anonymous crash report so we can fix it. The app is open source, so
-      all of this is verifiable, not just promised.</p>
+      tracking. Your collection is stored on your device, and backed up to <em>your</em>
+      iCloud so a new phone can restore it — it never reaches our servers. What leaves
+      your phone for us is an anonymous identifier used to deliver card data, and — if
+      the app crashes — an anonymous crash report so we can fix it. The app is open
+      source, so all of this is verifiable, not just promised.</p>
     </div>
 
     <h2>What we collect</h2>
@@ -72,9 +73,28 @@
       <li>No analytics, usage statistics, or behavioral data.</li>
       <li>No advertising identifiers — there are no ads.</li>
       <li><strong>No collection data.</strong> The cards you own, want, scan, or value
-      are stored in a database on your device. They are never transmitted to us or to
-      anyone else. Camera frames used by the scanner are processed on-device and never
-      uploaded.</li>
+      are stored in a database on your device. They are never transmitted to us — we
+      operate no server that could receive them and no account they could be attached
+      to. Camera frames used by the scanner are processed on-device and are never
+      uploaded anywhere at all.</li>
+    </ul>
+
+    <h2>Your iCloud backup</h2>
+    <p>So that a lost or replaced phone doesn't mean a lost collection, the app keeps a
+    backup of your collection — your groups, cards, wishlist, and any photos you have
+    taken of your own cards — in <strong>your</strong> private iCloud container, under
+    your own Apple ID. It happens automatically when iCloud is available.</p>
+    <p>This is worth being precise about, because "stored on your device" alone would no
+    longer be the whole truth:</p>
+    <ul>
+      <li>The backup goes to Apple, in your iCloud account. It does not go to us, and we
+      have no way to read it — we are not a party to it at any point.</li>
+      <li>It is covered by Apple's privacy policy and by your own iCloud settings, and it
+      counts against your iCloud storage.</li>
+      <li>Turning off iCloud Drive, or signing out of iCloud, stops it. The app keeps
+      working; it just has nothing to restore from.</li>
+      <li>Scanner camera frames are never part of it. Photos are only ever ones you
+      deliberately attached to a card.</li>
     </ul>
 
     <h2>Third-party services</h2>
@@ -85,17 +105,22 @@
       delivery, app integrity, crash reporting) — <a href="https://firebase.google.com/support/privacy">Firebase privacy documentation</a></li>
       <li><strong>Cloudflare</strong> (content delivery for card data) —
       <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare privacy policy</a></li>
-      <li><strong>Apple</strong> (App Attest device integrity) —
+      <li><strong>Apple</strong> (App Attest device integrity; iCloud backup of your
+      collection, in your own account) —
       <a href="https://www.apple.com/legal/privacy/">Apple privacy policy</a></li>
     </ul>
     <p>If you open a card's marketplace listing (eBay, TCGplayer), that page loads in an
     in-app Safari view and those sites' own privacy policies apply from that point.</p>
 
     <h2>Data deletion</h2>
-    <p>Deleting the app deletes your collection, because your device is the only place
-    it ever existed. The anonymous identifier becomes permanently orphaned — it points
-    to nothing and can't be connected to you. If you have any questions or a deletion
-    request, contact us and we'll help.</p>
+    <p>Deleting the app deletes the copy of your collection on your device, and the
+    anonymous identifier becomes permanently orphaned — it points to nothing and can't
+    be connected to you. There is nothing for us to delete on request, because there is
+    nothing of yours on our side to begin with.</p>
+    <p>Your iCloud backup is the one thing deleting the app does not remove — that is
+    the point of it, so that reinstalling restores your collection. To delete it too,
+    remove The Tin's data under Settings → Apple&nbsp;ID → iCloud on your device. That
+    is between you and Apple; we cannot do it for you and cannot see whether you have.</p>
 
     <h2>Children</h2>
     <p>The Tin is not directed at children under 13, and it collects no personal
