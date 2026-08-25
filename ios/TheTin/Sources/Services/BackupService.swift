@@ -438,7 +438,13 @@ final class BackupService {
         // nil = a pre-v3 backup, which says nothing about goals; keep whatever is on the device.
         if let ids = snapshot.setGoals { setGoals?.replaceAll(Set(ids)) }
         // nil = a pre-v5 backup, which says nothing about binders; keep whatever is on the device.
-        if let layouts = snapshot.binders { binders?.replaceAll(layouts) }
+        // Either way the dividers are now the snapshot's, so a layout keyed to one this backup
+        // does not have is orphaned — invisible forever, and copied into every later backup. Both
+        // branches are filtered: a v5 backup can carry a stale layout too.
+        if let binders {
+            let live = Set(snapshot.groups.map(\.id))
+            binders.replaceAll((snapshot.binders ?? binders.all).filter { live.contains($0.groupId) })
+        }
         // Photos live beside the snapshot, not in it. Pulled down off-main and best-effort: a
         // restored entry whose photo hasn't arrived yet is a far smaller failure than a restore
         // that blocks on a few hundred file downloads.

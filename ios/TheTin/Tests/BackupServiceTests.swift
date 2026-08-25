@@ -247,8 +247,10 @@ final class BackupServiceTests: XCTestCase {
     func testBindersRoundTripThroughBackupAndRestore() async throws {
         let (colA, wantsA) = try makeRepos(sub: "bindersA")
         try await colA.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        // A real divider, because a restore now prunes layouts whose divider the backup lacks.
+        let gid = try await colA.createGroup(name: "Binder")
         let bindersA = makeBinders(sub: "bindersA")
-        let layout = BinderLayout(groupId: "g1", shape: PageShape(rows: 1, cols: 2),
+        let layout = BinderLayout(groupId: gid, shape: PageShape(rows: 1, cols: 2),
                                   pages: [BinderPage(slots: [PlannedCard(cardId: "a"), nil])])
         bindersA.save(layout)
         await makeService(collection: colA, wants: wantsA, binders: bindersA).backUpNow()
@@ -534,7 +536,9 @@ final class BackupServiceTests: XCTestCase {
     /// must leave the device's own binder layouts alone rather than wiping them — the same rule
     /// `setGoals` and `sealed` each earn, and what makes the test above's name honest.
     func testAPreV5BackupLeavesBindersOnDiskUntouched() async throws {
-        let json = #"{"schemaVersion":4,"exportedAt":0,"groups":[],"entries":[],"wanted":[]}"#
+        // The divider IS in the backup: a layout whose divider is not is a separate rule, pinned
+        // by `testARestoreDropsALayoutWhoseDividerIsGone`.
+        let json = #"{"schemaVersion":4,"exportedAt":0,"groups":[{"id":"g1","name":"Binder","sortOrder":0,"createdAt":0}],"entries":[],"wanted":[]}"#
         let snapshot = try JSONDecoder().decode(BackupSnapshot.self, from: Data(json.utf8))
         XCTAssertNil(snapshot.binders)
 
@@ -546,6 +550,28 @@ final class BackupServiceTests: XCTestCase {
             .performRestore(snapshot: snapshot)
 
         XCTAssertEqual(binders.all, [layout], "a v4 backup says nothing about binders")
+    }
+
+    /// A restore replaces the dividers wholesale, so a layout keyed to one the backup does not
+    /// have is orphaned — invisible forever, and copied into every later backup. Both branches
+    /// prune: a v5 backup can carry a stale layout too.
+    func testARestoreDropsALayoutWhoseDividerIsGone() async throws {
+        let (col, wants) = try makeRepos(sub: "orphanBinders")
+        let binders = makeBinders(sub: "orphanBinders")
+        let kept = BinderLayout(groupId: "g1")
+        binders.save(kept)
+        binders.save(BinderLayout(groupId: "gone"))
+        let group = CardGroup(id: "g1", name: "Binder", sortOrder: 0, createdAt: fixedNow)
+        let service = makeService(collection: col, wants: wants, binders: binders)
+
+        try await service.performRestore(
+            snapshot: BackupSnapshot(exportedAt: fixedNow, groups: [group], entries: [], wanted: []))
+        XCTAssertEqual(binders.all, [kept], "a v4 backup keeps local layouts, minus the orphan")
+
+        try await service.performRestore(
+            snapshot: BackupSnapshot(exportedAt: fixedNow, groups: [group], entries: [], wanted: [],
+                                     binders: [kept, BinderLayout(groupId: "stale")]))
+        XCTAssertEqual(binders.all, [kept], "and the snapshot's own list is pruned the same way")
     }
 
     func testABinderLayoutRoundTripsThroughASnapshot() throws {
