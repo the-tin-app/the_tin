@@ -117,3 +117,77 @@ struct BinderLayout: Codable, Equatable, Identifiable {
         return pages
     }
 }
+
+extension BinderLayout {
+    /// Absolute pocket index of `(page, index)` counted from the first pocket of `run`.
+    private func pocketOffset(page: Int, index: Int, in run: Range<Int>) -> Int {
+        let before = run.lowerBound..<min(page, run.upperBound)
+        return before.reduce(0) { $0 + pages[$1].slots.count } + index
+    }
+
+    /// Put `card` in one pocket, shifting nothing. `nil` clears the pocket.
+    mutating func place(_ card: PlannedCard?, page: Int, index: Int) {
+        guard pages.indices.contains(page), pages[page].slots.indices.contains(index) else { return }
+        pages[page].slots[index] = card
+    }
+
+    /// Insert `card` at `(page, index)`, pushing everything after it along by one pocket.
+    ///
+    /// The shift travels only within `run(containing: page)`, and overflow appends a
+    /// default-shaped page at the END of that run — never past the wall, so a page you gave its
+    /// own shape keeps its contents.
+    mutating func insert(_ card: PlannedCard, page: Int, index: Int) {
+        guard pages.indices.contains(page) else { return }
+        let r = run(containing: page)
+        var flat: [PlannedCard?] = r.flatMap { pages[$0].slots }
+        let at = min(max(pocketOffset(page: page, index: index, in: r), 0), flat.count)
+        flat.insert(card, at: at)
+
+        // Absorb a trailing EMPTY pocket rather than growing the binder for it. Without this the
+        // run gains a page on every insert, because the flattened array is always one longer than
+        // the capacity it came from — a binder with a half-empty last page would sprout a new page
+        // the first time you filled a gap, which is the opposite of organising it.
+        let capacity = r.reduce(0) { $0 + pages[$1].slots.count }
+        while flat.count > capacity, let last = flat.last, last == nil { flat.removeLast() }
+
+        // Re-chunk into the run's OWN page capacities, appending default pages for the overflow.
+        var caps = r.map { pages[$0].slots.count }
+        var shapes = r.map { pages[$0].shape }
+        while caps.reduce(0, +) < flat.count {
+            caps.append(shape.pockets)
+            shapes.append(nil)
+        }
+        var rebuilt: [BinderPage] = []
+        var cursor = 0
+        for (i, cap) in caps.enumerated() {
+            var slots = Array(flat.dropFirst(cursor).prefix(cap))
+            slots += Array(repeating: nil, count: cap - slots.count)
+            rebuilt.append(BinderPage(shape: shapes[i], slots: slots))
+            cursor += cap
+        }
+        pages.replaceSubrange(r, with: rebuilt)
+    }
+
+    /// How many planned cards an insert at this pocket would physically move.
+    func moveCount(page: Int, index: Int) -> Int {
+        guard pages.indices.contains(page) else { return 0 }
+        let r = run(containing: page)
+        let flat: [PlannedCard?] = r.flatMap { pages[$0].slots }
+        let at = min(max(pocketOffset(page: page, index: index, in: r), 0), flat.count)
+        return flat.dropFirst(at).compactMap { $0 }.count
+    }
+
+    /// "112 cards move · pages 6–18" — what the insert costs you in the real world, which is the
+    /// whole reason the app is worth opening before you re-sleeve a binder.
+    ///
+    /// nil when nothing moves, so the sheet omits the row rather than saying "0 cards move".
+    /// Pages read 1-indexed here; the model is 0-indexed everywhere else.
+    func moveSummary(page: Int, index: Int) -> String? {
+        let n = moveCount(page: page, index: index)
+        guard n > 0 else { return nil }
+        let r = run(containing: page)
+        let last = r.upperBound   // 0-indexed exclusive == 1-indexed inclusive
+        let span = page + 1 == last ? "page \(last)" : "pages \(page + 1)–\(last)"
+        return "\(n) \(n == 1 ? "card" : "cards") move · \(span)"
+    }
+}

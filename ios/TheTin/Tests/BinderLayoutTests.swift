@@ -50,4 +50,60 @@ final class BinderLayoutTests: XCTestCase {
         XCTAssertEqual(pages[1].slots.count, 2)
         XCTAssertEqual(pages[1].slots.compactMap { $0?.cardId }, ["c"])
     }
+
+    private func run(_ ids: [String?], shape: PageShape = PageShape(rows: 1, cols: 2)) -> BinderLayout {
+        BinderLayout(groupId: "g", shape: shape,
+                     pages: BinderLayout.chunk(ids.map { $0.map { PlannedCard(cardId: $0) } }, shape: shape))
+    }
+
+    private func flat(_ layout: BinderLayout) -> [String?] {
+        layout.pages.flatMap { $0.slots }.map { $0?.cardId }
+    }
+
+    func testPlaceOverwritesOnePocketAndShiftsNothing() {
+        var layout = run(["a", "b", "c", "d"])
+        layout.place(PlannedCard(cardId: "z"), page: 0, index: 1)
+        XCTAssertEqual(flat(layout), ["a", "z", "c", "d"])
+    }
+
+    func testInsertShiftsEverythingAfterItAlong() {
+        var layout = run(["a", "b", "c", nil])
+        layout.insert(PlannedCard(cardId: "z"), page: 0, index: 1)
+        XCTAssertEqual(flat(layout), ["a", "z", "b", "c"])
+    }
+
+    /// Overflow appends a page rather than dropping the card off the end.
+    func testInsertAppendsAPageWhenTheRunIsFull() {
+        var layout = run(["a", "b", "c", "d"])
+        layout.insert(PlannedCard(cardId: "z"), page: 0, index: 0)
+        XCTAssertEqual(layout.pages.count, 3)
+        XCTAssertEqual(flat(layout), ["z", "a", "b", "c", "d", nil])
+    }
+
+    /// The rule that protects a solo showcase page.
+    func testInsertNeverPushesACardIntoAnOverriddenPage() {
+        var layout = BinderLayout(groupId: "g", shape: PageShape(rows: 1, cols: 2), pages: [
+            BinderPage(slots: [PlannedCard(cardId: "a"), PlannedCard(cardId: "b")]),
+            BinderPage(shape: PageShape(rows: 1, cols: 1), slots: [PlannedCard(cardId: "solo")]),
+        ])
+        layout.insert(PlannedCard(cardId: "z"), page: 0, index: 0)
+        XCTAssertEqual(layout.pages.count, 3, "the new page lands INSIDE the run, before the solo page")
+        XCTAssertEqual(flat(layout), ["z", "a", "b", nil, "solo"])
+        XCTAssertEqual(layout.pages[2].shape, PageShape(rows: 1, cols: 1),
+                       "the solo page keeps its shape and its card")
+    }
+
+    func testTheMoveCountCountsOnlyPlannedCardsAfterThePocket() {
+        let layout = run(["a", "b", nil, "d"])
+        XCTAssertEqual(layout.moveCount(page: 0, index: 0), 3, "an empty pocket in the middle moves nothing")
+        XCTAssertEqual(layout.moveCount(page: 1, index: 1), 1, "only 'd' is at or after this pocket")
+    }
+
+    /// Pages read 1-indexed to a human; the model is 0-indexed. Nil when nothing moves, so the
+    /// sheet can omit the whole row rather than say "0 cards move".
+    func testTheMoveSummaryReadsInHumanPageNumbers() {
+        let layout = run(["a", "b", "c", nil])
+        XCTAssertEqual(layout.moveSummary(page: 0, index: 1), "2 cards move · pages 1–2")
+        XCTAssertNil(layout.moveSummary(page: 1, index: 1), "nothing follows the last empty pocket")
+    }
 }
