@@ -589,6 +589,7 @@ final class AppModel {
         self.catalogState = updater.installedState()
         let collection = CollectionModel(repository: repository, store: store)
         collection.widgetWriter = WidgetSnapshotWriter()
+        collection.binders = binders
         self.collection = collection
         Task { await collection.start() }
         let wants = WantsModel(repo: wantsRepository, uid: uid)

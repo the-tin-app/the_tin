@@ -747,6 +747,32 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertEqual(model.entries.count, 1)
     }
 
+    /// Deleting a divider must take its binder layout with it — an orphaned layout is invisible
+    /// forever and would silently reappear if the id were ever reused. Undo must bring the layout
+    /// back too, or restoring the divider hands the user an empty binder where their scanned pages
+    /// used to be.
+    func testDeletingADividerRemovesItsBinderAndUndoBringsItBack() async throws {
+        let paths = BinderPaths(fileURL: URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("binders-\(UUID().uuidString).json"))
+        let binders = BinderLayoutsModel(paths: paths)
+        model.binders = binders
+
+        let id = await model.createGroup(name: "Binder")
+        await waitForStreams()
+        binders.save(BinderLayout(groupId: id, shape: PageShape(rows: 1, cols: 1),
+                                  pages: [BinderPage(slots: [PlannedCard(cardId: "a")])]))
+        XCTAssertNotNil(binders.layout(for: id), "the layout must exist before we can assert its removal")
+
+        await model.deleteGroup(id: id)
+        await waitForStreams()
+        XCTAssertNil(binders.layout(for: id), "the layout must not outlive its divider")
+
+        await model.undoLastDelete()
+        await waitForStreams()
+        XCTAssertEqual(binders.layout(for: id)?.pages.first?.slots.first??.cardId, "a",
+                       "undo restores the binder, not just the empty divider")
+    }
+
     // MARK: Trade list
 
     /// Reversed 2026-07-25, when the trade list became one row per physical copy: a copy you're

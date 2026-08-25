@@ -12,6 +12,9 @@ final class CollectionModel {
     /// drafts without touching Application Support.
     var photoStore: PhotoStore = .live()
     var stagingPlatesDir: URL = ScanStagingPaths.default().platesDir
+    /// Binder layouts, so deleting a divider takes its layout with it. Injected (and optional) for
+    /// the same reason `photoStore` is: tests must not touch Application Support.
+    var binders: BinderLayoutsModel?
     private(set) var groups: [CardGroup] = []
     /// The cards you own. **Sold copies are filtered out of this**, which is what gives roughly
     /// forty consumers — GroupStats, Movers, PortfolioHistory, ScanKnowledge, set completion, the
@@ -319,6 +322,11 @@ final class CollectionModel {
         let message: String
         let groups: [CardGroup]
         let entries: [CollectionEntry]
+        /// The deleted divider's binder layout, if it had one. Captured BEFORE the write for the
+        /// same reason `entries` is: once the layout is gone, nothing else remembers it, and an
+        /// undo that restored the divider without it would silently destroy the layout while
+        /// looking like a successful undo.
+        var binder: BinderLayout?
         /// When this offer lapses. Stamped by `offerUndo`, and carried on the offer rather than
         /// left to the toast so the countdown bar stays HONEST: SwiftUI can tear the toast down
         /// and rebuild it mid-window (the entries stream re-evaluates that subtree right after a
@@ -398,10 +406,13 @@ final class CollectionModel {
         // `sealed` is passed through UNCHANGED. Undo only ever restores cards and dividers, but
         // `replaceAll` rewrites the whole file — omitting sealed here would make pressing Undo on
         // a deleted divider silently destroy every sealed product in the tin.
-        await write("undo that") {
+        let ok = await write("undo that") {
             try await repository.replaceAll(groups: restoredGroups, entries: restoredEntries,
                                             sealed: sealed)
         }
+        // Same file, same undo: a restored divider with no layout back would look like a
+        // successful undo while quietly destroying the scanned binder behind it.
+        if ok, let binder = undone.binder { binders?.save(binder) }
     }
 
     private func cardName(_ cardId: String) -> String {
@@ -420,18 +431,22 @@ final class CollectionModel {
     func deleteGroup(id: String, keepingEntries: Bool = false) async {
         let group = groups.first { $0.id == id }
         // Snapshot BEFORE the write: with `keepingEntries` these rows survive with groupId "",
-        // and the pre-delete copies are what remember which divider they belonged to.
+        // and the pre-delete copies are what remember which divider they belonged to. Same reason
+        // the binder layout is read here rather than after — `remove(groupId:)` below is a
+        // separate file write with no undo of its own.
         let affected = entries.filter { $0.groupId == id }
+        let binder = binders?.layout(for: id)
         let ok = await write("delete the divider") {
             try await repository.deleteGroup(id: id, keepingEntries: keepingEntries)
         }
         guard ok, let group else { return }
+        binders?.remove(groupId: id)
         let n = affected.cardCount
         offerUndo(UndoableDelete(
             message: keepingEntries || affected.isEmpty
                 ? "Deleted “\(group.name)”"
                 : "Deleted “\(group.name)” and \(n) \(n == 1 ? "card" : "cards")",
-            groups: [group], entries: affected))
+            groups: [group], entries: affected, binder: binder))
     }
     func reorderGroups(ids: [String]) async {
         await write("reorder the dividers") { try await repository.reorderGroups(orderedIds: ids) }
