@@ -9,6 +9,16 @@ struct BinderPaths {
     }
 }
 
+/// An array element that decodes to nil instead of failing the whole array.
+///
+/// This is the half of the `WantPriority` fix that matters here: lose one binder, never all of
+/// them. Without it a single unreadable record makes `load` return `[:]`, and the next write
+/// persists that emptiness over the file — the `wants.json` bug, one type along.
+private struct Lenient<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: any Decoder) throws { value = try? T(from: decoder) }
+}
+
 /// The binder layouts, keyed by the divider each one lays out.
 ///
 /// Its own file rather than a field on `CardGroup`, for two reasons: a master-set layout is ~400
@@ -22,6 +32,7 @@ struct BinderPaths {
 final class BinderLayoutsModel {
     private(set) var layouts: [String: BinderLayout] = [:]
     private let fileURL: URL
+    private var unreadable = false
     /// Routes write failures into the same alert sink as collection/wishlist writes.
     var onWriteError: ((String) -> Void)?
     /// Fired after a successful write. `BackupService` uses it in place of a stream.
@@ -29,16 +40,24 @@ final class BinderLayoutsModel {
 
     init(paths: BinderPaths = .default()) {
         self.fileURL = paths.fileURL
-        self.layouts = Self.load(from: paths.fileURL)
+        let data = try? Data(contentsOf: paths.fileURL)
+        let parsed = data.flatMap { Self.parse($0) }
+        // A non-empty file we could not parse AT ALL is not the same as no file at all.
+        self.unreadable = (data?.isEmpty == false) && parsed == nil
+        self.layouts = parsed ?? [:]
     }
 
-    /// A decode failure is an empty model, never a crash — the same forward-only leniency
-    /// `WantPriority` documents, and for the same reason: a build that can't read the file must
-    /// not be the reason the user's work disappears with no warning.
-    static func load(from url: URL) -> [String: BinderLayout] {
-        guard let data = try? Data(contentsOf: url),
-              let list = try? JSONDecoder().decode([BinderLayout].self, from: data) else { return [:] }
-        return Dictionary(uniqueKeysWithValues: list.map { ($0.groupId, $0.normalized()) })
+    /// nil = the bytes were not a readable list of layouts at all. A list containing one unreadable
+    /// LAYOUT is not that case: the bad record is dropped and its siblings survive.
+    static func parse(_ data: Data) -> [String: BinderLayout]? {
+        guard let list = try? JSONDecoder().decode([Lenient<BinderLayout>].self, from: data) else {
+            return nil
+        }
+        // Last writer wins on a duplicated groupId. `uniqueKeysWithValues` TRAPS there, and this is
+        // untrusted input — a hand-edited file or a restored backup — so that trap is a crash on
+        // every launch until the file is deleted by hand.
+        return Dictionary(list.compactMap(\.value).map { ($0.groupId, $0.normalized()) },
+                          uniquingKeysWith: { _, later in later })
     }
 
     /// Every layout, ordered — what the backup snapshot writes.
@@ -55,7 +74,8 @@ final class BinderLayoutsModel {
     /// Restores a backup's layouts wholesale (mirrors `SetGoalsModel.replaceAll`).
     func replaceAll(_ list: [BinderLayout]) {
         mutate { dict in
-            dict = Dictionary(uniqueKeysWithValues: list.map { ($0.groupId, $0.normalized()) })
+            dict = Dictionary(list.map { ($0.groupId, $0.normalized()) },
+                              uniquingKeysWith: { _, later in later })
         }
     }
 
@@ -73,6 +93,14 @@ final class BinderLayoutsModel {
     private func persist() throws {
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if unreadable {
+            // Keep what we could not read rather than writing over it. Best effort — if the rename
+            // fails there is nothing better to do than carry on, and one sidecar is enough: the
+            // first unreadable version is the one worth having.
+            try? FileManager.default.moveItem(at: fileURL,
+                                              to: fileURL.appendingPathExtension("corrupt"))
+            unreadable = false
+        }
         // Sorted so the file is stable between writes and diffs cleanly in a backup.
         try JSONEncoder().encode(all).write(to: fileURL, options: .atomic)
     }

@@ -4,8 +4,13 @@ import XCTest
 @MainActor
 final class BinderLayoutsModelTests: XCTestCase {
     private func tempPaths() -> BinderPaths {
-        BinderPaths(fileURL: URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("binders-\(UUID().uuidString).json"))
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("binders-\(UUID().uuidString).json")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: url.appendingPathExtension("corrupt"))
+        }
+        return BinderPaths(fileURL: url)
     }
 
     private func sample(_ groupId: String) -> BinderLayout {
@@ -53,6 +58,45 @@ final class BinderLayoutsModelTests: XCTestCase {
         let json = #"[{"groupId":"g1","shape":{"rows":3,"cols":3},"pages":[{"slots":[]}]}]"#
         try Data(json.utf8).write(to: paths.fileURL)
         XCTAssertEqual(BinderLayoutsModel(paths: paths).layout(for: "g1")?.pages.first?.slots.count, 9)
+    }
+
+    /// `Dictionary(uniqueKeysWithValues:)` TRAPS on a duplicate key, which would crash the app at
+    /// every launch until someone deleted the file by hand.
+    func testADuplicateGroupIdDoesNotCrashTheApp() throws {
+        let paths = tempPaths()
+        let json = """
+        [{"groupId":"g1","shape":{"rows":1,"cols":1},"pages":[{"slots":[{"cardId":"a"}]}]},\
+        {"groupId":"g1","shape":{"rows":1,"cols":1},"pages":[{"slots":[{"cardId":"b"}]}]}]
+        """
+        try Data(json.utf8).write(to: paths.fileURL)
+        let model = BinderLayoutsModel(paths: paths)
+        XCTAssertEqual(model.layouts.count, 1)
+        XCTAssertEqual(model.layout(for: "g1")?.pages.first?.slots.first??.cardId, "b",
+                       "last writer wins")
+    }
+
+    /// The wants.json lesson: one unreadable record must not take its siblings with it.
+    func testOneUnreadableLayoutIsDroppedAloneAndTheRestSurvive() throws {
+        let paths = tempPaths()
+        let json = """
+        [{"groupId":"g1","shape":{"rows":1,"cols":1},"pages":[{"slots":[{"cardId":"a"}]}]},\
+        {"nonsense":true},\
+        {"groupId":"g3","shape":{"rows":1,"cols":1},"pages":[{"slots":[{"cardId":"c"}]}]}]
+        """
+        try Data(json.utf8).write(to: paths.fileURL)
+        XCTAssertEqual(Set(BinderLayoutsModel(paths: paths).layouts.keys), ["g1", "g3"])
+    }
+
+    /// A file we could not read AT ALL is preserved, not written over.
+    func testAnUnreadableFileIsMovedAsideRatherThanOverwritten() throws {
+        let paths = tempPaths()
+        try Data("this is not json".utf8).write(to: paths.fileURL)
+        let model = BinderLayoutsModel(paths: paths)
+        XCTAssertTrue(model.layouts.isEmpty)
+        model.save(sample("g1"))
+        let sidecar = paths.fileURL.appendingPathExtension("corrupt")
+        XCTAssertEqual(try String(contentsOf: sidecar, encoding: .utf8), "this is not json")
+        XCTAssertEqual(BinderLayoutsModel(paths: paths).layout(for: "g1"), sample("g1"))
     }
 
     func testAFailedWriteRollsBackAndReportsRatherThanLying() {
