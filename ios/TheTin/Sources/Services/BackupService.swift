@@ -5,7 +5,7 @@ import Observation
 /// One backup file's contents: the whole owned collection + wishlist, reusing the models'
 /// existing Codable conformances verbatim. `schemaVersion` gates future migrations.
 struct BackupSnapshot: Codable, Equatable {
-    var schemaVersion: Int = 4
+    var schemaVersion: Int = 5
     var exportedAt: Date
     var groups: [CardGroup]
     var entries: [CollectionEntry]
@@ -21,6 +21,11 @@ struct BackupSnapshot: Codable, Equatable {
     /// — a v3 backup decodes with this nil, and `performRestore` then leaves local sealed alone
     /// rather than clearing it from a file that never knew about it.
     var sealed: [SealedEntry]? = nil
+    /// v5: binder layouts, keyed by the divider each lays out. Optional + defaulted for the reason
+    /// the three fields above document — a v4 backup decodes with this nil, and `performRestore`
+    /// then leaves local binders alone rather than clearing them from a file that never knew
+    /// about them.
+    var binders: [BinderLayout]? = nil
 }
 
 /// Why a backup read failed. Manual restore surfaces these; auto-restore treats all as absent.
@@ -165,6 +170,9 @@ final class BackupService {
     /// Set goals live in their own model, not a repository (a plain file of ids). Optional so
     /// tests and any goal-less wiring construct the service unchanged.
     private let setGoals: SetGoalsModel?
+    /// Binder layouts live in their own model too, same shape as `setGoals`. Optional for the
+    /// same reason.
+    private let binders: BinderLayoutsModel?
     private let uid: String
     /// Where `lastSyncedExportedAt` lives. Injected so two services in one test process are two
     /// devices rather than one — with `.standard` they share the flag and neither sees a conflict.
@@ -176,7 +184,7 @@ final class BackupService {
 
     init(store: BackupStore = ICloudBackupStore(),
          collection: CollectionRepository, wants: WantsRepository,
-         setGoals: SetGoalsModel? = nil, uid: String,
+         setGoals: SetGoalsModel? = nil, binders: BinderLayoutsModel? = nil, uid: String,
          photos: PhotoStore? = nil, defaults: UserDefaults = .standard,
          debounce: Duration = .seconds(5), now: @escaping () -> Date = { Date() }) {
         self.store = store
@@ -185,6 +193,7 @@ final class BackupService {
         self.collection = collection
         self.wants = wants
         self.setGoals = setGoals
+        self.binders = binders
         self.uid = uid
         self.debounce = debounce
         self.now = now
@@ -201,6 +210,7 @@ final class BackupService {
         // Goals have no stream (one small file, written whole), so the model calls back instead.
         // Without this, chasing a set would sit unbacked-up until some other edit happened to fire.
         setGoals?.onChange = { [weak self] in self?.scheduleWrite() }
+        binders?.onChange = { [weak self] in self?.scheduleWrite() }
         streamTasks.append(Task { [weak self] in
             guard let stream = self?.collection.groupsStream() else { return }
             var first = true
@@ -336,7 +346,8 @@ final class BackupService {
         for await v in wants.stream(uid: uid) { wantMap = v; break }
         return BackupSnapshot(exportedAt: now(), groups: groups, entries: entries,
                               wanted: wantMap.keys.sorted(), wantEntries: wantMap,
-                              setGoals: setGoals?.setIds.sorted(), sealed: sealed)
+                              setGoals: setGoals?.setIds.sorted(), sealed: sealed,
+                              binders: binders?.all)
     }
 
     // MARK: Reading
@@ -426,6 +437,8 @@ final class BackupService {
         try await wants.save(uid: uid, entries: restoredWants)
         // nil = a pre-v3 backup, which says nothing about goals; keep whatever is on the device.
         if let ids = snapshot.setGoals { setGoals?.replaceAll(Set(ids)) }
+        // nil = a pre-v5 backup, which says nothing about binders; keep whatever is on the device.
+        if let layouts = snapshot.binders { binders?.replaceAll(layouts) }
         // Photos live beside the snapshot, not in it. Pulled down off-main and best-effort: a
         // restored entry whose photo hasn't arrived yet is a far smaller failure than a restore
         // that blocks on a few hundred file downloads.

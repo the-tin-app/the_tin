@@ -83,7 +83,7 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(service.status, .backedUp(fixedNow))
 
         let snapshot = try await service.loadBackup()
-        XCTAssertEqual(snapshot.schemaVersion, 4)
+        XCTAssertEqual(snapshot.schemaVersion, 5)
         XCTAssertEqual(snapshot.setGoals, ["base1"])
         XCTAssertEqual(snapshot.exportedAt, fixedNow)
         XCTAssertEqual(snapshot.groups.map(\.id), [gid])
@@ -295,7 +295,7 @@ final class BackupServiceTests: XCTestCase {
         await makeService(collection: colA, wants: wantsA).backUpNow()
 
         let written = try await makeService(collection: colA, wants: wantsA).loadBackup()
-        XCTAssertEqual(written.schemaVersion, 4)
+        XCTAssertEqual(written.schemaVersion, 5)
         XCTAssertEqual(written.sealed?.map(\.id), ["s1"])
 
         let (colB, wantsB) = try makeRepos(sub: "sealedB")
@@ -467,5 +467,24 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertNil(phone.conflict)
         let onDisk = try await phone.loadBackup()
         XCTAssertEqual(Set(onDisk.entries.map(\.id)), ["e1", "e2"])
+    }
+
+    /// A v4 backup says NOTHING about binders. Restoring one must leave the device's binders
+    /// alone rather than clearing them — the same trap `sealed` and `setGoals` each document.
+    func testAPreV5BackupDecodesWithNoBindersAndClearsNothing() throws {
+        let json = #"{"schemaVersion":4,"exportedAt":0,"groups":[],"entries":[],"wanted":[]}"#
+        let snapshot = try JSONDecoder().decode(BackupSnapshot.self, from: Data(json.utf8))
+        XCTAssertNil(snapshot.binders)
+    }
+
+    func testABinderLayoutRoundTripsThroughASnapshot() throws {
+        let layout = BinderLayout(groupId: "g1", shape: PageShape(rows: 1, cols: 2),
+                                  pages: [BinderPage(slots: [PlannedCard(cardId: "a"), nil])])
+        let snapshot = BackupSnapshot(exportedAt: Date(), groups: [], entries: [], wanted: [],
+                                      binders: [layout])
+        let decoded = try JSONDecoder().decode(
+            BackupSnapshot.self, from: try JSONEncoder().encode(snapshot))
+        XCTAssertEqual(decoded.binders, [layout])
+        XCTAssertEqual(decoded.schemaVersion, 5)
     }
 }
