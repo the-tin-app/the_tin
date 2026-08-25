@@ -17,12 +17,21 @@ struct BinderLayoutView: View {
     /// Catalog records for everything planned in this binder, loaded off the main actor.
     @State private var cards: [String: CardRecord] = [:]
     @State private var pendingShrink: PendingShrink?
+    /// The pocket a tap wants to fill, held until `BinderPlaceSheet` commits or is dismissed.
+    @State private var pendingPlace: PendingPlace?
 
     /// A shape change that would discard planned cards, held until the user confirms it.
     private struct PendingShrink: Identifiable {
         let id = UUID()
         let shape: PageShape?
         let losing: Int
+    }
+
+    /// One pocket, identified by its page and index within that page.
+    private struct PendingPlace: Identifiable {
+        let page: Int
+        let index: Int
+        var id: String { "\(page)-\(index)" }
     }
 
     /// The sheets people actually buy. A page can also inherit the binder's own default, which is
@@ -85,6 +94,15 @@ struct BinderLayoutView: View {
                 Button("Keep this page", role: .cancel) {}
             } message: { pending in
                 Text("This page holds \(pending.losing) more \(pending.losing == 1 ? "card" : "cards") than the new size. They'll be removed from the binder — the cards stay in your collection.")
+            }
+            // Attached to this stable `Group`, never to the `switch`/`if` inside `spread` — a
+            // `.sheet` on a re-identified branch dismisses itself (the same `ViewBuilder`
+            // conditional-identity trap this codebase has hit before).
+            .sheet(item: $pendingPlace) { pending in
+                if let layout {
+                    BinderPlaceSheet(layout: layout, page: pending.page, index: pending.index,
+                                     store: store) { updated in binders.save(updated) }
+                }
             }
         }
     }
@@ -182,9 +200,14 @@ struct BinderLayoutView: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .top),
                                  count: shape.cols), spacing: 8) {
             ForEach(0..<shape.pockets, id: \.self) { i in
-                pocket(layout: layout, index: i,
-                       state: states.indices.contains(page) && states[page].indices.contains(i)
-                              ? states[page][i] : .empty)
+                Button {
+                    pendingPlace = PendingPlace(page: page, index: i)
+                } label: {
+                    pocket(layout: layout, index: i,
+                           state: states.indices.contains(page) && states[page].indices.contains(i)
+                                  ? states[page][i] : .empty)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
