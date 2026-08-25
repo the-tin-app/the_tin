@@ -161,6 +161,33 @@ final class BinderLayoutTests: XCTestCase {
                        "clearing the override falls back to the binder's own shape")
     }
 
+    /// The invariant setup owns: `place`/`insert` are silent no-ops on a page that does not
+    /// exist, so a created-but-pageless binder is a screen of dead taps. `BinderLayout.pages`
+    /// really does return `[]` for no cards — asserted first here so this is a guard and not a
+    /// tautology — which is what a set the catalog holds no cards for would produce.
+    func testANewLayoutAlwaysGetsAtLeastOnePage() {
+        XCTAssertTrue(BinderLayout.pages(for: [], shape: .default, reverseHoloFor: []).isEmpty,
+                      "the generator this guards still returns no pages for no cards")
+        XCTAssertEqual(BinderSetupSheet.initialPages(cards: [], shape: .default,
+                                                     reverseHoloFor: []).count, 1)
+        XCTAssertEqual(BinderSetupSheet.initialPages(cards: [], shape: PageShape(rows: 1, cols: 1),
+                                                     reverseHoloFor: []).count, 1)
+        // The starting page survives the round trip through `save`, sized to its shape.
+        let saved = BinderLayout(groupId: "g", shape: PageShape(rows: 2, cols: 2),
+                                 pages: BinderSetupSheet.initialPages(
+                                    cards: [], shape: PageShape(rows: 2, cols: 2),
+                                    reverseHoloFor: [])).normalized()
+        XCTAssertEqual(saved.pages.map(\.slots.count), [4])
+    }
+
+    /// Cards present: the guard steps out of the way entirely.
+    func testSetupPassesRealCardsStraightToTheGenerator() {
+        let cards = [record("a", number: "1"), record("b", number: "2")]
+        let shape = PageShape(rows: 1, cols: 1)
+        XCTAssertEqual(BinderSetupSheet.initialPages(cards: cards, shape: shape, reverseHoloFor: []),
+                       BinderLayout.pages(for: cards, shape: shape, reverseHoloFor: []))
+    }
+
     func testReverseHoloEligibilityReadsThePrintingNames() {
         let priced = ["a": [VariantPrice(printing: "Reverse Holofoil", usd: 1)],
                       "b": [VariantPrice(printing: "Normal", usd: 1)]]

@@ -19,6 +19,9 @@ struct BinderLayoutView: View {
     @State private var pendingShrink: PendingShrink?
     /// The pocket a tap wants to fill, held until `BinderPlaceSheet` commits or is dismissed.
     @State private var pendingPlace: PendingPlace?
+    /// The setup sheet — the only way a layout is ever created, so it is reachable only from the
+    /// not-laid-out-yet state.
+    @State private var showingSetup = false
 
     /// A shape change that would discard planned cards, held until the user confirms it.
     private struct PendingShrink: Identifiable {
@@ -35,8 +38,9 @@ struct BinderLayoutView: View {
     }
 
     /// The sheets people actually buy. A page can also inherit the binder's own default, which is
-    /// the fifth option in the menu and not in this list.
-    private static let offeredShapes = [
+    /// the fifth option in the menu and not in this list. Shared with `BinderSetupSheet` so the
+    /// size you pick when laying a binder out is the same set of sizes a page can change to.
+    static let offeredShapes = [
         PageShape(rows: 1, cols: 1), PageShape(rows: 2, cols: 2),
         PageShape(rows: 3, cols: 3), PageShape(rows: 3, cols: 4),
     ]
@@ -45,7 +49,7 @@ struct BinderLayoutView: View {
         "Page \(index + 1) of \(max(layout.pages.count, 1))"
     }
 
-    private static func shapeLabel(_ shape: PageShape) -> String { "\(shape.rows)×\(shape.cols)" }
+    static func shapeLabel(_ shape: PageShape) -> String { "\(shape.rows)×\(shape.cols)" }
 
     /// nil until this divider is laid out — and a layout with ZERO pages is the same thing.
     ///
@@ -65,9 +69,14 @@ struct BinderLayoutView: View {
                 if let layout {
                     spread(layout)
                 } else {
-                    ContentUnavailableView(
-                        "Not laid out yet", systemImage: "book.closed",
-                        description: Text("\(group.name) is a divider, not a binder — there are no pages to show."))
+                    ContentUnavailableView {
+                        Label("Not laid out yet", systemImage: "book.closed")
+                    } description: {
+                        Text("\(group.name) is a divider, not a binder — there are no pages to show.")
+                    } actions: {
+                        Button("Lay out as a binder") { showingSetup = true }
+                            .buttonStyle(.borderedProminent)
+                    }
                 }
             }
             .navigationTitle(group.name)
@@ -102,6 +111,13 @@ struct BinderLayoutView: View {
                 if let layout {
                     BinderPlaceSheet(layout: layout, page: pending.page, index: pending.index,
                                      store: store) { updated in binders.save(updated) }
+                }
+            }
+            // Same stable `Group`, same reason: presented FROM the empty-state branch, never
+            // attached to it — the branch stops existing the moment the layout is created.
+            .sheet(isPresented: $showingSetup) {
+                BinderSetupSheet(groupId: group.id, store: store) { created in
+                    binders.save(created)
                 }
             }
         }
