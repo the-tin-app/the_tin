@@ -105,6 +105,20 @@ final class BinderLayoutTests: XCTestCase {
         let layout = run(["a", "b", "c", nil])
         XCTAssertEqual(layout.moveSummary(page: 0, index: 1), "2 cards move · pages 1–2")
         XCTAssertNil(layout.moveSummary(page: 1, index: 1), "nothing follows the last empty pocket")
+        XCTAssertEqual(layout.moveSummary(page: 1, index: 0), "1 card move · page 2",
+                       "singular, and one page needs no dash")
+    }
+
+    /// The span has to include the page the insert is about to APPEND. `insert` absorbs one
+    /// trailing empty pocket, so a run whose last pocket is occupied grows — and the summary said
+    /// "pages 1–2" for cards that land on three.
+    func testTheMoveSummaryCountsThePageTheInsertWillAppend() {
+        let layout = run(["a", "b", "c", "d"])
+        XCTAssertEqual(layout.moveSummary(page: 0, index: 0), "4 cards move · pages 1–3")
+
+        var applied = layout
+        applied.insert(PlannedCard(cardId: "z"), page: 0, index: 0)
+        XCTAssertEqual(applied.pages.count, 3, "which is where the cards actually land")
     }
 
     private func record(_ id: String, number: String) -> CardRecord {

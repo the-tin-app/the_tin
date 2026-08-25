@@ -53,4 +53,40 @@ final class BinderFillTests: XCTestCase {
         let states = BinderFill.states(layout: l, entries: [entry("a", group: "binder", variant: "holo")])
         XCTAssertEqual(states[0], [.filled, .needed(elsewhere: nil)])
     }
+
+    /// The generator's OWN ordering: base slot first, reverse-holo slot second. Walking in slot
+    /// order let the wildcard base slot eat the reverse copy, so a reverse-only pack pull — the
+    /// normal case for a common — read "base: filled, reverse: needed" and sent you shopping for a
+    /// card already in the pocket next door.
+    private var generatorPair: BinderLayout {
+        layout([PlannedCard(cardId: "a", variant: nil),
+                PlannedCard(cardId: "a", variant: CardVariant.reverseHolo.rawValue)])
+    }
+
+    func testAReverseOnlyCopyFillsTheReversePocketNotTheBaseOne() {
+        let states = BinderFill.states(
+            layout: generatorPair,
+            entries: [entry("a", group: "binder", variant: "reverseHolo")])
+        XCTAssertEqual(states[0], [.needed(elsewhere: nil), .filled])
+    }
+
+    /// Owning both printings fills both pockets whichever order the repository emits them in —
+    /// otherwise two devices with the same cards disagree.
+    func testOwningBothPrintingsFillsBothPocketsWhateverTheEntryOrder() {
+        let base = entry("a", group: "binder", variant: "regular")
+        let reverse = entry("a", group: "binder", variant: "reverseHolo")
+        for entries in [[base, reverse], [reverse, base]] {
+            XCTAssertEqual(BinderFill.states(layout: generatorPair, entries: entries)[0],
+                           [.filled, .filled])
+        }
+    }
+
+    /// `binders.json` is a trust boundary: a legal PPT printing name has to canonicalise onto the
+    /// rawValue the entry side stores, or the pocket never fills.
+    func testASlotVariantWrittenAsAPPTPrintingNameStillMatches() {
+        let l = layout([PlannedCard(cardId: "a", variant: "Reverse Holofoil")])
+        XCTAssertEqual(
+            BinderFill.states(layout: l, entries: [entry("a", group: "binder", variant: "reverseHolo")])[0],
+            [.filled])
+    }
 }

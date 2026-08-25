@@ -186,7 +186,12 @@ extension BinderLayout {
         let n = moveCount(page: page, index: index)
         guard n > 0 else { return nil }
         let r = run(containing: page)
-        let last = r.upperBound   // 0-indexed exclusive == 1-indexed inclusive
+        // 0-indexed exclusive == 1-indexed inclusive — plus the page the insert is about to
+        // append. `insert` absorbs exactly ONE trailing empty pocket, so it grows the run iff the
+        // run's last pocket is already occupied; without this the span reads one page short of
+        // where the cards actually land.
+        let lastPocketFilled = (r.flatMap { pages[$0].slots }.last ?? nil) != nil
+        let last = r.upperBound + (lastPocketFilled ? 1 : 0)
         let span = page + 1 == last ? "page \(last)" : "pages \(page + 1)–\(last)"
         return "\(n) \(n == 1 ? "card" : "cards") move · \(span)"
     }

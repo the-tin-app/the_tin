@@ -32,6 +32,13 @@ struct BinderPlaceSheet: View {
                         Text("Put here fills just this pocket. Insert makes room for it, and everything already planned after it shifts along by one.")
                     }
                 }
+                if planned != nil {
+                    Section {
+                        Button("Clear this pocket", role: .destructive) { clear() }
+                    } footer: {
+                        Text("Empties the pocket. Nothing else moves, and the card stays in your tin.")
+                    }
+                }
                 Section {
                     ForEach(results) { card in
                         row(card)
@@ -82,6 +89,22 @@ struct BinderPlaceSheet: View {
         let number = "#\(card.number)"
         guard let set = setCaptions[card.setId] else { return number }
         return "\(set) · \(number)"
+    }
+
+    /// What this pocket currently holds — the clear action's whole existence test. `place(nil,…)`
+    /// is the only way to undo a mis-tapped Insert, which otherwise shifts a whole master set by
+    /// one pocket with no way back.
+    private var planned: PlannedCard? {
+        guard layout.pages.indices.contains(page),
+              layout.pages[page].slots.indices.contains(index) else { return nil }
+        return layout.pages[page].slots[index]
+    }
+
+    private func clear() {
+        var updated = layout
+        updated.place(nil, page: page, index: index)
+        onSave(updated)
+        dismiss()
     }
 
     private func commit(_ card: CardRecord, shifting: Bool) {

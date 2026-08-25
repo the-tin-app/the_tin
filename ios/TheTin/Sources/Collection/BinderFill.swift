@@ -41,13 +41,29 @@ enum BinderFill {
             }
         }
 
-        return layout.pages.map { page in
-            page.slots.map { slot in
-                guard let slot else { return .empty }
-                if spend(&budget, slot) { return .filled }
-                return .needed(elsewhere: elsewhere[slot.cardId])
+        // TWO passes, printings first. A wildcard slot takes "whatever is left", so walking in
+        // slot order lets it eat the very copy the reverse-holo slot beside it is asking for — and
+        // the generator emits exactly that pair, base then reverse, for every eligible card. One
+        // reverse-only pack pull then read "base: filled, reverse: needed", which is backwards, and
+        // owning both printings made the answer depend on entry insertion order.
+        var states: [[SlotState]] = layout.pages.map {
+            Array(repeating: .empty, count: $0.slots.count)
+        }
+        for namingAPrinting in [true, false] {
+            for (p, page) in layout.pages.enumerated() {
+                for (i, slot) in page.slots.enumerated() {
+                    guard let slot, (slot.variant != nil) == namingAPrinting else { continue }
+                    if spend(&budget, slot) { states[p][i] = .filled }
+                }
             }
         }
+        for (p, page) in layout.pages.enumerated() {
+            for (i, slot) in page.slots.enumerated() {
+                guard let slot, states[p][i] != .filled else { continue }
+                states[p][i] = .needed(elsewhere: elsewhere[slot.cardId])
+            }
+        }
+        return states
     }
 
     /// Take one copy out of the budget for `slot`, if there is one. A slot naming a printing takes
@@ -56,8 +72,12 @@ enum BinderFill {
     private static func spend(_ budget: inout [String: [(variant: String?, qty: Int)]],
                               _ slot: PlannedCard) -> Bool {
         guard var buckets = budget[slot.cardId] else { return false }
-        let hit: Int? = slot.variant.map { wanted in
-            buckets.firstIndex { $0.variant == wanted && $0.qty > 0 }
+        let hit: Int? = slot.variant.map { raw in
+            // The entry side canonicalises through `variantValue`, so the slot must too or a
+            // `binders.json` holding a legal PPT printing name ("Reverse Holofoil") never matches
+            // the "reverseHolo" it stores. Same trust-boundary reason `PageShape` decodes by hand.
+            let wanted = CardVariant(rawValue: raw)?.rawValue ?? raw
+            return buckets.firstIndex { $0.variant == wanted && $0.qty > 0 }
         } ?? buckets.firstIndex { $0.qty > 0 }
         guard let i = hit else { return false }
         buckets[i].qty -= 1
