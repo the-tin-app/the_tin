@@ -93,6 +93,7 @@ struct GroupDetailView: View {
     @State private var showingNewDivider = false
     @State private var newDividerName = ""
     @State private var sellingEntry: CollectionEntry?
+    @State private var showingBinder = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The "Gone" section starts closed: it's history, not inventory, and on a collection sold
     /// down over years it would otherwise be the biggest thing on the screen.
@@ -178,6 +179,11 @@ struct GroupDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingBinder) {
+            if let group, let binders = model.binders {
+                BinderLayoutView(model: model, group: group, store: store, binders: binders)
+            }
+        }
         .sheet(item: $sellingEntry) { entry in
             NavigationStack {
                 MarkSoldSheet(card: try? store.card(id: entry.cardId), entry: entry,
@@ -248,6 +254,16 @@ struct GroupDetailView: View {
                 // unreachable on iPad; see CollectionView's toolbar comment), and this screen
                 // already carries three. Menu contents are never subject to that.
                 Menu {
+                    // The binder spread lives IN this menu rather than in a toolbar slot of its
+                    // own: with a group this toolbar already carries three trailing items, and
+                    // iPadOS silently DROPS a third rather than collapsing it (see below and
+                    // CollectionView). Menu contents are never subject to that, and the binder is
+                    // genuinely another way of looking at this divider.
+                    if group != nil, model.binders != nil {
+                        Button { showingBinder = true }
+                            label: { Label("Binder", systemImage: "book.pages") }
+                        Divider()
+                    }
                     // ⚠️ An inline Picker in a menu renders its options WITHOUT its own label,
                     // and wrapping it in a `Section("…")` does not add one either — both verified
                     // on the simulator, 2026-08-11. The two groups can therefore only be told

@@ -130,6 +130,14 @@ final class BinderLayoutTests: XCTestCase {
         XCTAssertEqual(planned.map(\.variant), [nil, CardVariant.reverseHolo.rawValue, nil])
     }
 
+    /// The screen counts pages from 1; the model counts from 0. That boundary rots silently, so
+    /// it is pinned here rather than left to a view nobody can unit-test.
+    func testPageLabelsAreOneIndexedForHumans() {
+        let layout = run(["a", "b", "c", "d"])
+        XCTAssertEqual(BinderLayoutView.pageLabel(index: 0, of: layout), "Page 1 of 2")
+        XCTAssertEqual(BinderLayoutView.pageLabel(index: 1, of: layout), "Page 2 of 2")
+    }
+
     func testReverseHoloEligibilityReadsThePrintingNames() {
         let priced = ["a": [VariantPrice(printing: "Reverse Holofoil", usd: 1)],
                       "b": [VariantPrice(printing: "Normal", usd: 1)]]
