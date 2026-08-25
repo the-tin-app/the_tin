@@ -191,3 +191,39 @@ extension BinderLayout {
         return "\(n) \(n == 1 ? "card" : "cards") move · \(span)"
     }
 }
+
+extension BinderLayout {
+    /// Lay a set out as binder pages, in catalog (collector-number) order.
+    ///
+    /// Secrets and trainer-gallery cards are included — they carry real numbers and belong in a
+    /// master set. A reverse-holo slot follows its card immediately, which is how these binders are
+    /// physically arranged, and only for cards in `reverseHoloFor`.
+    ///
+    /// Takes records rather than a `CatalogStore` so it stays pure and needs no sqlite fixture to
+    /// test. The caller supplies order (`CatalogStore.cards(inSet:)` is already ordered) and
+    /// eligibility (one batched `variantPrices(cardIds:)`, not a query per card).
+    ///
+    /// Nothing here is Pokémon-specific: it reads set membership and collector order, both of
+    /// which are already TCG-neutral in the catalog.
+    static func pages(for cards: [CardRecord], shape: PageShape,
+                      reverseHoloFor eligible: Set<String>) -> [BinderPage] {
+        var flat: [PlannedCard?] = []
+        for card in cards {
+            flat.append(PlannedCard(cardId: card.id, variant: nil))
+            if eligible.contains(card.id) {
+                flat.append(PlannedCard(cardId: card.id, variant: CardVariant.reverseHolo.rawValue))
+            }
+        }
+        return chunk(flat, shape: shape)
+    }
+
+    /// Cards the catalog actually prices a reverse-holo printing for.
+    ///
+    /// Emitting a reverse slot for every card would double a 400-card master set with pockets that
+    /// can never be filled — most cards have no reverse-holo printing at all.
+    static func reverseHoloEligible(in priced: [String: [VariantPrice]]) -> Set<String> {
+        Set(priced.filter { _, rows in
+            rows.contains { CardVariant.reverseHolo.matches(printing: $0.printing) }
+        }.keys)
+    }
+}

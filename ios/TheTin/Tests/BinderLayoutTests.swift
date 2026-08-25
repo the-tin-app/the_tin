@@ -106,4 +106,33 @@ final class BinderLayoutTests: XCTestCase {
         XCTAssertEqual(layout.moveSummary(page: 0, index: 1), "2 cards move · pages 1–2")
         XCTAssertNil(layout.moveSummary(page: 1, index: 1), "nothing follows the last empty pocket")
     }
+
+    private func record(_ id: String, number: String) -> CardRecord {
+        CardRecord(id: id, setId: "sv02", number: number, name: id, hp: nil, types: [],
+                   rarity: nil, artist: nil, imageBase: nil, imageUrl: nil, tcgplayerId: nil)
+    }
+
+    func testTheGeneratorKeepsCatalogOrderOnePocketPerCard() {
+        let pages = BinderLayout.pages(for: [record("a", number: "1"), record("b", number: "2")],
+                                       shape: PageShape(rows: 1, cols: 3), reverseHoloFor: [])
+        XCTAssertEqual(pages.count, 1)
+        XCTAssertEqual(pages[0].slots.compactMap { $0?.cardId }, ["a", "b"])
+        XCTAssertEqual(pages[0].slots.count, 3, "the last page is padded, not short")
+    }
+
+    /// The master-set knob: a second pocket right after the card, only for cards that actually
+    /// have a reverse-holo printing.
+    func testReverseHolosFollowTheirCardAndOnlyWhenEligible() {
+        let pages = BinderLayout.pages(for: [record("a", number: "1"), record("b", number: "2")],
+                                       shape: PageShape(rows: 1, cols: 3), reverseHoloFor: ["a"])
+        let planned = pages.flatMap { $0.slots }.compactMap { $0 }
+        XCTAssertEqual(planned.map(\.cardId), ["a", "a", "b"])
+        XCTAssertEqual(planned.map(\.variant), [nil, CardVariant.reverseHolo.rawValue, nil])
+    }
+
+    func testReverseHoloEligibilityReadsThePrintingNames() {
+        let priced = ["a": [VariantPrice(printing: "Reverse Holofoil", usd: 1)],
+                      "b": [VariantPrice(printing: "Normal", usd: 1)]]
+        XCTAssertEqual(BinderLayout.reverseHoloEligible(in: priced), ["a"])
+    }
 }
