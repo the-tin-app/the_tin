@@ -94,7 +94,13 @@ struct BinderLayoutView: View {
             // A `Picker` is what people flick through to PREVIEW options, and `save` writes to
             // disk immediately — so a lossy shrink asks first. A lossless one never does: resizing
             // an empty page stays one tap.
-            .confirmationDialog("Smaller page", isPresented: Binding(
+            //
+            // ⚠️ An ALERT, not a `confirmationDialog` — the same call this codebase already made
+            // for deleting a divider (`CollectionView.swift`, 2026-07-27). The dialog renders as
+            // an anchorless popover where the cancel action is implicit and NOT DRAWN, so this
+            // shipped once as a destructive button with no visible way out. Alerts are centred,
+            // identical on both platforms, and draw every button you give them.
+            .alert("Smaller page", isPresented: Binding(
                 get: { pendingShrink != nil },
                 set: { if !$0 { pendingShrink = nil } }
             ), presenting: pendingShrink) { pending in
@@ -102,7 +108,7 @@ struct BinderLayoutView: View {
                        role: .destructive) { applyShape(pending.shape) }
                 Button("Keep this page", role: .cancel) {}
             } message: { pending in
-                Text("This page holds \(pending.losing) more \(pending.losing == 1 ? "card" : "cards") than the new size. They'll be removed from the binder — the cards stay in your collection.")
+                Text("This page holds \(pending.losing) more \(pending.losing == 1 ? "card" : "cards") than the new size. They'll be removed from the binder — the cards stay in your tin.")
             }
             // Attached to this stable `Group`, never to the `switch`/`if` inside `spread` — a
             // `.sheet` on a re-identified branch dismisses itself (the same `ViewBuilder`
@@ -187,7 +193,7 @@ struct BinderLayoutView: View {
     ///
     /// `normalized()` truncates the slot array to the new shape and `save` writes immediately, so
     /// without this the picker silently destroys hand-placed work — eleven cards on a 3×4
-    /// master-set page going to 1×1. The cards themselves stay in the collection; it is the PLAN
+    /// master-set page going to 1×1. The cards themselves stay in the tin; it is the PLAN
     /// that is lost. Static and pure so the branch that decides destroy-vs-confirm is assertable.
     static func loss(in page: BinderPage, changingTo shape: PageShape?,
                      default fallback: PageShape) -> Int {
