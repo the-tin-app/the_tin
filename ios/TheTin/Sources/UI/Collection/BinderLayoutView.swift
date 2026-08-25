@@ -16,6 +16,14 @@ struct BinderLayoutView: View {
     @State private var page = 0
     /// Catalog records for everything planned in this binder, loaded off the main actor.
     @State private var cards: [String: CardRecord] = [:]
+    @State private var pendingShrink: PendingShrink?
+
+    /// A shape change that would discard planned cards, held until the user confirms it.
+    private struct PendingShrink: Identifiable {
+        let id = UUID()
+        let shape: PageShape?
+        let losing: Int
+    }
 
     /// The sheets people actually buy. A page can also inherit the binder's own default, which is
     /// the fifth option in the menu and not in this list.
@@ -65,6 +73,19 @@ struct BinderLayoutView: View {
             // shrinks — a shape change, a restore, a page removed. Clamp on every change; nothing
             // below indexes `pages` without a bounds check either.
             .onChange(of: layout) { clampPage() }
+            // A `Picker` is what people flick through to PREVIEW options, and `save` writes to
+            // disk immediately — so a lossy shrink asks first. A lossless one never does: resizing
+            // an empty page stays one tap.
+            .confirmationDialog("Smaller page", isPresented: Binding(
+                get: { pendingShrink != nil },
+                set: { if !$0 { pendingShrink = nil } }
+            ), presenting: pendingShrink) { pending in
+                Button("Remove \(pending.losing) \(pending.losing == 1 ? "card" : "cards")",
+                       role: .destructive) { applyShape(pending.shape) }
+                Button("Keep this page", role: .cancel) {}
+            } message: { pending in
+                Text("This page holds \(pending.losing) more \(pending.losing == 1 ? "card" : "cards") than the new size. They'll be removed from the binder — the cards stay in your collection.")
+            }
         }
     }
 
@@ -112,17 +133,42 @@ struct BinderLayoutView: View {
                 .font(.caption)
         }
         .accessibilityLabel("Page size")
+        .accessibilityValue(Self.shapeLabel(own ?? layout.shape))
     }
 
     private func shapeBinding(_ layout: BinderLayout) -> Binding<PageShape?> {
         Binding(
             get: { layout.pages.indices.contains(page) ? layout.pages[page].shape : nil },
             set: { chosen in
-                guard layout.pages.indices.contains(page) else { return }
-                var updated = layout
-                updated.pages[page].shape = chosen
-                binders.save(updated)
+                let losing = loss(changingTo: chosen)
+                if losing > 0 {
+                    pendingShrink = PendingShrink(shape: chosen, losing: losing)
+                } else {
+                    applyShape(chosen)
+                }
             })
+    }
+
+    /// How many planned cards changing `page` to `shape` would discard.
+    ///
+    /// `normalized()` truncates the slot array to the new shape and `save` writes immediately, so
+    /// without this the picker silently destroys hand-placed work — eleven cards on a 3×4
+    /// master-set page going to 1×1. The cards themselves stay in the collection; it is the PLAN
+    /// that is lost. Static and pure so the branch that decides destroy-vs-confirm is assertable.
+    static func loss(in page: BinderPage, changingTo shape: PageShape?,
+                     default fallback: PageShape) -> Int {
+        page.slots.dropFirst((shape ?? fallback).pockets).compactMap { $0 }.count
+    }
+
+    private func loss(changingTo shape: PageShape?) -> Int {
+        guard let layout, layout.pages.indices.contains(page) else { return 0 }
+        return Self.loss(in: layout.pages[page], changingTo: shape, default: layout.shape)
+    }
+
+    private func applyShape(_ shape: PageShape?) {
+        guard var updated = layout, updated.pages.indices.contains(page) else { return }
+        updated.pages[page].shape = shape
+        binders.save(updated)
     }
 
     @ViewBuilder private func pocketGrid(_ layout: BinderLayout) -> some View {
@@ -189,7 +235,11 @@ struct BinderLayoutView: View {
         cards = Dictionary(loaded.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
+    /// Pure so it can be asserted. `page` is `@State` derived from the layout's contents, and this
+    /// codebase has twice been bitten by such state outliving what it was derived from.
+    static func clamped(_ page: Int, pages: Int) -> Int { min(max(page, 0), max(pages - 1, 0)) }
+
     private func clampPage() {
-        page = min(max(page, 0), max((layout?.pages.count ?? 0) - 1, 0))
+        page = Self.clamped(page, pages: layout?.pages.count ?? 0)
     }
 }

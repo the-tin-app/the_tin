@@ -138,6 +138,29 @@ final class BinderLayoutTests: XCTestCase {
         XCTAssertEqual(BinderLayoutView.pageLabel(index: 1, of: layout), "Page 2 of 2")
     }
 
+    func testThePageIndexClampsIntoRange() {
+        XCTAssertEqual(BinderLayoutView.clamped(5, pages: 2), 1)
+        XCTAssertEqual(BinderLayoutView.clamped(-3, pages: 2), 0)
+        XCTAssertEqual(BinderLayoutView.clamped(0, pages: 0), 0, "an empty layout must not produce -1")
+    }
+
+    /// The branch that decides whether a shape change is confirmed or applied silently. Getting it
+    /// wrong in the lenient direction destroys hand-placed work behind a picker.
+    func testAShapeChangeOnlyCountsPlannedCardsItWouldActuallyDrop() {
+        let full = BinderPage(slots: [card("a"), card("b"), card("c"), card("d")])
+        XCTAssertEqual(BinderLayoutView.loss(in: full, changingTo: PageShape(rows: 1, cols: 1),
+                                             default: .default), 3)
+        XCTAssertEqual(BinderLayoutView.loss(in: full, changingTo: PageShape(rows: 3, cols: 3),
+                                             default: .default), 0, "growing loses nothing")
+        let gappy = BinderPage(slots: [card("a"), nil, nil, nil])
+        XCTAssertEqual(BinderLayoutView.loss(in: gappy, changingTo: PageShape(rows: 1, cols: 1),
+                                             default: .default), 0,
+                       "empty pockets are not a loss — this is what keeps a lossless resize one tap")
+        XCTAssertEqual(BinderLayoutView.loss(in: full, changingTo: nil,
+                                             default: PageShape(rows: 1, cols: 2)), 2,
+                       "clearing the override falls back to the binder's own shape")
+    }
+
     func testReverseHoloEligibilityReadsThePrintingNames() {
         let priced = ["a": [VariantPrice(printing: "Reverse Holofoil", usd: 1)],
                       "b": [VariantPrice(printing: "Normal", usd: 1)]]
