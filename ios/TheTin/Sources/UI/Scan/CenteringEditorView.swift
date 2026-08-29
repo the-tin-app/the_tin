@@ -1,0 +1,536 @@
+import SwiftUI
+import TipKit
+
+/// Measures a card's centring by letting the user place eight lines themselves, on a picture of
+/// the card they actually scanned: the card's cut edge and the printed border's inner edge, on
+/// each side. The border width is the gap between the pair, and the ratio of opposite widths is
+/// the measurement.
+///
+/// Eight rather than four because four assumed the picture's edge was the card's edge, and it
+/// isn't — that assumption is most of why automatic detection read 90/10 on real photos
+/// (`fingerprint/eval/centering_check.swift`, 2026-08-14). The picture is deliberately cropped
+/// wider than the card (`EditorPlate.margin`) so the cut edge is visible and reachable rather than
+/// pinned against the boundary.
+///
+/// `CenteringMeter` only seeds the inner lines. The value that reaches the row is the one a person
+/// placed and looked at.
+struct CenteringEditorView: View {
+    let plate: UIImage
+    /// Where the lines start. Nil seeds the inner pair from the detector and puts the outer pair
+    /// on the card's expected edge, given the known crop margin.
+    let initial: Centering?
+    let onSave: (Centering) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    /// Every line as an inset in PLATE pixels from its own edge — the units `Centering` stores, so
+    /// what is dragged is what is saved with no rounding trip through view coordinates.
+    @State private var inset: [Line: CGFloat] = [:]
+    @State private var seeded = false
+    /// The dragged line's value when its gesture began, **tagged with which line it belongs to**.
+    /// See `dragBase`. This used to be a bare `CGFloat?` shared by all eight knobs, on the
+    /// reasoning that only one line can be under a finger at a time — true, but it is reset only
+    /// in `onEnded`, and `onEnded` does not always arrive.
+    @State private var dragOrigin: (line: Line, value: CGFloat)?
+    /// The line under the finger, or the last one moved — drives the readout and the highlight.
+    @State private var active: Line?
+
+    @State private var zoom: CGFloat = 1
+    @State private var zoomOrigin: CGFloat?
+    @State private var pan: CGSize = .zero
+    @State private var panOrigin: CGSize?
+
+    /// A border can be a couple of pixels wide on a 1400px picture, so the useful range goes well
+    /// past what a photo viewer needs — at 6× a single plate pixel is a comfortable target.
+    private static let zoomRange: ClosedRange<CGFloat> = 1...6
+
+    /// The stationary space every knob's drag is measured in. See where it is attached — a knob
+    /// measured in its own space feeds its output back into its input.
+    static let plateSpace = "centeringPlate"
+
+    enum Line: Hashable, CaseIterable {
+        case outerLeft, innerLeft, outerRight, innerRight
+        case outerTop, innerTop, outerBottom, innerBottom
+
+        var isVertical: Bool {
+            switch self {
+            case .outerLeft, .innerLeft, .outerRight, .innerRight: return true
+            default: return false
+            }
+        }
+        var isOuter: Bool {
+            switch self {
+            case .outerLeft, .outerRight, .outerTop, .outerBottom: return true
+            default: return false
+            }
+        }
+        /// Which edge the inset is measured from.
+        var alignment: Alignment {
+            switch self {
+            case .outerLeft, .innerLeft: return .leading
+            case .outerRight, .innerRight: return .trailing
+            case .outerTop, .innerTop: return .top
+            case .outerBottom, .innerBottom: return .bottom
+            }
+        }
+        var side: String {
+            switch self {
+            case .outerLeft, .innerLeft: return "Left"
+            case .outerRight, .innerRight: return "Right"
+            case .outerTop, .innerTop: return "Top"
+            case .outerBottom, .innerBottom: return "Bottom"
+            }
+        }
+        var label: String { "\(side) \(isOuter ? "card edge" : "border")" }
+    }
+
+    /// Cyan and magenta because they have to stay legible over yellow borders, blue holo, black
+    /// full-arts and a wooden table alike — neither turns up much in card art, and they read as
+    /// two different things at a glance rather than two shades of one.
+    static let outerColor = Color.cyan
+    static let innerColor = Color(red: 1, green: 0.2, blue: 0.8)
+
+    private var plateSize: CGSize {
+        CGSize(width: plate.size.width * plate.scale, height: plate.size.height * plate.scale)
+    }
+
+    private func px(_ line: Line) -> CGFloat { inset[line] ?? 0 }
+
+    private var current: Centering {
+        Centering(outerLeft: Int(px(.outerLeft).rounded()), innerLeft: Int(px(.innerLeft).rounded()),
+                  outerRight: Int(px(.outerRight).rounded()), innerRight: Int(px(.innerRight).rounded()),
+                  outerTop: Int(px(.outerTop).rounded()), innerTop: Int(px(.innerTop).rounded()),
+                  outerBottom: Int(px(.outerBottom).rounded()), innerBottom: Int(px(.innerBottom).rounded()))
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            CenteringReadout(summary: current.summary, spoken: current.spokenSummary,
+                             active: active.map { (label: $0.label,
+                                                   px: Int(px($0).rounded()),
+                                                   isOuter: $0.isOuter) })
+            // Shown once, on the first visit: without it the lens bow reads as the app being
+            // wrong, on the one screen whose whole job is to be trusted.
+            TipView(CenteringLensBowTip())
+            picture
+            legend
+        }
+        .padding()
+        .navigationTitle("Centering")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") { onSave(current); dismiss() }.fontWeight(.semibold)
+            }
+        }
+        .onAppear(perform: seed)
+    }
+
+    private var legend: some View {
+        HStack(spacing: 16) {
+            ForEach([true, false], id: \.self) { outer in
+                HStack(spacing: 5) {
+                    Capsule().fill(outer ? Self.outerColor : Self.innerColor)
+                        .frame(width: 16, height: 3)
+                    Text(outer ? "Card edge" : "Printed border").font(.caption2)
+                }
+            }
+            Spacer()
+            if zoom > 1 {
+                Button("Reset zoom") { withAnimation { zoom = 1; pan = .zero } }
+                    .font(.caption2)
+            }
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    private var picture: some View {
+        GeometryReader { geo in
+            // `base` maps plate pixels to points at zoom 1; the live factor is `base * zoom`, and
+            // every drag delta is divided by it so a finger moves a line by what it looks like.
+            let base = min(geo.size.width / plateSize.width, geo.size.height / plateSize.height)
+            let shown = CGSize(width: plateSize.width * base, height: plateSize.height * base)
+            ZStack {
+                Image(uiImage: plate).resizable().frame(width: shown.width, height: shown.height)
+                ForEach(Line.allCases, id: \.self) { line in
+                    lineView(line, in: shown, scale: base * zoom)
+                }
+            }
+            .frame(width: shown.width, height: shown.height)
+            .scaleEffect(zoom)
+            .offset(pan)
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
+            // ⚠️ **The coordinate space every knob's drag is measured in, and it has to be THIS
+            // view.** A `DragGesture` reports `translation` relative to the view it is attached
+            // to; the knobs are attached to their own line, and the line is moved by that very
+            // drag. So each event moved the knob, which shifted the space the next event was
+            // measured in, which moved it back — a two-point limit cycle at the event rate, with
+            // an amplitude equal to the line's own displacement.
+            //
+            // Measured on device (2026-08-17): `scale`, `shownH` and the drag origin all held
+            // perfectly steady while `translation` alternated −76 / −82, swinging the line 15
+            // plate pixels — and 15 × 0.469 = 7pt, exactly the translation's own wobble. The
+            // input was the output.
+            //
+            // This frame is outside `scaleEffect`/`offset`, so it does not move for a zoom, a pan
+            // or a line — which makes `translation` mean what the rest of the code assumes it
+            // means: screen points, hence still `/ scale` and not `/ base`.
+            .coordinateSpace(name: Self.plateSpace)
+            .contentShape(Rectangle())
+            // ⚠️ ONE plain `.gesture`, and deliberately NOT `.simultaneousGesture`. Simultaneous
+            // means "recognise alongside whatever else does", so a drag that started on a line
+            // moved the line AND panned the picture under it (Tomas, 2026-08-15). As a plain
+            // container gesture it yields to the lines' own high-priority drags, and only picks up
+            // touches that miss every grab zone.
+            .gesture(magnify.simultaneously(with: panGesture(shown: shown)))
+        }
+    }
+
+    private var magnify: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                let start = zoomOrigin ?? zoom
+                if zoomOrigin == nil { zoomOrigin = start }
+                zoom = min(max(start * value.magnification, Self.zoomRange.lowerBound),
+                           Self.zoomRange.upperBound)
+            }
+            .onEnded { _ in zoomOrigin = nil; if zoom == 1 { pan = .zero } }
+    }
+
+    /// Pans only while zoomed in — at 1× there is nothing off screen, and a stray pan there would
+    /// just slide the card out from under the lines.
+    private func panGesture(shown: CGSize) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard zoom > 1 else { return }
+                let start = panOrigin ?? pan
+                if panOrigin == nil { panOrigin = start }
+                // Clamped to the overhang, so the picture can't be flung off screen.
+                let maxX = shown.width * (zoom - 1) / 2, maxY = shown.height * (zoom - 1) / 2
+                pan = CGSize(
+                    width: min(max(start.width + value.translation.width, -maxX), maxX),
+                    height: min(max(start.height + value.translation.height, -maxY), maxY))
+            }
+            .onEnded { _ in panOrigin = nil }
+    }
+
+    /// Seeds once. In `onAppear` rather than `init` because the fallback needs the plate's real
+    /// pixel size, and re-seeding on a later appearance would silently discard a drag.
+    private func seed() {
+        guard !seeded else { return }
+        seeded = true
+        if let saved = initial {
+            inset[.outerLeft] = CGFloat(saved.outerLeft)
+            inset[.innerLeft] = CGFloat(saved.innerLeft)
+            inset[.outerRight] = CGFloat(saved.outerRight)
+            inset[.innerRight] = CGFloat(saved.innerRight)
+            inset[.outerTop] = CGFloat(saved.outerTop)
+            inset[.innerTop] = CGFloat(saved.innerTop)
+            inset[.outerBottom] = CGFloat(saved.outerBottom)
+            inset[.innerBottom] = CGFloat(saved.innerBottom)
+            return
+        }
+        // The crop is a known factor wider than the detected card, so the card's edge is expected
+        // at this inset. It is a starting position, not a claim — the user drags it onto the
+        // actual edge, which is exactly the correction the detector cannot make for itself.
+        let hMargin = plateSize.width * (EditorPlate.margin - 1) / (2 * EditorPlate.margin)
+        let vMargin = plateSize.height * (EditorPlate.margin - 1) / (2 * EditorPlate.margin)
+        let detected = plate.cgImage.flatMap(CenteringMeter.measure(cgImage:))
+        inset[.outerLeft] = hMargin
+        inset[.outerRight] = hMargin
+        inset[.outerTop] = vMargin
+        inset[.outerBottom] = vMargin
+        inset[.innerLeft] = hMargin + CGFloat(detected?.left ?? 0)
+        inset[.innerRight] = hMargin + CGFloat(detected?.right ?? 0)
+        inset[.innerTop] = vMargin + CGFloat(detected?.top ?? 0)
+        inset[.innerBottom] = vMargin + CGFloat(detected?.bottom ?? 0)
+        // With no detection there is nothing to say about the border, so put the inner lines a
+        // visible distance inside the card rather than on top of the outer ones.
+        if detected == nil {
+            inset[.innerLeft] = hMargin + plateSize.width * 0.05
+            inset[.innerRight] = hMargin + plateSize.width * 0.05
+            inset[.innerTop] = vMargin + plateSize.height * 0.05
+            inset[.innerBottom] = vMargin + plateSize.height * 0.05
+        }
+    }
+
+    /// One draggable line, with a grab handle. The rule stays hairline so it can be placed against
+    /// a real edge precisely; the handle is what the finger goes for, and it carries the colour and
+    /// the side so a line is identifiable while a hand covers most of the picture.
+    @ViewBuilder
+    private func lineView(_ line: Line, in shown: CGSize, scale: CGFloat) -> some View {
+        let vertical = line.isVertical
+        let isActive = active == line
+        // Right and bottom lines are inset from the far edge, so a drag toward that edge decreases
+        // their inset — the delta has to be negated for those.
+        let sign: CGFloat = (line.alignment == .trailing || line.alignment == .bottom) ? -1 : 1
+        // Divided by `zoom` because the whole stack is scaled: the offset is applied in unzoomed
+        // points, while `scale` already includes the zoom.
+        let offset = px(line) * scale / zoom
+        let color = line.isOuter ? Self.outerColor : Self.innerColor
+
+        ZStack {
+            // Purely visual, and explicitly not hit-testable: a 1pt rule is not a touch target,
+            // and leaving it hittable only creates a sliver that behaves differently from the
+            // band beside it.
+            Rectangle()
+                .fill(color)
+                .frame(width: vertical ? (isActive ? 2 : 1) / zoom : shown.width,
+                       height: vertical ? shown.height : (isActive ? 2 : 1) / zoom)
+                .shadow(color: .black.opacity(0.6), radius: 1)
+                .opacity(isActive ? 1 : 0.75)
+                .allowsHitTesting(false)
+            grabZone(line, color: color, isActive: isActive, in: shown,
+                     vertical: vertical, scale: scale)
+        }
+        .frame(width: shown.width, height: shown.height, alignment: line.alignment)
+        .offset(x: vertical ? sign * offset : 0, y: vertical ? 0 : sign * offset)
+        .accessibilityElement()
+        .accessibilityLabel(line.label)
+        .accessibilityValue("\(Int(px(line).rounded())) pixels from the edge")
+        // Dragging is unreachable with VoiceOver, so the same adjustment has to exist as an
+        // increment/decrement — this is the only way the feature works at all for those users.
+        .accessibilityAdjustableAction { direction in
+            active = line
+            inset[line] = clamp(px(line) + (direction == .increment ? 1 : -1), line)
+        }
+    }
+
+    /// The line's touch target: one knob, at the MIDDLE of the edge, offset perpendicular to the
+    /// line — outward for a card edge, inward for a border.
+    ///
+    /// ⚠️ Both knobs of a pair sit at the same point ALONG the edge, and that is a measurement
+    /// decision, not a layout one. The card's edge is slightly curved in the picture (phone lens
+    /// barrel distortion, which a homography cannot undo — it maps straight lines to straight
+    /// lines by definition), so a straight line can match the middle of an edge or its ends, never
+    /// both. The distortion is near-identical for two lines a few pixels apart at the same point,
+    /// so it cancels out of the border width — but only if the pair is aligned at the same place.
+    /// Handles previously sat at 30% and 70% along the line, which invited exactly the opposite
+    /// (Tomas, screenshots, 2026-08-15).
+    ///
+    /// Separating the pair perpendicular instead keeps two 44pt targets ~52pt apart no matter how
+    /// thin the border is — along-the-line separation could not do that, since a hairline border
+    /// puts the two lines within a few points of each other.
+    ///
+    /// Sizes are divided by `zoom` because the whole stack is scaled: this keeps the knob at a
+    /// constant size ON SCREEN, so zooming in to place a line precisely never shrinks the thing
+    /// you place it with.
+    /// Radius of a knob's touch target, in the picture's own (pre-zoom) points. The rendered size
+    /// divides by `zoom` so the knob stays a constant 48pt on screen at every zoom level.
+    static func knobRadius(zoom: CGFloat) -> CGFloat { 24 / zoom }
+
+    /// How far from its own edge a knob sits, given the line it belongs to. Both in the picture's
+    /// coordinates, along the axis perpendicular to the line.
+    ///
+    /// The card-edge knob is pushed OUTWARD and the border knob INWARD, so a pair stays ~52pt
+    /// apart however thin the border is. But outward has somewhere to go only while there is
+    /// picture left to push into.
+    ///
+    /// ⚠️ **The picture is `.clipped()`, so a knob past its boundary is not merely cut off — it
+    /// stops being touchable at all.** `EditorPlate.margin` leaves 10% of the plate outside the
+    /// card, ~36pt on screen at 1×, against a 26pt push and a 24pt radius: the card-edge knob
+    /// lands ~10pt from the boundary, and drag that line any further out and the knob leaves the
+    /// picture. Zoom hides it completely — the margin scales with zoom while the knob stays 48pt
+    /// on screen — which is exactly the "can't grab it zoomed out, perfect zoomed in" that was
+    /// reported (Tomas, device, 2026-08-16).
+    ///
+    /// So the push is a preference, not a promise. Clamped to keep the whole target on the
+    /// picture, which costs a pair some separation only in the corner case where they were
+    /// unreachable anyway.
+    /// Where a drag of `line` should measure its translation from.
+    ///
+    /// A gesture's `translation` is cumulative from where it began, so it has to be added to the
+    /// line's value at that moment — held in `dragOrigin` for the life of the gesture.
+    ///
+    /// ⚠️ **The origin must be checked against the line it was recorded for.** It is cleared in
+    /// `onEnded`, and `onEnded` is not guaranteed: a gesture that loses to another recogniser, or
+    /// whose view goes away mid-drag, simply stops. The next knob grabbed then measured from the
+    /// PREVIOUS line's origin and jumped straight to it — which is what "it feels like it's trying
+    /// to jump to something" was (Tomas, device, 2026-08-17). A stale origin is discarded rather
+    /// than trusted, so the worst case is one gesture starting from the right place instead of
+    /// every later gesture starting from the wrong one.
+    static func dragBase(origin: (line: Line, value: CGFloat)?, line: Line,
+                         current: CGFloat) -> CGFloat {
+        guard let origin, origin.line == line else { return current }
+        return origin.value
+    }
+
+    static func knobDistance(lineDistance d: CGFloat, isOuter: Bool,
+                             extent: CGFloat, zoom: CGFloat) -> CGFloat {
+        let radius = knobRadius(zoom: zoom)
+        let preferred = d + (isOuter ? -1 : 1) * 26 / zoom
+        // A picture too small to hold the target at all still gets a defined answer rather than an
+        // inverted range: centre it.
+        guard extent > radius * 2 else { return extent / 2 }
+        return min(max(preferred, radius), extent - radius)
+    }
+
+    @ViewBuilder
+    private func grabZone(_ line: Line, color: Color, isActive: Bool,
+                          in shown: CGSize, vertical: Bool, scale: CGFloat) -> some View {
+        let sign: CGFloat = (line.alignment == .trailing || line.alignment == .bottom) ? -1 : 1
+        // Which way is "out of the card" for this edge, then outward for the card edge and inward
+        // for the border, so the two never stack.
+        let outward: CGFloat = (line.alignment == .leading || line.alignment == .top) ? -1 : 1
+        // Worked in distance-from-its-own-edge — the same quantity `px` stores — because that is
+        // the axis the clamp has to reason about; `-outward` turns it back into a view offset.
+        let lineDistance = px(line) * scale / zoom
+        let knob = Self.knobDistance(lineDistance: lineDistance, isOuter: line.isOuter,
+                                     extent: vertical ? shown.width : shown.height, zoom: zoom)
+        let perpendicular = -outward * (knob - lineDistance)
+
+        ZStack {
+            Circle().fill(color)
+            Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5 / zoom)
+            Image(systemName: vertical ? "arrow.left.and.right" : "arrow.up.and.down")
+                .font(.system(size: 9 / zoom, weight: .bold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 24 / zoom, height: 24 / zoom)
+        .scaleEffect(isActive ? 1.3 : 1)
+        .shadow(color: .black.opacity(0.5), radius: 2 / zoom)
+        .animation(.easeOut(duration: 0.12), value: isActive)
+        // A 48pt target that stays 48pt on screen at every zoom level. Sized off `knobRadius` so
+        // it can never drift from the radius the clamp above reserves room for.
+        .frame(width: Self.knobRadius(zoom: zoom) * 2, height: Self.knobRadius(zoom: zoom) * 2)
+        .contentShape(Circle())
+        .offset(x: vertical ? perpendicular : 0, y: vertical ? 0 : perpendicular)
+        // `translation` is cumulative from where the gesture began, so it must be applied to the
+        // value AT THAT MOMENT, not to the running value — adding it every frame compounds and the
+        // line races away from the finger.
+        //
+        // `highPriorityGesture`, so a touch that lands on this knob beats the container's
+        // pinch/pan outright instead of racing it.
+        //
+        // ⚠️ **`minimumDistance: 0`, and that is the whole difference between placing a line and
+        // fighting it.** `DragGesture()` defaults to 10, so `onChanged` does not fire until the
+        // finger has already travelled 10pt — and `translation` is 10pt when it does, applied on
+        // top of the position captured at that same instant. The line therefore TELEPORTS by
+        // `10 / scale` the moment the gesture activates: ~28 plate pixels at 1×, against a printed
+        // border that is one or two points wide on screen. It lands five to ten border-widths from
+        // the finger, which is why lining it up at 1× was not possible, and why a slow drag was
+        // worst — the slop is spent slowly and then applied all at once (Tomas, device,
+        // 2026-08-17). At 6× the same 10pt is about one border width, which is why zooming looked
+        // like a fix.
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.plateSpace))
+                .onChanged { g in
+                    let base = Self.dragBase(origin: dragOrigin, line: line, current: px(line))
+                    dragOrigin = (line, base)
+                    active = line
+                    let delta = vertical ? g.translation.width : g.translation.height
+                    inset[line] = clamp(base + sign * delta / scale, line)
+                }
+                .onEnded { _ in dragOrigin = nil }
+        )
+        // Mid-edge: the same point along the line for both members of a pair, so the lens bow
+        // affects them equally and cancels out of the width between them.
+        .position(x: vertical ? 0 : shown.width / 2,
+                  y: vertical ? shown.height / 2 : 0)
+        .frame(width: vertical ? 0 : shown.width, height: vertical ? shown.height : 0)
+    }
+
+    /// Keeps a line on the picture, and keeps each side's pair in order: an inner line may not
+    /// cross its own outer line, which would otherwise save a negative border width.
+    private func clamp(_ v: CGFloat, _ line: Line) -> CGFloat {
+        let limit = (line.isVertical ? plateSize.width : plateSize.height) / 2 - 1
+        switch line {
+        case .outerLeft: return min(max(v, 0), px(.innerLeft))
+        case .outerRight: return min(max(v, 0), px(.innerRight))
+        case .outerTop: return min(max(v, 0), px(.innerTop))
+        case .outerBottom: return min(max(v, 0), px(.innerBottom))
+        case .innerLeft: return min(max(v, px(.outerLeft)), limit)
+        case .innerRight: return min(max(v, px(.outerRight)), limit)
+        case .innerTop: return min(max(v, px(.outerTop)), limit)
+        case .innerBottom: return min(max(v, px(.outerBottom)), limit)
+        }
+    }
+}
+
+/// The editor's two live readouts: the ratio, and which line is under the finger.
+///
+/// ⚠️ **Its height is FIXED, and that is a correctness property, not styling.** Everything here
+/// changes on every frame of a drag, and it sits directly above `picture` in the same `VStack` —
+/// where `picture` is a `GeometryReader` taking whatever height is left. So any size change here
+/// reflows the stack, `base` (plate pixels → points) is recomputed, and **all eight lines move
+/// while one is under the finger**. The line's position ends up depending on the string length of
+/// its own readout.
+///
+/// That is what made dragging judder, and it is why zooming appeared to fix it: `px` moves ~2.8
+/// plate pixels per screen point at 1× against ~0.47 at 6×, so the readout's digits churn ~6×
+/// faster and the reflow fires ~6× more often (Tomas, device, 2026-08-17).
+///
+/// Hence, in order of how much each mattered:
+/// - **`lineLimit(1)` on both rows**, which is what actually holds the height still: a wrap is a
+///   whole extra line of reflow, and the ratio genuinely changes width ("5/95" vs "100/0"). NOT a
+///   hard `.frame(height:)` — pinning the box would hold the height by CLIPPING, which hides the
+///   problem at large Dynamic Type rather than fixing it, and makes the test tautological.
+/// - **No animation on the active swap.** The chip used to carry
+///   `.animation(.easeInOut(duration: 0.15), value: active)`, which *animated* the size change
+///   between the idle sentence and the chip — sweeping `base` for 150 ms at the start of every
+///   single drag.
+///
+/// Extracted from the editor so its size can be measured in a test without standing up a camera
+/// plate and an `onAppear` seed.
+struct CenteringReadout: View {
+    let summary: String
+    let spoken: String
+    /// The line under the finger, flattened to what actually gets drawn — so a test can drive it
+    /// without constructing editor state.
+    let active: (label: String, px: Int, isOuter: Bool)?
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(summary)
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .lineLimit(1)
+                .accessibilityLabel(spoken)
+            chip
+        }
+    }
+
+    /// Names the line being moved and its current inset. Without it, eight lines of two colours
+    /// still leave "which one did I just grab?" unanswered the moment a finger covers the line.
+    ///
+    /// ⚠️ **A `ZStack` with both states always laid out — deliberately NOT an `if`/`else`.**
+    ///
+    /// Two branches are two view identities with two independent sizes, and no amount of
+    /// line-limiting makes two different strings the same height at every Dynamic Type size:
+    /// shortening the sentence fixed `.large`, and `minimumScaleFactor` then re-broke it, because
+    /// shrink-to-fit text has a shorter line height than text that fits. Measured 10pt apart at
+    /// `.accessibility3` that way.
+    ///
+    /// Laying both out and hiding one makes the box the height of the TALLER state in *every*
+    /// state, at every type size, with no clipping and no magic constant. The cost is some
+    /// whitespace beside the shorter string, which is the right thing to spend.
+    private var chip: some View {
+        ZStack {
+            // Says where to line up, not just what to drag: the lens bows the card's edges
+            // slightly, so a straight line fits the middle of an edge or its ends, and matching
+            // every line at the middle is what keeps the bow out of the answer.
+            Text("Match each line at the middle of its edge")
+                .opacity(active == nil ? 1 : 0)
+                .accessibilityHidden(active != nil)
+            // Falls back to the LONGEST label so the hidden copy reserves a stable width too —
+            // a placeholder narrower than the real thing would let the capsule resize mid-drag.
+            row(active ?? (label: "Bottom card edge", px: 0, isOuter: true))
+                .opacity(active == nil ? 0 : 1)
+                .accessibilityHidden(active == nil)
+        }
+        .font(.footnote)
+        .lineLimit(1)
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .background(.quaternary, in: Capsule())
+    }
+
+    private func row(_ line: (label: String, px: Int, isOuter: Bool)) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(line.isOuter ? CenteringEditorView.outerColor
+                                       : CenteringEditorView.innerColor)
+                .frame(width: 9, height: 9)
+            Text(line.label).fontWeight(.medium)
+            Text("\(line.px) px").foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+}

@@ -1,3 +1,4 @@
+import CoreImage
 import PhotosUI
 import SwiftUI
 
@@ -62,6 +63,10 @@ struct EntryPhotosSection: View {
         switch slot {
         case .front: return "Front"
         case .back: return "Back"
+        // Never rendered by this section's tiles — the centring picture is taken and replaced
+        // from `EntryCenteringSection`, not picked here — but the label has to exist for the
+        // slot to be exhaustive, and it is what the report prints.
+        case .centering: return "Centering"
         case .detail(let i): return "Detail \(i + 1)"
         }
     }
@@ -193,13 +198,27 @@ private struct PhotoCaptureModifier: ViewModifier {
             return
         }
         request = nil
+        // The centring slot holds a RECTIFIED, margined picture — the same one a scan lock
+        // produces — so a card already in the tin is measured on the same footing as one being
+        // scanned. Detection failing is not fatal: the original photo is still measurable by
+        // hand, just harder, and refusing would mean a card that photographs badly could never
+        // be measured at all.
+        var image = image
+        if slot == .centering,
+           let rectified = EditorPlate.fromPhoto(image, context: CIContext()),
+           let corrected = UIImage(data: rectified) {
+            image = corrected
+            PhotoDiag.record("centering", "rectified")
+        } else if slot == .centering {
+            PhotoDiag.record("centering", "no card found — keeping the original photo")
+        }
         guard let name = try? photoStore.save(image, entryId: entryId) else {
             PhotoDiag.record("save", "FAILED entry=\(entryId)")
             return
         }
         photos.set(name, slot)
         PhotoDiag.record("stored", "entry=\(entryId) file=\(name)")
-        let store = photoStore
-        Task.detached(priority: .utility) { store.mirrorUp(entryId: entryId, file: name) }
+        // The upload used to be here. It now lives in `PhotoStore.save`, because being the only
+        // caller that remembered it is what stranded every photo the scan path wrote.
     }
 }

@@ -506,6 +506,12 @@ final class AppModel {
                 await Task.detached(priority: .background) {
                     store.prune(keeping: ids)
                     store.mirrorDown(needed: needed)
+                    // And the other direction: a photo this device has but iCloud never received.
+                    // `mirrorUp` at save time has no retry, so anything written while iCloud was
+                    // unavailable — or by a path that forgot to upload at all, which is what
+                    // stranded every scan-filed centring picture — would otherwise never leave the
+                    // device. This is the pass that repairs it.
+                    store.mirrorSweep(needed: needed)
                 }.value
             }
         }

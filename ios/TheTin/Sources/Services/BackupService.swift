@@ -436,7 +436,13 @@ final class BackupService {
         conflict = nil
         let photos = self.photos
         let needed = PhotoStore.needed(from: snapshot.entries)
-        Task.detached(priority: .utility) { photos.mirrorDown(needed: needed) }
+        // Both directions. A backup that records photo FILENAMES while those photos are not in
+        // iCloud is broken by construction — the restore resolves the names to nothing. So the
+        // snapshot write is exactly the moment to make sure what it references is actually there.
+        Task.detached(priority: .utility) {
+            photos.mirrorDown(needed: needed)
+            photos.mirrorSweep(needed: needed)
+        }
     }
 
     private func currentCounts() async -> (entries: Int, wants: Int) {

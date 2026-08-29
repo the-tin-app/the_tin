@@ -62,3 +62,6 @@ CLAUDE.md
 # wrangler local state — holds the Cloudflare account id (public repo). Unanchored, so it
 # catches site/ and the R2 push in fingerprint/scripts/publish_fingerprints.py alike.
 .wrangler/
+
+# Scratch output from fingerprint/eval/centering_check.swift
+centering_out/
