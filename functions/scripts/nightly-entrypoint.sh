@@ -117,6 +117,12 @@ fi
 echo "[nightly] export cache: $(ls -la .export-cache/*.csv 2>/dev/null | awk '{print $NF, $5"b"}' | tr '\n' ' ')"
 
 # --- 4. build (offline compaction from the cached export) ---
+# .seed-output is a persistent docker volume (catalog-pipeline-seed-output) as of 2026-08-29, so
+# the partially-enriched sqlite and its resume ledger survive the --rm container instead of being
+# destroyed at exit -- which is what made "progress persisted; re-run to resume" a lie. That means
+# it also has to be swept: each build leaves a multi-hundred-MB raw sqlite behind. Keep only the
+# version being built (build-catalog clears that one itself before writing).
+find .seed-output -name "catalog-v*.sqlite*" ! -name "catalog-v$NEXT_VERSION.sqlite*" -print -delete 2>/dev/null || true
 step "4/7 build-catalog (offline compaction)"
 EXPORT_DIR=.export-cache npx tsx scripts/build-catalog.ts "$NEXT_VERSION" .seed-output
 
@@ -127,13 +133,26 @@ EXPORT_DIR=.export-cache npx tsx scripts/build-catalog.ts "$NEXT_VERSION" .seed-
 # early-stop path. A full sweep needs ~95k PPT purchased credits; check the balance before
 # expecting a publish.
 step "5/7 fill-overnight (REST enrichment sweep)"
+SWEEP_OUT=$(mktemp)
 if ! PPT_MINUTE_LIMIT="${PPT_MINUTE_LIMIT:-400}" \
-     npx tsx scripts/fill-overnight.ts ".seed-output/catalog-v$NEXT_VERSION.sqlite" "$NEXT_VERSION" .seed-output; then
+     npx tsx scripts/fill-overnight.ts ".seed-output/catalog-v$NEXT_VERSION.sqlite" "$NEXT_VERSION" .seed-output 2>&1 | tee "$SWEEP_OUT"; then
+  # Forward the REAL reason. This alert used to hardcode "(credits/rate-limit?)" on every early
+  # exit; on 2026-08-29 that sent the investigation after a credit balance which was in fact 400k
+  # healthy, when the actual stop was a mid-body network abort ("terminated"). fill-overnight
+  # already prints both the reason and the progress line — quote them instead of guessing.
+  # Every extraction is `|| true`-guarded: under `set -e` + pipefail a non-matching grep in a
+  # command substitution would abort the script before the notify ever fires.
+  SWEEP_REASON=$(sed -n "s/.*· STOPPED (\(.*\))$/\1/p" "$SWEEP_OUT" | tail -1 || true)
+  [ -n "$SWEEP_REASON" ] || SWEEP_REASON=$(grep -E "^\[overnight\] (RATE-LIMIT STOP|HALTED)" "$SWEEP_OUT" | tail -1 || true)
+  [ -n "$SWEEP_REASON" ] || SWEEP_REASON="no stop reason printed (crash?) — see logs/cron.log"
+  SWEEP_PROGRESS=$(grep "^\[overnight\] +" "$SWEEP_OUT" | tail -1 || true)
+  rm -f "$SWEEP_OUT"
   echo "[nightly] enrichment incomplete — NOT publishing v${NEXT_VERSION}; keeping v$((NEXT_VERSION-1)) live"
-  notify "Warning" "catalog-pipeline: enrichment incomplete (credits/rate-limit?) — kept v$((NEXT_VERSION-1)) live, v${NEXT_VERSION} not published; retries next night"
+  notify "Warning" "catalog-pipeline: enrichment stopped — ${SWEEP_REASON}. ${SWEEP_PROGRESS:-(no progress line)}. Kept v$((NEXT_VERSION-1)) live, v${NEXT_VERSION} not published; retries next night"
   trap - EXIT
   exit 0
 fi
+rm -f "$SWEEP_OUT"
 
 # --- 6. publish tiers to the NAS (+ Firebase casual backup, + R2 backup origin, if creds present) ---
 step "6/7 publish-tiers (NAS + optional Firebase + optional R2)"

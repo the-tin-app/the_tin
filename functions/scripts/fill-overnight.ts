@@ -164,7 +164,10 @@ async function main() {
       saveSidecar(sidecarPath, sc);
       console.log(`[overnight] RATE-LIMIT STOP (${summary.stopReason}) — auto-resume disabled. Wait out the ban window, then re-run with PPT_CLEAR_RATELIMIT_HALT=1 to resume. NOT publishing.`);
     } else {
-      console.log("[overnight] stopped — progress persisted; re-run to resume. NOT publishing.");
+      // Precise about what "resume" means: the ledger lives next to the db in .seed-output, which
+      // IS a persistent docker volume now — but build-catalog deletes the ledger whenever it
+      // rebuilds the db, because set ids marked done describe rows only the old build had.
+      console.log("[overnight] stopped — ledger persisted beside the db in .seed-output; re-running THIS step resumes it. (The nightly's rebuild step clears the ledger and sweeps clean.) NOT publishing.");
     }
     process.exitCode = 2;
     return;
