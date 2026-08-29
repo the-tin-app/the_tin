@@ -318,9 +318,10 @@ async function main() {
     // Every decision goes to a sidecar next to the artifact. If a card is wrong or missing
     // tomorrow, this answers "which group claimed that set, on how much evidence, and what
     // was rejected" WITHOUT re-running a ~217-request sweep or guessing from the log.
-    // NOT outDir: the nightly runs with --rm and does not mount .seed-output, so a sidecar
-    // written there is destroyed the moment the run ends — which is exactly when it is wanted.
-    // .cache IS a persistent docker volume (catalog-pipeline-cache), so it survives.
+    // NOT outDir: .cache is where this pipeline keeps anything that must outlive the --rm
+    // container. (.seed-output is a persistent volume too as of 2026-08-29, but it is swept per
+    // build — the current version's artifacts only — whereas this decision log is worth keeping
+    // across versions to compare one night's group placements against another's.)
     mkdirSync(cacheDir, { recursive: true });
     const sidecar = join(cacheDir, `tcgcsv-fill-v${version}.json`);
     const linkedBySet = new Map<string, number>();
@@ -541,7 +542,12 @@ async function main() {
   console.log(`[4] building SQLite (raw-only; no graded/PPT)… twins=${twins.length} from ${twinsPath}`);
   // buildCatalog does CREATE TABLE (no IF NOT EXISTS) — clear any prior DB at the predictable
   // export path so a re-run (or the nightly container) starts fresh instead of colliding.
-  for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${dbPath}${suffix}`, { force: true });
+  // `.sweep-overnight.json` is fill-overnight.ts's resume ledger, and it is only meaningful for
+  // the exact DB it was written against: it records set ids as "done", not the rows themselves.
+  // Now that .seed-output is a persistent volume the ledger can outlive the DB it describes, so
+  // whoever rebuilds the DB must invalidate it — otherwise the next sweep skips every set the
+  // PREVIOUS build enriched and publishes a catalog with those sets silently unenriched.
+  for (const suffix of ["", "-wal", "-shm", "-journal", ".sweep-overnight.json"]) rmSync(`${dbPath}${suffix}`, { force: true });
   buildCatalog({ sets, cardsBySet, prices: new Map<string, PptPrice>(), scenes, asOf, dexByCard, pokemonNames, twins }, dbPath);
 
   let exportSpot: { rawUsd: number | null; rawEur: number | null } | null = null;

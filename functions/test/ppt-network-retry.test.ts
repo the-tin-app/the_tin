@@ -74,3 +74,103 @@ describe("PptClient network retry", () => {
     expect(i).toBe(4);
   });
 });
+
+/** The shape undici throws when the response STREAM dies part-way through — i.e. headers arrived
+ *  and `fetch` resolved, then `res.json()` threw. Observed in the 2026-08-29 nightly, which lost a
+ *  45-minute v57 sweep at 102/192 sets because the body read sat outside the retry ladder. */
+function undiciBodyTerminated(): Error {
+  const cause = Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" });
+  return Object.assign(new TypeError("terminated"), { cause });
+}
+/** Variant with no enumerable transient code anywhere in the chain — matched on message alone. */
+function undiciBodyTerminatedBare(): Error {
+  return Object.assign(new TypeError("terminated"), {
+    cause: Object.assign(new Error("Premature close"), { code: "ERR_STREAM_PREMATURE_CLOSE" }),
+  });
+}
+
+describe("mid-body abort (regression: 2026-08-29 v57 sweep)", () => {
+  it("classifies a terminated response stream as transient", () => {
+    expect(isTransientNetworkError(undiciBodyTerminated())).toBe(true);
+    expect(isTransientNetworkError(undiciBodyTerminatedBare())).toBe(true);
+  });
+
+  it("does NOT match 'terminated' as a substring of an unrelated word", () => {
+    expect(isTransientNetworkError(new Error("subterminated nonsense"))).toBe(false);
+  });
+
+  it("retries when res.json() throws, not just when fetch() throws", async () => {
+    let calls = 0;
+    const fetchFn = async () => {
+      calls++;
+      const ok = calls >= 3;
+      return {
+        status: 200, ok: true, headers: { get: () => null },
+        json: async () => { if (!ok) throw undiciBodyTerminated(); return { data: [] }; },
+      } as any;
+    };
+    const c = new PptClient("k", new CreditBudget(100), fetchFn, noSleep, new MinuteRateLimiter(45, () => 0));
+    await expect(c.getSetCards("Base")).resolves.toEqual([]);
+    expect(calls).toBe(3);
+  });
+
+  it("exhausts the same ladder on a persistently terminated body (6 attempts)", async () => {
+    let calls = 0;
+    const fetchFn = async () => {
+      calls++;
+      return {
+        status: 200, ok: true, headers: { get: () => null },
+        json: async () => { throw undiciBodyTerminated(); },
+      } as any;
+    };
+    const c = new PptClient("k", new CreditBudget(100), fetchFn, noSleep, new MinuteRateLimiter(45, () => 0));
+    await expect(c.getSetCards("Base")).rejects.toThrow(/terminated/);
+    expect(calls).toBe(6);
+  });
+
+  it("covers every body-reading endpoint, not just getSetCards", async () => {
+    const mk = () => {
+      let calls = 0;
+      const fetchFn = async () => {
+        calls++;
+        const ok = calls >= 2;
+        return {
+          status: 200, ok: true, headers: { get: () => null },
+          json: async () => { if (!ok) throw undiciBodyTerminated(); return { data: [] }; },
+        } as any;
+      };
+      return { fetchFn, calls: () => calls };
+    };
+    for (const call of [
+      (c: PptClient) => c.getSetPrices("Base"),
+      (c: PptClient) => c.getSetHistory("Base", 1),
+      (c: PptClient) => c.getSetEnrichment("Base"),
+      (c: PptClient) => c.getPopulation([123]),
+      (c: PptClient) => c.getAllSets(),
+    ]) {
+      const m = mk();
+      // Roomy ceiling on purpose: the history/enrichment/population endpoints reserve the
+      // worst-case cost of 30 each, and with a frozen clock a 45/min window would block forever
+      // on the retry's second reservation rather than exercise the retry.
+      const c = new PptClient("k", new CreditBudget(1000), m.fetchFn, noSleep, new MinuteRateLimiter(1000, () => 0));
+      await call(c);
+      expect(m.calls()).toBe(2);
+    }
+  });
+
+  it("never reads the body of a 429 — a rate-limit signal must not spend a network retry", async () => {
+    let jsonReads = 0;
+    const script = ["429", "ok"];
+    let i = 0;
+    const fetchFn = async () => {
+      const step = script[i++];
+      if (step === "429") {
+        return { status: 429, ok: false, headers: { get: () => null }, json: async () => { jsonReads++; return {}; } } as any;
+      }
+      return res({ data: [] }) as any;
+    };
+    const c = new PptClient("k", new CreditBudget(100), fetchFn, noSleep, new MinuteRateLimiter(45, () => 0));
+    await expect(c.getSetCards("Base")).resolves.toEqual([]);
+    expect(jsonReads).toBe(0);
+  });
+});

@@ -79,11 +79,14 @@ const MAX_RETRY_AFTER_WAITS = 2;
  *  a server-side accounting surprise still leaves room to stop before producing a 429. */
 const MINUTE_REMAINING_FLOOR = 30;
 
-/** Backoff ladder for transient network failures (connect timeout, DNS, reset). Unlike a 429,
- *  these requests never produced a server response, so re-sending cannot count against PPT's
- *  per-minute window — retrying here carries no ban risk. Total ~5.5min of waiting rides out
- *  short blips; a real outage exhausts the ladder and the error propagates to the caller
- *  (whose sidecar/resume machinery turns it into a stop-and-resume-tomorrow, not a crash). */
+/** Backoff ladder for transient network failures (connect timeout, DNS, reset, mid-body abort).
+ *  Unlike a 429 these are not a rate-limit signal, so re-sending carries no ban risk: every retry
+ *  goes back through `limiter.acquire(cost)` at the top of the loop, so a retried request reserves
+ *  its minute-cost again and the <=N/min invariant holds. A mid-body failure does mean PPT already
+ *  served (and billed) the first attempt; paying for one duplicate request is the intended trade
+ *  against losing a 45-minute sweep. Total ~5.5min of waiting rides out short blips; a real outage
+ *  exhausts the ladder and the error propagates to the caller (whose sidecar/resume machinery
+ *  turns it into a stop-and-resume-tomorrow, not a crash). */
 const NETWORK_RETRY_DELAYS_MS = [5_000, 15_000, 45_000, 90_000, 180_000];
 
 const TRANSIENT_NET_CODES = new Set([
@@ -91,13 +94,17 @@ const TRANSIENT_NET_CODES = new Set([
   "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "EPIPE",
 ]);
 
-/** True for network-layer failures where the request never completed (fetch THREW — a served
- *  4xx/5xx response never throws, so this can never mask a rate-limit signal). Walks the cause
- *  chain because undici buries the real code: TypeError("fetch failed") → ConnectTimeoutError. */
+/** True for network-layer failures where the request never delivered a complete body — either
+ *  fetch THREW (no response at all) or the response stream died part-way through. A served
+ *  4xx/5xx response never throws, so this can never mask a rate-limit signal. Walks the cause
+ *  chain because undici buries the real code: TypeError("fetch failed") → ConnectTimeoutError,
+ *  and TypeError("terminated") → SocketError("other side closed"). `terminated` is matched on
+ *  the message too: some undici builds surface a mid-body abort with no cause carrying a code
+ *  this set can enumerate (ERR_STREAM_PREMATURE_CLOSE). */
 export function isTransientNetworkError(e: unknown): boolean {
   for (let cur = e as any, depth = 0; cur && depth < 5; cur = cur.cause, depth++) {
     if (typeof cur.code === "string" && TRANSIENT_NET_CODES.has(cur.code)) return true;
-    if (typeof cur.message === "string" && /fetch failed|socket hang up|other side closed/i.test(cur.message)) return true;
+    if (typeof cur.message === "string" && /fetch failed|socket hang up|other side closed|\bterminated\b/i.test(cur.message)) return true;
   }
   return false;
 }
@@ -138,14 +145,28 @@ export class PptClient {
    *     never fire the same request without waiting — that is what caused the ban), bounded.
    *   - After any response, if the per-minute remaining budget (X-RateLimit-Minute-Remaining)
    *     drops below a floor, pause proactively so we avoid producing a 429 in the first place.
+   * Returns the PARSED JSON body, not the Response: reading the stream is itself a network
+   * operation that can fail transiently, so it has to happen under this method's retry ladder
+   * rather than at the call site. See the comment on the read below.
    */
   private async request(url: string, label: string, cost = 1): Promise<any> {
     let netRetries = 0;
     for (let waits = 0; ; ) {
       await this.limiter.acquire(cost, this.sleep);
       let res: any;
+      let body: any;
       try {
         res = await this.fetchFn(url, { headers: { Authorization: `Bearer ${this.apiKey}` } });
+        // The body read belongs INSIDE the ladder. undici throws TypeError("terminated") when the
+        // response stream dies mid-transfer, which is transient in exactly the way a failed connect
+        // is — but until 2026-08-29 every caller did `await res.json()` at ITS OWN call site, i.e.
+        // outside this loop. That handed the entire retry ladder to the headers phase and gave a
+        // mid-body abort ZERO retries: one ~1s blip 20 minutes into the v57 sweep killed a
+        // 45-minute job at 102/192 sets. A retry re-bills the call PPT-side; that is far cheaper
+        // than losing the night. Non-2xx bodies (429 included) are deliberately NOT read — the
+        // status handling below owns those, and draining a 429 body could spend a network retry
+        // on what is really a rate-limit signal.
+        if (res.ok) body = await res.json();
       } catch (e) {
         if (!isTransientNetworkError(e) || netRetries >= NETWORK_RETRY_DELAYS_MS.length) throw e;
         const delay = NETWORK_RETRY_DELAYS_MS[netRetries++];
@@ -172,15 +193,14 @@ export class PptClient {
         purchasedRemaining: this.headerNum(res, "x-ratelimit-purchased-remaining"),
         dailyRemaining: this.headerNum(res, "x-ratelimit-daily-remaining"),
       };
-      return res;
+      return body;
     }
   }
 
   async getSetPrices(setName: string, opts: { graded?: boolean } = {}): Promise<PptPrice[]> {
     const params = new URLSearchParams({ set: setName, fetchAllInSet: "true" });
     if (opts.graded) params.set("includeEbay", "true");
-    const res = await this.request(`${BASE}/cards?${params}`, `set ${setName}`);
-    const body: any = await res.json();
+    const body: any = await this.request(`${BASE}/cards?${params}`, `set ${setName}`);
     const cards: any[] = body.data ?? [];
     const perCard = opts.graded ? 2 : 1;
     this.budget.spend(cards.length * perCard);
@@ -198,8 +218,7 @@ export class PptClient {
    *  Price history is intentionally NOT requested here (see plan Global Constraints). */
   async getSetCards(setName: string): Promise<PptCard[]> {
     const params = new URLSearchParams({ set: setName, fetchAllInSet: "true" });
-    const res = await this.request(`${BASE}/cards?${params}`, `set ${setName}`);
-    const body: any = await res.json();
+    const body: any = await this.request(`${BASE}/cards?${params}`, `set ${setName}`);
     const cards: any[] = body.data ?? [];
     this.budget.spend(cards.length);
     return cards.map((c) => ({
@@ -225,8 +244,7 @@ export class PptClient {
       set: setName, fetchAllInSet: "true", includeHistory: "true", days: "730", maxDataPoints: "104",
     });
     void cardCountHint; // retained for caller compatibility/telemetry; not used for cost — see above
-    const res = await this.request(`${BASE}/cards?${params}`, `history ${setName}`, HISTORY_REQUEST_MINUTE_COST);
-    const body: any = await res.json();
+    const body: any = await this.request(`${BASE}/cards?${params}`, `history ${setName}`, HISTORY_REQUEST_MINUTE_COST);
     const cards: any[] = body.data ?? [];
     this.budget.spend(cards.length * 2);
     return cards.map((c) => ({
@@ -244,8 +262,7 @@ export class PptClient {
       set: setName, fetchAllInSet: "true", includeHistory: "true", includeEbay: "true",
       days: "730", maxDataPoints: "104",
     });
-    const res = await this.request(`${BASE}/cards?${params}`, `enrich ${setName}`, HISTORY_REQUEST_MINUTE_COST);
-    const body: any = await res.json();
+    const body: any = await this.request(`${BASE}/cards?${params}`, `enrich ${setName}`, HISTORY_REQUEST_MINUTE_COST);
     const cards: any[] = body.data ?? [];
     this.budget.spend(cards.length * 3);
     return cards.map((c) => ({
@@ -266,8 +283,7 @@ export class PptClient {
     const ids = tcgPlayerIds.filter((n) => Number.isFinite(n)).slice(0, 50);
     if (ids.length === 0) return [];
     const csv = ids.join(",");
-    const res = await this.request(`${BASE}/population?tcgPlayerIds=${csv}`, `population ${ids.length}`, HISTORY_REQUEST_MINUTE_COST);
-    const body: any = await res.json();
+    const body: any = await this.request(`${BASE}/population?tcgPlayerIds=${csv}`, `population ${ids.length}`, HISTORY_REQUEST_MINUTE_COST);
     this.budget.spend(ids.length * 2);
     return parsePopulation(body);
   }
@@ -278,8 +294,7 @@ export class PptClient {
     const LIMIT = 100;
     const out: { name: string; slug: string; series: string; releaseDate: string | null }[] = [];
     for (let offset = 0; offset < 5000; offset += LIMIT) {
-      const res = await this.request(`${BASE}/sets?limit=${LIMIT}&offset=${offset}`, `sets@${offset}`);
-      const body: any = await res.json();
+      const body: any = await this.request(`${BASE}/sets?limit=${LIMIT}&offset=${offset}`, `sets@${offset}`);
       const rows: any[] = body.data ?? [];
       if (rows.length === 0) break;
       for (const s of rows) out.push({ name: s.name, slug: s.tcgPlayerId, series: s.series, releaseDate: s.releaseDate ?? null });
