@@ -228,6 +228,13 @@ struct BinderLayoutView: View {
                     pocket(layout: layout, index: i,
                            state: states.indices.contains(page) && states[page].indices.contains(i)
                                   ? states[page][i] : .empty)
+                        // ⚠️ `.buttonStyle(.plain)` hit-tests the RENDERED CONTENT. A planned
+                        // pocket draws a `CardImageView` and so takes a tap anywhere; an EMPTY one
+                        // draws `strokeBorder`, which is the outline and nothing else — leaving
+                        // only a 1pt line live and the whole interior dead. A "None — start empty"
+                        // binder is every pocket empty, so the entire feature was untappable by
+                        // the one path that builds a binder by hand.
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }

@@ -126,6 +126,13 @@ private struct BinderSetupSetList: View {
                         Text(caption(set)).font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    // ⚠️ `.buttonStyle(.plain)` hit-tests the RENDERED CONTENT, not the frame, so
+                    // `maxWidth: .infinity` widened the layout and left the tap target the width
+                    // of the words. Measured on the simulator: live to x≈120 of a 402pt row, dead
+                    // from 140 out — about 70% of the row, including its centre, where a finger
+                    // actually lands. The sibling "None — start empty" row has no plain style and
+                    // was the only selectable thing in the list.
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
