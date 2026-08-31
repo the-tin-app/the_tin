@@ -130,14 +130,6 @@ struct ScanView: View {
                 .sheet(item: lookedUpBinding) { lookUpSheet($0) }
             }.padding()
         }
-        // A capture you needed feels different from a capture you didn't: the celebratory
-        // `.success` is now spent on a wishlist hit, and a routine card gets a light tick. Only
-        // fires on a capture — the old form buzzed on removals too, because any count change
-        // tripped it.
-        .sensoryFeedback(trigger: staging.drafts.count) { old, new in
-            guard new > old else { return nil }
-            return latestKnowledge?.wanted == true ? .success : .impact(weight: .light)
-        }
         .sheet(isPresented: $model.isReviewPresented) {
             NavigationStack {
                 StagingReviewView(staging: staging, collection: collection, store: store, wants: wants)
@@ -313,8 +305,8 @@ private struct ConfidenceRing: View {
     }
 }
 
-/// Bottom tray: live count + running value + a Review button. The count-triggered
-/// `.sensoryFeedback` in `ScanView` is the "✓ captured" haptic in the rapid scan loop.
+/// Bottom tray: live count + running value + a Review button. The "✓ captured" haptic of the
+/// rapid scan loop is `ScanModel.onCaptured`, wired up in `ScanTabContainer`.
 private struct StagingTray: View {
     let staging: ScanStagingStore
     let store: CatalogStore
