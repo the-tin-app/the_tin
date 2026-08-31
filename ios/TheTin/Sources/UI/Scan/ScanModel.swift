@@ -429,6 +429,15 @@ final class ScanModel {
         ScanStagingStore.writePlate(jpeg, draftId: id)
     }
 
+    /// Fired once per card that actually lands in the tray — the capture haptic, and nothing
+    /// else so far. Set by `ScanTabContainer`, which owns the wishlist the feedback is chosen from.
+    ///
+    /// ⚠️ This used to be a `.sensoryFeedback(trigger: staging.drafts.count)` on `ScanView`,
+    /// and it stopped buzzing for good once the Scan tab had been left and come back to (#191). A
+    /// haptic belongs to the capture, not to whichever view happened to be mounted when it
+    /// happened, so it hangs off the one funnel both lock paths already route through.
+    var onCaptured: (ScanDraft) -> Void = { _ in }
+
     init(matcher: Matcher, detector: CardDetector, textGate: TextGate, narrowing: CandidateNarrowing,
          staging: ScanStagingStore, store: CatalogStore, fingerThrottle: Int = 4,
          minFocus: Double = 40) {
@@ -542,6 +551,7 @@ final class ScanModel {
                               qty: 1, addedAt: Date(), priceUsdSnapshot: price,
                               acquiredVia: stagingVia, plateFile: plateFile)
         staging.append(draft)
+        onCaptured(draft)
         // The card's name, not its catalog id — this line read "Added swsh7-215 — next card".
         guidance = "Added \(card?.name ?? cardId) — next card"
         // Announce it, and stop confirming a card that is already in the tray: `bestGuess` used to

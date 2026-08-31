@@ -284,6 +284,40 @@ final class ScanModelTests: XCTestCase {
         XCTAssertTrue(model.ambiguous.isEmpty)
     }
 
+    /// The capture haptic hangs off `onCaptured`, not off the tray's count, so it has to fire
+    /// exactly once per card that reaches the tray and never for a look-up — the count trigger it
+    /// replaced could only tell those apart by comparing old and new by hand (#191).
+    func testOnCapturedFiresPerStagedCardAndNeverForALookUp() async throws {
+        let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
+        defer { try? store.close() }
+        let matcher = try Matcher(store: store, codebook: try Codebook.bundled(in: bundle()))
+        let catalog = try FixtureCatalog.make()
+        let staging = ScanStagingStore.inMemory()
+        let index = try CandidateIndex(store: catalog)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: StubNarrowing(),
+                              staging: staging, store: catalog, fingerThrottle: 1)
+        model.savePlate = { _, _ in nil }
+        var captured: [String] = []
+        model.onCaptured = { captured.append($0.cardId) }
+
+        await model.handle(.lock(cardId: "card_a"))
+        await model.handle(.lock(cardId: "card_b"))
+        XCTAssertEqual(captured, ["card_a", "card_b"], "every staged card gets its own haptic")
+
+        // Removing a card must stay silent — the old count trigger buzzed on any change.
+        let last = try XCTUnwrap(staging.drafts.first)
+        staging.remove(id: last.id)
+        XCTAssertEqual(captured, ["card_a", "card_b"], "a removal is not a capture")
+
+        // A look-up stages nothing, so there is nothing to feel.
+        let previous = AppConfig.scanLookUpMode
+        defer { AppConfig.scanLookUpMode = previous }
+        model.isLookUpMode = true
+        await model.handle(.lock(cardId: "card_a"))
+        XCTAssertEqual(captured, ["card_a", "card_b"], "look-up mode must never buzz")
+    }
+
     func testTwinInPoolRoutesToChooserNotLock() async throws {
         let pb = try TestPixelBuffer.canonicalCardA(bundle: bundle())
         let store = try FingerprintTestSupport.openFixtureStore(bundle: bundle())
