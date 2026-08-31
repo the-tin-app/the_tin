@@ -21,6 +21,9 @@ final class AppModel {
     /// The sets you're collecting. Created eagerly (it's a file read, no network) so every screen
     /// can ask; nil never happens in the app, only in catalog-only tests.
     private(set) var setGoals: SetGoalsModel? = SetGoalsModel()
+    /// Binder layouts. Eagerly constructed for the same reason as `setGoals`: it is a small file
+    /// read with no network behind it.
+    private(set) var binders: BinderLayoutsModel? = BinderLayoutsModel()
     /// Explicit Discover feedback — thumbs-down and stated reasons. Created eagerly for the same
     /// reason as `setGoals`: it is a small file read with no network behind it.
     ///
@@ -480,6 +483,7 @@ final class AppModel {
             if backup == nil {
                 let backupService = BackupService(collection: repository,
                                                   wants: wantsRepository, setGoals: setGoals,
+                                                  binders: binders,
                                                   uid: uid)
                 backupService.start()
                 self.backup = backupService
@@ -585,10 +589,14 @@ final class AppModel {
         self.catalogState = updater.installedState()
         let collection = CollectionModel(repository: repository, store: store)
         collection.widgetWriter = WidgetSnapshotWriter()
+        collection.binders = binders
         self.collection = collection
         Task { await collection.start() }
         let wants = WantsModel(repo: wantsRepository, uid: uid)
         wants.onWriteError = { [weak collection] message in
+            collection?.writeError = .init(message: message)
+        }
+        binders?.onWriteError = { [weak collection] message in
             collection?.writeError = .init(message: message)
         }
         wants.onWishlistAdd = { [weak self] in
