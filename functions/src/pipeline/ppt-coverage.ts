@@ -1,4 +1,4 @@
-import { normalizeNumber } from "./matcher";
+import { matchPptToOurCards, type OurCardRef } from "./matcher";
 import type { PptCard } from "../upstream/ppt";
 
 export interface OurCard {
@@ -7,6 +7,7 @@ export interface OurCard {
   name: string;
   hasImage: boolean;
   hasPrice: boolean;
+  tcgplayerId?: number | null;
 }
 
 export interface SetCoverage {
@@ -15,25 +16,25 @@ export interface SetCoverage {
   priceFillable: number;
 }
 
-function normalizeName(n: string): string {
-  return n.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
+const toRef = (c: OurCard): OurCardRef =>
+  ({ id: c.id, number: c.localId, name: c.name, tcgplayerId: c.tcgplayerId });
 
+/**
+ * How much of a set PPT could fill, counted with the SAME matcher `computeFills` uses.
+ *
+ * It has to be the same one or the probe lies about the thing it exists to predict. The old
+ * bare-number short-circuit here counted a card matched whenever one PPT product shared its
+ * number, names unchecked, and counted one product against several of our cards when their
+ * numbers normalized alike — so coverage read higher than the fill would ever deliver.
+ */
 export function computeCoverage(ourCards: OurCard[], pptCards: PptCard[]): SetCoverage {
-  const byNumber = new Map<string, PptCard[]>();
-  for (const p of pptCards) {
-    const k = normalizeNumber(p.cardNumber);
-    (byNumber.get(k) ?? byNumber.set(k, []).get(k)!).push(p);
-  }
+  const byId = new Map(ourCards.map((c) => [c.id, c]));
   let matched = 0, imageFillable = 0, priceFillable = 0;
-  for (const c of ourCards) {
-    const cands = byNumber.get(normalizeNumber(c.localId)) ?? [];
-    const hit = cands.length === 1 ? cands[0]
-      : cands.find((p) => normalizeName(p.name) === normalizeName(c.name)) ?? null;
-    if (!hit) continue;
+  for (const [p, ref] of matchPptToOurCards(ourCards.map(toRef), pptCards)) {
+    const c = byId.get(ref.id)!;
     matched++;
-    if (!c.hasImage && hit.imageUrl != null) imageFillable++;
-    if (!c.hasPrice && hit.marketUsd != null) priceFillable++;
+    if (!c.hasImage && p.imageUrl != null) imageFillable++;
+    if (!c.hasPrice && p.marketUsd != null) priceFillable++;
   }
   return { matched, imageFillable, priceFillable };
 }

@@ -4,7 +4,7 @@ import { PptClient, CreditBudget } from "../src/upstream/ppt";
 const SAMPLE = {
   data: [
     {
-      externalCatalogId: "sv02-271", cardNumber: "271/193", name: "Meowscarada ex - 271/193",
+      externalCatalogId: "sv02-271", tcgPlayerId: 496559, cardNumber: "271/193", name: "Meowscarada ex - 271/193",
       imageCdnUrl: "https://tcgplayer-cdn.tcgplayer.com/product/1_in_800x800.jpg",
       imageCdnUrl800: "https://tcgplayer-cdn.tcgplayer.com/product/1_in_800x800.jpg",
       prices: { market: 9.53 },
@@ -23,11 +23,14 @@ describe("getSetCards", () => {
     const cards = await clientReturning(SAMPLE).getSetCards("SV02: Paldea Evolved");
     expect(cards).toHaveLength(2);
     expect(cards[0]).toEqual({
-      externalCatalogId: "sv02-271", cardNumber: "271/193", name: "Meowscarada ex - 271/193",
+      externalCatalogId: "sv02-271", tcgPlayerId: 496559, cardNumber: "271/193", name: "Meowscarada ex - 271/193",
       imageUrl: "https://tcgplayer-cdn.tcgplayer.com/product/1_in_800x800.jpg", marketUsd: 9.53,
     });
     expect(cards[1].imageUrl).toBeNull();
     expect(cards[1].marketUsd).toBeNull();
+    // Absent id must arrive as null, not undefined: the matcher's `compatible()` treats a missing
+    // id as "proves nothing", and only an explicit null keeps that branch reachable.
+    expect(cards[1].tcgPlayerId).toBeNull();
   });
 
   it("spends one credit per returned card", async () => {
