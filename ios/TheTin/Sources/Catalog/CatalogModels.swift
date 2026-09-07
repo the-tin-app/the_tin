@@ -86,17 +86,31 @@ struct CardRecord: Identifiable, Equatable {
     /// sheet then renders what it has and omits the rows it cannot fill.
     var detail: CardDetail?
 
-    /// Prefer the TCGdex asset base (+ webp variant, e.g. "/high.webp"). When TCGdex has no art,
-    /// derive the public TCGplayer-CDN image straight from the product id — same CDN sealed products
-    /// use — so we serve nothing ourselves. `imageUrl` is a legacy last resort (older catalogs stored
-    /// a re-hosted URL there; those are dead now, but a non-tcgplayer value would still be honored).
+    /// Prefer the public TCGplayer CDN — the same host sealed products already use — and fall back
+    /// to the TCGdex asset base (+ webp variant, e.g. "/high.webp") for the cards TCGplayer has no
+    /// product id for. Either way we serve nothing ourselves; the device fetches and caches, and
+    /// no copy of the artwork lives on our infrastructure. `imageUrl` is a legacy last resort
+    /// (older catalogs stored a re-hosted URL there; those are dead now, but a non-tcgplayer value
+    /// would still be honored).
+    ///
+    /// ⚠️ **The order here was TCGdex-first until 2026-08-02, and the swap is a latency fix, not a
+    /// taste one.** `assets.tcgdex.net` was measured degraded over a sustained window — 13 of 13
+    /// requests at **4.5–42.5 s time-to-first-byte**, a 404 from that host taking 7.6 s, while
+    /// `tcgplayer-cdn` answered in **0.21–0.38 s** for larger files on the same connection. That
+    /// is the whole of the "iPad image pipeline" investigation: the gate, the waiter queue, LIFO
+    /// ordering and decode contention were all exonerated, and the 40 s Discover row was one
+    /// upstream TTFB. On the served catalog (v30) 76% of cards carry both sources and move to the
+    /// fast host; 16% are TCGdex-only and stay slow while it is.
+    ///
+    /// ⚠️ Changing this function changes every `ImageCache` key (sha256 of the URL), so every
+    /// device re-downloads its whole art cache. Free at 0 users; not free later.
     func imageURL(quality: String) -> URL? {
-        if let imageBase { return URL(string: "\(imageBase)/\(quality).webp") }
         if let tcgplayerId {
             // ponytail: two proven sizes (200w for grids, 800x800 for detail); add more if needed.
             let size = quality == "low" ? "200w" : "in_800x800"
             return URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/\(tcgplayerId)_\(size).jpg")
         }
+        if let imageBase { return URL(string: "\(imageBase)/\(quality).webp") }
         if let imageUrl { return URL(string: imageUrl) }
         return nil
     }
