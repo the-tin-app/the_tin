@@ -3,10 +3,10 @@ import XCTest
 
 final class MoversTests: XCTestCase {
     private func entry(_ id: String, card: String, qty: Int = 1, grade: String? = nil,
-                       condition: String = "NM") -> CollectionEntry {
+                       condition: String = "NM", variant: String? = nil) -> CollectionEntry {
         CollectionEntry(id: id, cardId: card, groupId: "g1", qty: qty, condition: condition,
                         grade: grade, pricePaid: nil, acquiredAt: nil, acquiredFrom: nil,
-                        addedAt: Date(timeIntervalSince1970: 0), variant: nil)
+                        addedAt: Date(timeIntervalSince1970: 0), variant: variant)
     }
 
     private func price(_ card: String, raw: Double? = nil, psa10: Double? = nil) -> PriceRecord {
@@ -185,5 +185,37 @@ final class MoversTests: XCTestCase {
         XCTAssertTrue(s.rows.isEmpty)
         XCTAssertEqual(s.totalImpact, 0)
         XCTAssertEqual(s.totalCards, 0)
+    }
+
+    /// A row's number belongs to a particular copy, and tapping it must open the card on THAT
+    /// copy — so the row carries the printing and condition of whichever copy moved the tin most.
+    /// Here the reverse-holo LP copy barely moved and the holo NM copy carried the row.
+    func testRowCarriesTheCopyThatMovedTheTinMost() {
+        let entries = [entry("rev", card: "c1", condition: "LP", variant: "reverseHolo"),
+                       entry("holo", card: "c1", condition: "NM", variant: "holo")]
+        let prices = ["c1": price("c1", raw: 10)]
+        let variants = ["c1": [VariantPrice(printing: "Holofoil", usd: 40),
+                               VariantPrice(printing: "Reverse Holofoil", usd: 12)]]
+        let conditions = ["c1": [ConditionPrice(condition: .lightlyPlayed, usd: 9, salesCount: nil)]]
+        let deltas = ["c1": [DeltaRecord(kind: .printing, key: "Holofoil", pct1d: 0.25, pct7d: nil, pct30d: nil),
+                             DeltaRecord(kind: .condition, key: "Lightly Played", pct1d: 0.01, pct7d: nil, pct30d: nil)]]
+        let s = Movers.summary(entries: entries, prices: prices, deltasByCard: deltas,
+                               variantsByCard: variants, conditionsByCard: conditions, period: .d1)
+        XCTAssertEqual(s.rows.count, 1)
+        XCTAssertEqual(s.rows[0].printing, .holo)
+        XCTAssertEqual(s.rows[0].condition, .nm)
+    }
+
+    /// A copy that moved less than a dollar still names itself. (The first cut compared against
+    /// `abs(nil ?? -1)`, which is 1 — so any row whose copies all moved under $1 opened plainly.)
+    func testASmallMoveStillCarriesItsCopy() {
+        let s = Movers.summary(entries: [entry("e", card: "c1", condition: "NM", variant: "holo")],
+                               prices: ["c1": price("c1", raw: 2)],
+                               deltasByCard: ["c1": [raw(0.05)]],   // ~$0.10
+                               period: .d1)
+        XCTAssertEqual(s.rows.count, 1)
+        XCTAssertLessThan(abs(s.rows[0].impact), 1)
+        XCTAssertEqual(s.rows[0].printing, .holo)
+        XCTAssertEqual(s.rows[0].condition, .nm)
     }
 }

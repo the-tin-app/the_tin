@@ -167,8 +167,9 @@ struct CardDetailView: View {
     let store: CatalogStore
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
-    /// What a scanned label said about the copy in your hand. Scopes the printing menu and tints
-    /// the matching condition tile; nil for every other way of reaching this screen.
+    /// The copy or printing the route was about — a scanned label, a tin row, a Movers row.
+    /// Scopes the printing menu and tints the matching condition tile; nil when the route that
+    /// opened this screen knew nothing about a particular copy.
     var highlight: CardHighlight? = nil
 
     init(model: CardDetailModel, store: CatalogStore,
@@ -203,23 +204,28 @@ struct CardDetailView: View {
     private static let priceColumns = [GridItem(.adaptive(minimum: 88), spacing: 8)]
 
     /// The printing the price header is scoped to, when the card has more than one priced
-    /// printing. Defaults to the finish the rarity heuristic says this card is, else the cheapest.
+    /// printing. Defaults to the printing the route was about, else the finish the rarity
+    /// heuristic says this card is, else the cheapest.
     private var currentPrinting: VariantPrice? {
-        guard model.variants.count > 1 else { return nil }
-        if let selectedPrinting, let v = model.variants.first(where: { $0.printing == selectedPrinting }) {
-            return v
-        }
-        // A label states which printing this copy is, so honour it until the user picks another.
-        // Resolved HERE rather than seeded into `selectedPrinting` on appear: `model.variants` is
-        // filled by `load()`, so an .onAppear seed would race an empty array and silently do
-        // nothing. ⚠️ `matches`, never `==` — a PPT key ("Reverse Holofoil") never equals a
-        // CardVariant rawValue, which is exactly what that bridge exists for.
-        if let labelled = highlight?.printing,
-           let v = model.variants.first(where: { labelled.matches(printing: $0.printing) }) {
-            return v
-        }
-        let def = CardVariant.defaultFor(rarity: model.card.rarity)
-        return def.row(in: model.variants) ?? model.variants.first
+        Self.headlinePrinting(variants: model.variants, rarity: model.card.rarity,
+                              selected: selectedPrinting, highlighted: highlight?.printing)
+    }
+
+    /// `currentPrinting`'s resolution, static so it's testable without a view host. The user's
+    /// pick wins; then the printing the route said this is about (a label, a tin row, a Movers
+    /// row); then the rarity heuristic; then the cheapest.
+    ///
+    /// The route's printing is resolved HERE rather than seeded into `selectedPrinting` on appear:
+    /// `model.variants` is filled by `load()`, so an .onAppear seed would race an empty array and
+    /// silently do nothing. ⚠️ `row(in:)`, never `==` and never a bare `matches` — a PPT key
+    /// ("Reverse Holofoil") never equals a CardVariant rawValue, and `.holo` `matches` "Cosmos
+    /// Holo" too, so a first-match over cheapest-first rows opened a plain holo on the promo.
+    static func headlinePrinting(variants: [VariantPrice], rarity: String?, selected: String?,
+                                 highlighted: CardVariant?) -> VariantPrice? {
+        guard variants.count > 1 else { return nil }
+        if let selected, let v = variants.first(where: { $0.printing == selected }) { return v }
+        if let v = highlighted?.row(in: variants) { return v }
+        return CardVariant.defaultFor(rarity: rarity).row(in: variants) ?? variants.first
     }
 
     var body: some View {
@@ -571,6 +577,12 @@ struct CardDetailView: View {
                                     Text("·").font(.caption).foregroundStyle(.tertiary)
                                     Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
                                     Spacer()
+                                    // THIS copy's change — the number its tin row and Movers
+                                    // showed. The headline above quotes the printing's market;
+                                    // a scanned copy is priced on printing × condition, a
+                                    // different series, so without this the % you tapped on
+                                    // appeared nowhere on the screen it opened.
+                                    DeltaBadge(record: GroupStats.unitDelta(entry, records: model.deltas))
                                     Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
                                 }
                                 paidLine(entry)

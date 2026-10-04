@@ -64,7 +64,11 @@ struct MoversView: View {
             if scope == .mine, !summary.rows.isEmpty {
                 Section {
                     ForEach(summary.rows) { row in
-                        NavigationLink(value: CardID(raw: row.cardId)) {
+                        // Opens on the copy that moved the tin most, so the card shows the
+                        // printing (and tints the condition) this row's number came from.
+                        NavigationLink(value: CardID(raw: row.cardId,
+                                                     highlight: CardHighlight(printing: row.printing,
+                                                                              condition: row.condition))) {
                             MoverRow(row: row, card: try? store.card(id: row.cardId))
                         }
                     }
@@ -75,7 +79,12 @@ struct MoversView: View {
             if scope == .market, !market.isEmpty {
                 Section {
                     ForEach(market) { row in
-                        NavigationLink(value: CardID(raw: row.cardId)) {
+                        // The row quotes whichever printing moved most; opening on the card's
+                        // default printing instead is how "+38%" became "+1.2%" one tap later.
+                        NavigationLink(value: CardID(raw: row.cardId,
+                                                     highlight: CardHighlight(
+                                                        printing: row.printing.flatMap(CardVariant.init(rawValue:)),
+                                                        condition: nil))) {
                             MarketMoverRow(row: row, card: try? store.card(id: row.cardId),
                                            owned: ownedIds.contains(row.cardId),
                                            wanted: wants?.isWanted(row.cardId) ?? false)
@@ -98,7 +107,8 @@ struct MoversView: View {
             if let card = try? store.card(id: cardID.raw) {
                 CardDetailView(model: CardDetailModel(store: store, card: card,
                                                       history: CatalogPriceHistory(store: store)),
-                               store: store, collection: model, wants: wants)
+                               store: store, collection: model, wants: wants,
+                               highlight: cardID.highlight)
             }
         }
     }

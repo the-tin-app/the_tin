@@ -5,9 +5,14 @@ import Foundation
 /// routing every String to the root-closest destination (the blank card-detail bug).
 struct SetID: Hashable { let raw: String }
 
-/// What a printed label knows about the particular copy in your hand, carried along the route so
-/// card detail can open already scoped to it. Both halves are optional: a label whose entry has
-/// since been deleted, or a payload from a version we don't read, still opens the card plainly.
+/// Which copy or printing the route is about, carried along so card detail opens already scoped
+/// to it — a printed label's copy, a tin row's entry, or the printing a Movers row quoted. Both
+/// halves are optional: a label whose entry has since been deleted, or a payload from a version
+/// we don't read, still opens the card plainly.
+///
+/// Without it a row and the card it opens disagree: the row quotes the copy you own (or the
+/// printing that moved), the card headlines its rarity-default printing, and "+38%" in the list
+/// becomes "+1.2%" one tap later with nothing on screen to say why.
 struct CardHighlight: Hashable {
     let printing: CardVariant?
     let condition: CardCondition?
@@ -20,10 +25,16 @@ struct CardHighlight: Hashable {
         self.printing = printing
         self.condition = condition
     }
+
+    /// What an owned entry recorded about itself — the same two facts its tin row prices from.
+    init?(entry: CollectionEntry) {
+        self.init(printing: entry.variantValue, condition: entry.conditionValue)
+    }
 }
 
-/// `highlight` is DEFAULTED so every existing `CardID(raw:)` call site is untouched — six
-/// `navigationDestination(for: CardID.self)` sites exist and only the Tin's forwards it.
+/// `highlight` is DEFAULTED so a route that knows nothing about the copy stays `CardID(raw:)`.
+/// Only the Tin's and Movers' `navigationDestination(for: CardID.self)` forward it — the routes
+/// into the other four never carry one.
 struct CardID: Hashable {
     let raw: String
     var highlight: CardHighlight? = nil
