@@ -28,7 +28,7 @@ struct TradeListView: View {
                 }
                 Section {
                     ForEach(model.tradeEntries) { entry in
-                        NavigationLink(value: CardID(raw: entry.cardId)) {
+                        NavigationLink(value: CardID(raw: entry.cardId, highlight: CardHighlight(entry: entry))) {
                             CollectionEntryRow(card: try? store.card(id: entry.cardId),
                                                entry: entry,
                                                dividerName: dividerName(entry),

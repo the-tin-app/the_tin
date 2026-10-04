@@ -198,7 +198,7 @@ private struct EntryCardPage: View {
                     Button(g.name) { Task { await model.moveEntry(entry, toGroup: g.id) } }
                 }
             } label: { Label("Move to…", systemImage: "arrow.turn.up.right") }
-            NavigationLink(value: CardID(raw: entry.cardId)) {
+            NavigationLink(value: CardID(raw: entry.cardId, highlight: CardHighlight(entry: entry))) {
                 Label("Card details", systemImage: "info.circle")
             }
             Divider()

@@ -599,7 +599,7 @@ struct GroupDetailView: View {
                     .buttonStyle(.plain)
                     .accessibilityHint("Edit this entry")
             } else {
-                NavigationLink(value: CardID(raw: entry.cardId)) { content }
+                NavigationLink(value: CardID(raw: entry.cardId, highlight: CardHighlight(entry: entry))) { content }
             }
         }
         .tag(entry.id)

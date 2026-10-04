@@ -22,6 +22,10 @@ enum Movers {
         let value: Double
         /// Dollars this holding gained (+) or lost (−) over the period.
         let impact: Double
+        /// Printing and condition of the copy that moved the tin most, so the card opens on what
+        /// this row is about rather than its rarity-default printing. nil when not recorded.
+        var printing: CardVariant? = nil
+        var condition: CardCondition? = nil
         var id: String { cardId }
 
         /// The holding's aggregate percent move, derived back out of the money so a card valued
@@ -99,6 +103,7 @@ enum Movers {
         var valueByCard: [String: Double] = [:]
         var impactByCard: [String: Double] = [:]
         var qtyByCard: [String: Int] = [:]
+        var leadByCard: [String: (entry: CollectionEntry, impact: Double)] = [:]
         var ownedCards = Set<String>()
 
         for entry in entries {
@@ -134,13 +139,19 @@ enum Movers {
             valueByCard[entry.cardId, default: 0] += value
             impactByCard[entry.cardId, default: 0] += impact
             qtyByCard[entry.cardId, default: 0] += entry.qty
+            // Strictly greater: on a tie the earlier copy keeps the route, stable between launches.
+            if leadByCard[entry.cardId].map({ abs(impact) > abs($0.impact) }) ?? true {
+                leadByCard[entry.cardId] = (entry, impact)
+            }
         }
 
         let rows = impactByCard
             .filter { abs($0.value) >= minimumImpact }
             .map { cardId, impact in
-                Row(cardId: cardId, qty: qtyByCard[cardId] ?? 0,
-                    value: valueByCard[cardId] ?? 0, impact: impact)
+                let lead = leadByCard[cardId]?.entry
+                return Row(cardId: cardId, qty: qtyByCard[cardId] ?? 0,
+                           value: valueByCard[cardId] ?? 0, impact: impact,
+                           printing: lead?.variantValue, condition: lead?.conditionValue)
             }
             // Dollar impact on the tin, not raw percent: a $300 card moving 4% outranks a 40c
             // common that doubled. Ties break on id so the order is stable between launches.

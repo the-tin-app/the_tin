@@ -1464,7 +1464,7 @@ struct CollectionView: View {
             }
         } else {
             ForEach(matches) { entry in
-                NavigationLink(value: CardID(raw: entry.cardId)) {
+                NavigationLink(value: CardID(raw: entry.cardId, highlight: CardHighlight(entry: entry))) {
                     CollectionEntryRow(
                         card: try? store.card(id: entry.cardId),
                         entry: entry,
