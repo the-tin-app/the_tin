@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Hosts the live scanner: renders the pack states, and once the pack is installed and the
 /// Matcher builds, enters `ScanView` backed by a persisted staging tray.
@@ -290,8 +291,23 @@ struct ScanTabContainer: View {
     }
 
     private func makeScanModel(_ matcher: Matcher, index: CandidateIndex) -> ScanModel {
-        ScanModel(matcher: matcher, detector: CardDetector(),
-                  textGate: TextGate(index: index), narrowing: index, staging: staging, store: store)
+        let model = ScanModel(matcher: matcher, detector: CardDetector(),
+                              textGate: TextGate(index: index), narrowing: index,
+                              staging: staging, store: store)
+        // A capture you needed feels different from a capture you didn't: the celebratory
+        // `.success` is spent on a wishlist hit, and a routine card gets a light tick.
+        //
+        // ⚠️ Driven from the model, NOT from `.sensoryFeedback` in `ScanView` — see `onCaptured`
+        // and #191. Fires only for cards that reach the tray, so look-up mode stays silent and a
+        // removal cannot buzz; the old count trigger had to guard for both by hand.
+        model.onCaptured = { [wants = wants] draft in
+            if wants?.isWanted(draft.cardId) == true {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } else {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
+        }
+        return model
     }
 }
 
