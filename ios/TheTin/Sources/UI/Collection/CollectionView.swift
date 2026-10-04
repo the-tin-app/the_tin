@@ -248,7 +248,8 @@ final class CollectionModel {
     /// is atomic and a stale compute can never overwrite a newer snapshot. Snapshotting
     /// `v`/`entries`/`prices`/etc. synchronously on @MainActor before creating the task (and
     /// cancelling the old one first) is what makes that guarantee hold from the very first line.
-    private func publishWidgetSnapshot() {
+    /// Also called when collecting mode changes, which moves no data but changes what the widget shows.
+    func publishWidgetSnapshot() {
         guard widgetWriter != nil else { return }
         widgetSnapshotTask?.cancel()
         let v = tinValue
@@ -286,7 +287,8 @@ final class CollectionModel {
                     delta7d: delta7d,
                     sparkline: sparkline,
                     asOf: asOf,
-                    updatedAt: Date()))
+                    updatedAt: Date(),
+                    hidesPrices: CollectingMode.isOn ? true : nil))
             }
         }
     }
@@ -897,6 +899,7 @@ struct CollectionView: View {
     @State private var editingEntry: CollectionEntry?
     @State private var editingSealed: SealedEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.hidesPrices) private var hidesPrices
     @State private var searchIndex = CardSearchIndex()
 
     /// How many cards a riffle row spreads before collapsing into "+N".
@@ -931,8 +934,10 @@ struct CollectionView: View {
                     sealedSection
                     if let wants, !wants.wanted.isEmpty {
                         wishlistLink(wants).tinRow()
-                        TipView(WatchingTip()).tinRow()
-                        watchingLink(wants).tinRow()
+                        if !hidesPrices {
+                            TipView(WatchingTip()).tinRow()
+                            watchingLink(wants).tinRow()
+                        }
                     }
                 } else {
                     header.tinRow()
@@ -951,7 +956,8 @@ struct CollectionView: View {
                     // Gated on having something hearted, unlike the always-shown Wishlist row
                     // above: with nothing hearted the screen has nothing to say, and a row that
                     // opens an empty screen is the same broken promise the trade row avoids below.
-                    if let wants, !wants.wanted.isEmpty {
+                    // Not in collecting mode: Watching is price drops and trends, nothing else.
+                    if let wants, !wants.wanted.isEmpty, !hidesPrices {
                         TipView(WatchingTip()).tinRow()
                         watchingLink(wants).tinRow()
                     }
@@ -1109,10 +1115,13 @@ struct CollectionView: View {
                 GroupDetailView(model: model, group: group, store: store, onGetStarted: onGetStarted)
             }
         }
+        // The three screens below keep their numbers in collecting mode (#198): a target price is
+        // meaningless without the market beside it, and trading is a conversation about value.
         .navigationDestination(for: WantedRoute.self) { route in
             if let wants {
                 WantedView(store: store, wants: wants, collection: model, goals: goals,
                            initialScope: route.scope)
+                    .keepsPrices()
             }
         }
         .navigationDestination(for: WatchingRoute.self) { _ in
@@ -1121,12 +1130,13 @@ struct CollectionView: View {
             }
         }
         .navigationDestination(for: TradeRoute.self) { _ in
-            TradeListView(model: model, store: store)
+            TradeListView(model: model, store: store).keepsPrices()
         }
         .navigationDestination(for: TradeSessionRoute.self) { route in
             TradeSessionView(model: model, store: store, wants: wants, staging: staging,
                              backup: backup, offer: route.offer, pack: pack,
                              onExecuted: onExecutedTrade)
+                .keepsPrices()
         }
         .navigationDestination(for: TinAllCardsRoute.self) { _ in
             GroupDetailView(model: model, group: nil, store: store, onGetStarted: onGetStarted)
@@ -1201,7 +1211,29 @@ struct CollectionView: View {
     }
 
     /// Only rendered once there's a card to total — `emptyTin` owns the first-run screen.
-    private var header: some View {
+    @ViewBuilder private var header: some View {
+        if hidesPrices { countHeader } else { valueHeader }
+    }
+
+    /// Collecting mode's header: what you have, not what it's worth — and no Portfolio link,
+    /// which is a value chart.
+    private var countHeader: some View {
+        let v = model.tinValue
+        return VStack(alignment: .leading, spacing: 2) {
+            Text("^[\(v.totalCards) card](inflect: true)")
+                .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+            Text("in your tin").font(.footnote).foregroundStyle(.secondary)
+            if model.sealedValue.boxes > 0 {
+                Text("plus ^[\(model.sealedValue.boxes) sealed box](inflect: true)")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.bottom, 6)
+    }
+
+    private var valueHeader: some View {
         let v = model.tinValue
         // Sealed is added to the DISPLAYED total but deliberately not folded into `tinValue`
         // itself: forty-odd consumers of that number (GroupStats, the widget, per-divider totals,
@@ -1597,6 +1629,7 @@ struct TinRiffleRow: View {
     let cards: [CardRecord]   // distinct, newest first
     let count: Int
     let value: Double
+    @Environment(\.hidesPrices) private var hidesPrices
 
     private var overflow: Int { max(0, count - cards.count) }
 
@@ -1606,7 +1639,8 @@ struct TinRiffleRow: View {
             tray
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(name), \(count) \(count == 1 ? "card" : "cards"), \(value.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
+        .accessibilityLabel("\(name), \(count) \(count == 1 ? "card" : "cards")"
+                            + (hidesPrices ? "" : ", \(value.formatted(.currency(code: "USD").precision(.fractionLength(0))))"))
         .accessibilityAddTraits(.isButton)
     }
 
@@ -1628,9 +1662,11 @@ struct TinRiffleRow: View {
                 Spacer()
                 Text("\(count) \(count == 1 ? "card" : "cards")")
                     .font(.caption2).foregroundStyle(.secondary)
-                Text(value, format: .currency(code: "USD").precision(.fractionLength(0)))
-                    .font(.system(.subheadline, design: .rounded).weight(.bold))
-                    .monospacedDigit()
+                if !hidesPrices {
+                    Text(value, format: .currency(code: "USD").precision(.fractionLength(0)))
+                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                        .monospacedDigit()
+                }
             }
             riffle
         }

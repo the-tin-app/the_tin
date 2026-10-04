@@ -11,6 +11,7 @@ struct StagingReviewView: View {
     /// Drives the "do I need this?" line on each row. Optional so previews/tests can omit it.
     var wants: WantsModel? = nil
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.hidesPrices) private var hidesPrices
     @State private var routing: ScanDraft?     // draft being routed
     @State private var measuring: ScanDraft?   // draft whose centring is being placed
     /// Where this tray's scan plates live. Injectable so tests and previews can point elsewhere.
@@ -53,7 +54,7 @@ struct StagingReviewView: View {
                         Text("^[\(staging.drafts.count) card](inflect: true)")
                         Spacer()
                         // Sums the same per-draft snapshots as the scan tray's running total.
-                        Text(staging.totalUsd, format: .currency(code: "USD"))
+                        if !hidesPrices { Text(staging.totalUsd, format: .currency(code: "USD")) }
                     }
                 }
             }
@@ -207,6 +208,7 @@ struct StagingReviewView: View {
 private struct DraftRow: View {
     let draft: ScanDraft
     let store: CatalogStore
+    @Environment(\.hidesPrices) private var hidesPrices
     /// Copies already in the tin + wishlist state for this card — "do I need this?" answered
     /// on the row, so a stack of scans can be triaged without opening each card.
     let knowledge: ScanKnowledge
@@ -234,7 +236,9 @@ private struct DraftRow: View {
                 HStack {
                     Text(title).font(.headline)
                     Spacer()
-                    if let p = draft.priceUsdSnapshot {
+                    if hidesPrices {
+                        EmptyView()
+                    } else if let p = draft.priceUsdSnapshot {
                         Text(p, format: .currency(code: "USD")).foregroundStyle(.secondary)
                     } else { Text("—").foregroundStyle(.secondary) }
                 }

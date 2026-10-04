@@ -13,6 +13,7 @@ struct PokedexListView: View {
     // baked rep_card_id is an unpriced card — shows a priced photo and its price instead.
     @State private var reps: [Int: (cardId: String, usd: Double)]
     @State private var sort: PokemonSort = .dex
+    @Environment(\.hidesPrices) private var hidesPrices
     @State private var query = ""
 
     // `.top`, matching every other card grid — see the note in `SetsListView`.
@@ -65,7 +66,7 @@ struct PokedexListView: View {
                             CardImageView(card: repCard(mon), quality: "low")
                             Text(mon.name).font(.caption).lineLimit(1)
                             Text("#\(mon.dexId)").font(.caption2).foregroundStyle(.secondary)
-                            if let price = reps[mon.dexId]?.usd {
+                            if let price = reps[mon.dexId]?.usd, !hidesPrices {
                                 Text(price, format: .currency(code: "USD")).font(.caption2)
                             }
                         }

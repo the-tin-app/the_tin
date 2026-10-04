@@ -19,9 +19,14 @@ struct PriceLabel: View {
     /// card you own. It's the wrong thing to say about a card you've sold, where there is no
     /// current value to report by definition. Absent ≠ missing.
     var hidesNoData: Bool = false
+    @Environment(\.hidesPrices) private var hidesPrices
 
     var body: some View {
-        if let value {
+        if hidesPrices {
+            // Collecting mode: no value, and no "no data" either — that would be a claim about
+            // pricing on a screen that has stopped talking about it.
+            EmptyView()
+        } else if let value {
             Text(value, format: .currency(code: "USD")).font(.caption.bold()).monospacedDigit()
         } else if !hidesNoData {
             Text("no data").font(.caption).foregroundStyle(.secondary)

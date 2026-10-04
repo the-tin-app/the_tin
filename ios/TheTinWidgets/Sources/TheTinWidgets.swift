@@ -85,9 +85,23 @@ struct DeltaText: View {
 }
 
 private func captionLine(_ snap: WidgetSnapshot) -> String {
+    // Collecting mode: the count is already the headline, and a price date has nothing to date.
+    if snap.hidesPrices == true { return "in your tin" }
     var line = "\(snap.cardCount) cards"
     if let asOf = snap.asOf { line += " · as of \(WidgetShared.shortDate(asOf))" }
     return line
+}
+
+/// The big number: the tin's value — or, in collecting mode (#198), how many cards are in it.
+private func headline(_ snap: WidgetSnapshot) -> Text {
+    snap.hidesPrices == true
+        ? Text("\(snap.cardCount) cards")
+        : Text(snap.totalValue, format: WidgetShared.tinCurrency(snap.totalValue))
+}
+
+/// The 7-day change, unless collecting mode hides it.
+private func shownDelta(_ snap: WidgetSnapshot) -> Double? {
+    snap.hidesPrices == true ? nil : snap.delta7d
 }
 
 struct SmallView: View {
@@ -95,11 +109,11 @@ struct SmallView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("THE TIN").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            Text(snap.totalValue, format: WidgetShared.tinCurrency(snap.totalValue))
+            headline(snap)
                 .font(.system(.title2, design: .rounded).weight(.bold))
                 .lineLimit(1).minimumScaleFactor(0.6)
                 .privacySensitive()
-            if let d = snap.delta7d {
+            if let d = shownDelta(snap) {
                 DeltaText(delta: d).font(.caption.weight(.semibold)).privacySensitive()
             }
             Spacer(minLength: 0)
@@ -115,11 +129,11 @@ struct MediumView: View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("THE TIN").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                Text(snap.totalValue, format: WidgetShared.tinCurrency(snap.totalValue))
+                headline(snap)
                     .font(.system(.title2, design: .rounded).weight(.bold))
                     .lineLimit(1).minimumScaleFactor(0.6)
                     .privacySensitive()
-                if let d = snap.delta7d {
+                if let d = shownDelta(snap) {
                     HStack(spacing: 3) {
                         DeltaText(delta: d)
                         Text("this week").foregroundStyle(.secondary)
@@ -130,7 +144,7 @@ struct MediumView: View {
                 Spacer(minLength: 0)
                 Text(captionLine(snap)).font(.caption2).foregroundStyle(.secondary)
             }
-            if let values = snap.sparkline, values.count > 1 {
+            if let values = snap.sparkline, values.count > 1, snap.hidesPrices != true {
                 Sparkline(values: values)
                     .stroke(.green, style: StrokeStyle(lineWidth: 2.5, lineCap: .round,
                                                        lineJoin: .round))
@@ -148,10 +162,10 @@ struct RectangularView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("THE TIN").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(snap.totalValue, format: WidgetShared.tinCurrency(snap.totalValue))
+                headline(snap)
                     .font(.headline.weight(.bold))
                     .lineLimit(1).minimumScaleFactor(0.6)
-                if let d = snap.delta7d {
+                if let d = shownDelta(snap) {
                     Text("\(d >= 0 ? "▲" : "▼") \(abs(d), format: .percent.precision(.fractionLength(1)))")
                         .font(.caption2.weight(.semibold))
                         .accessibilityLabel("\(d >= 0 ? "Up" : "Down") \(abs(d).formatted(.percent.precision(.fractionLength(1)))) this week")
@@ -167,9 +181,9 @@ struct InlineView: View {
     let snap: WidgetSnapshot
     var body: some View {
         // Inline is a single text line next to the clock; keep it terse.
-        (snap.delta7d.map { d in
+        (shownDelta(snap).map { d in
             Text("Tin \(snap.totalValue, format: WidgetShared.tinCurrency(snap.totalValue)) \(d >= 0 ? "▲" : "▼")\(abs(d), format: .percent.precision(.fractionLength(1)))")
-        } ?? Text("Tin \(snap.totalValue, format: WidgetShared.tinCurrency(snap.totalValue))"))
+        } ?? Text("Tin ") + headline(snap))
             .privacySensitive()
     }
 }

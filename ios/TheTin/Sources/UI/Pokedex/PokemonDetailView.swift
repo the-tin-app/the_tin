@@ -41,6 +41,7 @@ struct PokemonDetailView: View {
     var history: PriceHistoryProviding? = nil
     var collection: CollectionModel? = nil
     var wants: WantsModel? = nil
+    @Environment(\.hidesPrices) private var hidesPrices
 
     // `.top`, matching every other card grid — see the note in `SetsListView`.
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 12, alignment: .top)]
@@ -66,7 +67,9 @@ struct PokemonDetailView: View {
                                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                             // Always render a price line so unpriced cards keep the same cell
                             // height as priced ones (otherwise the grid rows go ragged).
-                            if let usd = model.previewUsd[card.id] {
+                            if hidesPrices {
+                                EmptyView()
+                            } else if let usd = model.previewUsd[card.id] {
                                 Text(usd, format: .currency(code: "USD")).font(.caption2)
                             } else {
                                 Text("No price available").font(.caption2).foregroundStyle(.secondary)

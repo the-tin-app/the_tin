@@ -40,6 +40,7 @@ struct SealedCard: View {
     /// then reads exactly as it did before sealed became ownable.
     var collection: CollectionModel? = nil
     @State private var adding = false
+    @Environment(\.hidesPrices) private var hidesPrices
 
     /// Boxes of this product already in the tin. Reading `collection.sealed` here is what keeps
     /// the badge live — `CollectionModel` is `@Observable`, so saving from the sheet updates the
@@ -58,13 +59,13 @@ struct SealedCard: View {
                     if owned > 0 { CardBadges(owned: true, wanted: false, count: owned) }
                 }
             Text(product.name).font(.caption).lineLimit(2)
-            if let market = product.marketUsd {
+            if let market = product.marketUsd, !hidesPrices {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(market, format: .currency(code: "USD")).font(.caption.weight(.semibold))
                     Text("market").font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            if let low = product.lowUsd {
+            if let low = product.lowUsd, !hidesPrices {
                 Text("low \(low, format: .currency(code: "USD"))")
                     .font(.caption2).foregroundStyle(.secondary)
             }

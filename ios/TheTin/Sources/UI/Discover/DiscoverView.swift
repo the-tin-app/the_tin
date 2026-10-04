@@ -7,6 +7,7 @@ struct DiscoverView: View {
     var goals: SetGoalsModel? = nil
     var signals: DiscoverSignalsModel? = nil
     @State private var model: DiscoverModel?
+    @Environment(\.hidesPrices) private var hidesPrices
     /// The price picker, opened from a row on this screen. NOT presented automatically.
     ///
     /// Three placements now. As an `.interactiveDismissDisabled` sheet at launch it was the first
@@ -37,7 +38,8 @@ struct DiscoverView: View {
         // rebuilt it, and the centred loading tin was replaced by a top-anchored scroll view. On an A10
         // iPad that reads as the whole screen popping to the top. The home renders its own skeletons now.
         DiscoverHomeView(model: model, store: store, collection: collection, wants: wants,
-                         needsSeed: tiers == nil,
+                         // "What would you spend?" is a price question; collecting mode doesn't ask it.
+                         needsSeed: tiers == nil && !hidesPrices,
                          onTapSeed: { showSeed = true })
         .navigationTitle("Discover")
         .navigationBarTitleDisplayMode(.inline)
@@ -106,7 +108,8 @@ struct DiscoverView: View {
               reasons: signals?.reasons ?? [:],
               at: signals?.at ?? [:],
               signalsRevision: signals?.revision ?? 0,
-              tiers: tiers)
+              tiers: tiers,
+              hidesPrices: hidesPrices)
     }
 
 }

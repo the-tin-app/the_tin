@@ -8,6 +8,15 @@ import OSLog
 struct Shelf: Identifiable, Equatable {
     enum Kind: String, CaseIterable {
         case setGoal, easyAdds, worthAThink, someday, historicLow, weeklyDrop, species, artist, explore
+
+        /// A shelf whose reason IS a price — a spending tier, a low, a drop. None of these survive
+        /// collecting mode: a shelf called "Easy adds · under $10" is a price tag on a row.
+        var isAboutPrice: Bool {
+            switch self {
+            case .easyAdds, .worthAThink, .someday, .historicLow, .weeklyDrop: return true
+            case .setGoal, .species, .artist, .explore: return false
+            }
+        }
     }
     let id: String
     let kind: Kind

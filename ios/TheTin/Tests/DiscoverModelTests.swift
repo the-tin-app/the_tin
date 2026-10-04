@@ -151,6 +151,7 @@ final class DiscoverModelTests: XCTestCase {
         variants["dismissed"] = { var i = base; i.dismissed = []; return i }()
         variants["reasons"] = { var i = base; i.reasons = ["s1-3": .wrongEra]; return i }()
         variants["revision"] = { var i = base; i.signalsRevision = 2; return i }()
+        variants["hidesPrices"] = { var i = base; i.hidesPrices = true; return i }()
         variants["tiers"] = withTiers
         variants["tiers changed"] = {
             var i = withTiers
@@ -184,6 +185,22 @@ final class DiscoverModelTests: XCTestCase {
         await model.load(noTiers)
         XCTAssertNotNil(model.shelves.first { $0.kind == .easyAdds },
                         "answering the picker must build the tier rows immediately")
+    }
+
+    /// Collecting mode (#198): with tiers stated, the price-defined rows still don't appear.
+    @MainActor
+    func testCollectingModeBuildsNoPriceShelves() async throws {
+        let model = DiscoverModel(store: try makeStore())
+        var i = inputs(owned: [("s1-1", 20), ("s1-3", 18), ("s2-1", 30)])
+        i.tiers = PriceTiers(routineCeiling: 25, occasionalCeiling: 100)
+        await model.load(i)
+        XCTAssertTrue(model.shelves.contains { $0.kind.isAboutPrice }, "precondition: tier rows exist")
+        let otherShelves = model.shelves.filter { !$0.kind.isAboutPrice }.map(\.id)
+
+        i.hidesPrices = true
+        await model.load(i)
+        XCTAssertFalse(model.shelves.contains { $0.kind.isAboutPrice })
+        XCTAssertEqual(model.shelves.map(\.id), otherShelves, "the rest of For You is untouched")
     }
 
     /// ⚠️ The caption must name the reason the card was CHOSEN, not describe the card.

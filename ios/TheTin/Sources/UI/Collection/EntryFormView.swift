@@ -23,6 +23,7 @@ struct EntryFormView: View {
     let onSave: (CollectionEntry) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.hidesPrices) private var hidesPrices
     /// Label printing is owned by the app: this form dismisses itself on save, and a print flow
     /// owned by a dismissing view dies with it.
     @Environment(AppModel.self) private var app: AppModel?
@@ -251,7 +252,7 @@ struct EntryFormView: View {
 
     /// "Reverse Holo · $140" when that printing is priced, else just the finish name.
     private func variantLabel(_ v: CardVariant) -> String {
-        if let usd = v.price(in: variants) {
+        if let usd = v.price(in: variants), !hidesPrices {
             return "\(v.label) · " + usd.formatted(.currency(code: "USD"))
         }
         return v.label
@@ -262,7 +263,7 @@ struct EntryFormView: View {
     private func conditionLabel(_ c: CardCondition) -> String {
         let usd = matrix.first { $0.condition == c.catalog && variant.matches(printing: $0.printing) }?.usd
             ?? conditions.first { $0.condition == c.catalog }?.usd
-        if let usd { return "\(c.rawValue) · " + usd.formatted(.currency(code: "USD")) }
+        if let usd, !hidesPrices { return "\(c.rawValue) · " + usd.formatted(.currency(code: "USD")) }
         return c.rawValue
     }
 

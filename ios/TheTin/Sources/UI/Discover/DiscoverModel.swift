@@ -66,7 +66,7 @@ final class DiscoverModel {
             return shelfCaptions[card.id]
         case .chase:
             guard let usd = (try? store.price(cardId: card.id))?.rawUsd else { return nil }
-            return "Chase · " + usd.formatted(.currency(code: "USD"))
+            return lastInputs?.hidesPrices == true ? "Chase" : "Chase · " + usd.formatted(.currency(code: "USD"))
         case .fullArt:
             return card.rarity
         }
@@ -113,6 +113,8 @@ final class DiscoverModel {
         /// The two stated price lines. Read from `AppConfig` at the call site so the assembly stays
         /// a pure function of its inputs. `nil` only before the picker has ever been answered.
         var tiers: PriceTiers?
+        /// Collecting mode (#198): build no shelf whose reason is a price.
+        var hidesPrices = false
 
         var ownedIds: [String] { entries.map(\.cardId) }
 
@@ -145,6 +147,7 @@ final class DiscoverModel {
             hasher.combine(signalsRevision)
             hasher.combine(tiers?.routineCeiling)
             hasher.combine(tiers?.occasionalCeiling)
+            hasher.combine(hidesPrices)
             return String(hasher.finalize())
         }
     }
@@ -219,6 +222,7 @@ final class DiscoverModel {
                                          setGoals: inputs.setGoals, owned: Set(ownedIds),
                                          tasteIds: tasteIds, dismissed: inputs.dismissed,
                                          tiers: inputs.tiers, relatedSpecies: relatedSpecies)
+            .filter { !(inputs.hidesPrices && $0.kind.isAboutPrice) }
 
         // One entry per card, from the shelf that placed it. ShelfBuilder dedupes across shelves,
         // so this is 1:1 and the later shelf never overwrites an earlier, stronger reason.
