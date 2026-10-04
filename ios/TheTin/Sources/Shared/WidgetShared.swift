@@ -69,4 +69,7 @@ struct WidgetSnapshot: Codable, Equatable {
     /// Price-data date "yyyy-MM-dd" (newest as_of across priced cards); nil when nothing priced.
     var asOf: String?
     var updatedAt: Date
+    /// Collecting mode (#198): the widget shows the card count instead of a value, and no change
+    /// or sparkline. Optional so a snapshot written before this existed still decodes.
+    var hidesPrices: Bool? = nil
 }

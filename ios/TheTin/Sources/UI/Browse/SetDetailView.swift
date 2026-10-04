@@ -54,6 +54,7 @@ struct SetDetailView: View {
     private static let sortOptions: [CardSort] = [.number, .alphabetical, .cheapest, .expensive]
 
     @State private var confirmingWishlistAdd = false
+    @Environment(\.hidesPrices) private var hidesPrices
     @State private var confirmingWishlistRemove = false
 
     private var owned: Set<String> { Set(entries.map(\.cardId)) }
@@ -81,11 +82,13 @@ struct SetDetailView: View {
                 Text("\(completion.owned)/\(completion.total) collected")
                     .font(.subheadline).foregroundStyle(.secondary)
                 ProgressView(value: Double(completion.owned), total: Double(max(completion.total, 1)))
-                HStack {
-                    Text("Set raw value: \(model.rawTotal, format: .currency(code: "USD"))")
-                    if let asOf = model.asOf { AsOfLabel(date: asOf) }
+                if !hidesPrices {
+                    HStack {
+                        Text("Set raw value: \(model.rawTotal, format: .currency(code: "USD"))")
+                        if let asOf = model.asOf { AsOfLabel(date: asOf) }
+                    }
+                    .font(.footnote)
                 }
-                .font(.footnote)
 
                 if let goals {
                     Button {

@@ -204,6 +204,7 @@ struct SettingsView: View {
     // MARK: App
 
     @AppStorage(Appearance.storageKey) private var appearance = Appearance.system
+    @AppStorage(CollectingMode.storageKey) private var collectingMode = false
 
     /// The one place price lives.
     ///
@@ -240,6 +241,17 @@ struct SettingsView: View {
             Picker("Appearance", selection: $appearance) {
                 ForEach(Appearance.allCases, id: \.self) { Text($0.label) }
             }
+            // #198. In this section rather than its own: `sections` is already at the
+            // type-checker's limit. The subtitle carries what a footer would have.
+            Toggle(isOn: $collectingMode) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Collecting mode")
+                    Text("Hide card values and price changes. Trades, your wishlist and printed reports keep their numbers.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            // The widget lives in another process and only learns the mode from its snapshot.
+            .onChange(of: collectingMode) { app.collection?.publishWidgetSnapshot() }
             // The app had no route to help of any kind — no FAQ, no contact, nothing explaining
             // dividers, catalog tiers or the scanner pack, in a product whose own vocabulary has
             // to be learned. The page already exists; nothing in the app pointed at it.

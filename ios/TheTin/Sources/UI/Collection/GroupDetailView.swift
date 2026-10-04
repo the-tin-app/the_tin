@@ -98,6 +98,7 @@ struct GroupDetailView: View {
     @State private var newDividerName = ""
     @State private var sellingEntry: CollectionEntry?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.hidesPrices) private var hidesPrices
     /// The "Gone" section starts closed: it's history, not inventory, and on a collection sold
     /// down over years it would otherwise be the biggest thing on the screen.
     @State private var showingGone = false
@@ -269,7 +270,10 @@ struct GroupDetailView: View {
                     // apart by reading the options, which is why the mode's read "Tap opens …"
                     // rather than the shorter "Details" / "Edit" a header would have qualified.
                     Picker("Sort", selection: $sort) {
-                        ForEach(TinSort.allCases) { Text($0.rawValue).tag($0) }
+                        // No ranking by a number the screen won't show.
+                        ForEach(TinSort.allCases.filter { !(hidesPrices && $0 == .value) }) {
+                            Text($0.rawValue).tag($0)
+                        }
                     }
                     filterMenu
                     Picker("Layout", selection: $layout) {
@@ -475,13 +479,20 @@ struct GroupDetailView: View {
             Text(title)
                 .font(.system(.largeTitle, design: .serif).italic().weight(.semibold))
                 .multilineTextAlignment(.center)
-            Text(value.total, format: .currency(code: "USD"))
-                .font(.system(.title, design: .rounded).weight(.bold))
-                .monospacedDigit()
-                .contentTransition(.numericText())
-            Text("Priced \(value.pricedCards) of \(value.totalCards) \(value.totalCards == 1 ? "card" : "cards")")
-                .font(.footnote).foregroundStyle(.secondary)
-            if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
+            if hidesPrices {
+                Text("^[\(value.totalCards) card](inflect: true)")
+                    .font(.system(.title, design: .rounded).weight(.bold))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+            } else {
+                Text(value.total, format: .currency(code: "USD"))
+                    .font(.system(.title, design: .rounded).weight(.bold))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                Text("Priced \(value.pricedCards) of \(value.totalCards) \(value.totalCards == 1 ? "card" : "cards")")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24).padding(.horizontal)
@@ -514,7 +525,7 @@ struct GroupDetailView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             performanceRow
             // App-wide selector for the per-row change badges below — only when there's data.
-            if hasDeltas {
+            if hasDeltas, !hidesPrices {
                 HStack(spacing: 8) {
                     Text("Change vs").font(.caption2).foregroundStyle(.secondary)
                     DeltaPeriodPicker().fixedSize()
@@ -532,7 +543,7 @@ struct GroupDetailView: View {
     /// Casual tier has no `price_history` — no row at all (the portfolio screen itself
     /// explains the tier trade-off from the tin header).
     @ViewBuilder private var performanceRow: some View {
-        if tier != .casual, let series {
+        if tier != .casual, !hidesPrices, let series {
             if series.cardsWithHistory > 0 {
                 NavigationLink(value: PortfolioRoute(groupId: group?.id)) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -610,7 +621,7 @@ struct GroupDetailView: View {
     /// "Sold 4 Mar for $180" / "Gone 4 Mar" when there was no cash figure (a trade or a gift).
     private func goneCaption(_ entry: CollectionEntry) -> String {
         let when = (entry.soldAt ?? Date()).formatted(.dateTime.day().month(.abbreviated))
-        guard let got = entry.soldFor else { return "Gone \(when)" }
+        guard let got = entry.soldFor, !hidesPrices else { return entry.soldFor == nil ? "Gone \(when)" : "Sold \(when)" }
         return "Sold \(when) for \(got.formatted(.currency(code: "USD")))"
     }
 

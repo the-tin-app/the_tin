@@ -11,6 +11,7 @@ import SwiftUI
 /// each row keeps its own swipe actions — `.swipeActions` only works on a direct child of a List.
 struct SealedSectionHeader: View {
     let value: (total: Double, priced: Int, boxes: Int)
+    @Environment(\.hidesPrices) private var hidesPrices
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -19,13 +20,15 @@ struct SealedSectionHeader: View {
                     .font(.system(.caption, design: .serif).italic().weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(value.total, format: .currency(code: "USD").precision(.fractionLength(0)))
-                    .font(.system(.subheadline, design: .rounded).weight(.bold))
-                    .monospacedDigit()
+                if !hidesPrices {
+                    Text(value.total, format: .currency(code: "USD").precision(.fractionLength(0)))
+                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                        .monospacedDigit()
+                }
             }
             // Coverage stated whenever it's partial, for the same reason the card total states
             // it: a number that silently covers less than it appears to is worse than a gap.
-            Text(value.priced == value.boxes
+            Text(value.priced == value.boxes || hidesPrices
                  ? "^[\(value.boxes) box](inflect: true)"
                  : "^[\(value.boxes) box](inflect: true) · \(value.priced) priced")
                 .font(.caption2).foregroundStyle(.secondary)
@@ -41,6 +44,7 @@ struct SealedRow: View {
     /// nil when this catalog doesn't carry the product — an older artifact, or a product that has
     /// left the feed. The row still renders: you still own the box.
     let product: SealedProduct?
+    @Environment(\.hidesPrices) private var hidesPrices
 
     private var value: Double? {
         product?.marketUsd.map { $0 * Double(entry.qty) }
@@ -60,10 +64,12 @@ struct SealedRow: View {
             }
             Spacer(minLength: 8)
             // "—", never $0: a box this catalog can't price is unknown, not worthless.
-            Text(value.map { $0.formatted(.currency(code: "USD").precision(.fractionLength(0))) } ?? "—")
-                .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                .monospacedDigit()
-                .foregroundStyle(value == nil ? .secondary : .primary)
+            if !hidesPrices {
+                Text(value.map { $0.formatted(.currency(code: "USD").precision(.fractionLength(0))) } ?? "—")
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(value == nil ? .secondary : .primary)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))

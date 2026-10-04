@@ -76,6 +76,9 @@ private struct MainTabView: View {
     @State private var consumedIntentToken = 0
     @State private var consumedImportToken = 0
     @State private var consumedPinnedToken = 0
+    /// #198. Drives `\.hidesPrices` for the whole app, and drops the Movers tab — a screen that is
+    /// nothing but price movement has nothing to show in collecting mode.
+    @AppStorage(CollectingMode.storageKey) private var collectingMode = false
 
     var body: some View {
         TabView(selection: $selection) {
@@ -96,13 +99,17 @@ private struct MainTabView: View {
             .tabItem { Label("Discover", systemImage: "sparkles") }
             .tag(Tab.discover)
 
-            NavigationStack {
-                MoversView(model: collection, store: store, wants: model.wants)
-                    .statusBanners(model: model, store: store)
+            // Settings — the only place the mode is switched — opens from the Tin tab, so the
+            // selection is never Movers at the moment this tab disappears.
+            if !collectingMode {
+                NavigationStack {
+                    MoversView(model: collection, store: store, wants: model.wants)
+                        .statusBanners(model: model, store: store)
+                }
+                .appToasts(model: model, pack: pack)
+                .tabItem { Label("Movers", systemImage: "chart.line.uptrend.xyaxis") }
+                .tag(Tab.movers)
             }
-            .appToasts(model: model, pack: pack)
-            .tabItem { Label("Movers", systemImage: "chart.line.uptrend.xyaxis") }
-            .tag(Tab.movers)
 
             NavigationStack {
                 Group {
@@ -184,6 +191,7 @@ private struct MainTabView: View {
             .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
             .tag(Tab.scan)
         }
+        .environment(\.hidesPrices, collectingMode)
         .task {
             if searchModel == nil { searchModel = SearchModel(store: store) }
             consumeCardRoute()

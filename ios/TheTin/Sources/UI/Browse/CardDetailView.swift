@@ -198,6 +198,9 @@ struct CardDetailView: View {
     @State private var editingEntry: CollectionEntry?
     /// Label printing is owned by the app, not this screen — see `AppModel.labelRequest`.
     @Environment(AppModel.self) private var app: AppModel?
+    /// Collecting mode: the price block, history, "Grade it?" and the paid line all go. What's
+    /// left is the card — art, what it is, your copies, its population and where to find it.
+    @Environment(\.hidesPrices) private var hidesPrices
     @State private var editingWishlist = false
     @State private var selectedPrinting: String?
     @State private var gradingFee: Double = AppConfig.gradingFeeUsd
@@ -269,7 +272,7 @@ struct CardDetailView: View {
 
                 ownedSection
 
-                if let price = model.price {
+                if let price = model.price, !hidesPrices {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack { Text("Prices").font(.headline); Spacer(); AsOfLabel(date: price.asOf) }
                         // Multi-printing cards get a dropdown; the headline price is scoped to it.
@@ -415,7 +418,7 @@ struct CardDetailView: View {
                             }
                         }
                     }
-                } else {
+                } else if !hidesPrices {
                     Text("No sales data for this card").font(.subheadline).foregroundStyle(.secondary)
                 }
 
@@ -425,7 +428,7 @@ struct CardDetailView: View {
 
                 // "Grade it?" — grading-ROI verdict beside the population section. Hidden when
                 // compute() returns nil (no PSA rows, no graded prices, or no baseline).
-                if let roi = gradingROI {
+                if let roi = gradingROI, !hidesPrices {
                     gradeItSection(roi)
                 }
 
@@ -702,7 +705,7 @@ struct CardDetailView: View {
     /// exactly-priced gate, so a copy whose condition has no price of its own says nothing rather
     /// than comparing your money against a fallback estimate.
     @ViewBuilder private func paidLine(_ entry: CollectionEntry) -> some View {
-        if let paid = entry.pricePaid, paid > 0, let now = collection?.entryValue(entry) {
+        if let paid = entry.pricePaid, paid > 0, let now = collection?.entryValue(entry), !hidesPrices {
             let change = now - paid
             HStack(spacing: 4) {
                 Text("paid \(paid, format: .currency(code: "USD"))")
@@ -810,6 +813,10 @@ struct CardDetailView: View {
     /// read as an upsell — everything is free); empty otherwise → "not enough history yet".
     /// Unavailable → offline/error.
     @ViewBuilder private var priceHistorySection: some View {
+        if !hidesPrices { priceHistory }
+    }
+
+    @ViewBuilder private var priceHistory: some View {
         switch model.historyState {
         case .loading:
             ProgressView("Loading price history…")

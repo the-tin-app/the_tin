@@ -152,6 +152,7 @@ private struct Pocket: View {
     /// this `body` would run per pocket per render.
     let card: CardRecord?
     let price: Double?
+    @Environment(\.hidesPrices) private var hidesPrices
     /// ⚠️ Pass B is the slow stage, and a pocket gets its entry as soon as DETECT runs — so between the
     /// two it is unresolved with no options and no reason, which is byte-identical to "couldn't be read".
     /// Without this the grid tells the user a page of readable cards is unreadable, for several seconds,
@@ -212,7 +213,7 @@ private struct Pocket: View {
             Group {
                 if let entry, !entry.isResolved, entry.wishlistCandidate != nil {
                     Text("probably — tap").foregroundStyle(Color.statusWishlist)
-                } else if let price {
+                } else if let price, !hidesPrices {
                     Text(price, format: .currency(code: "USD")).monospacedDigit().lineLimit(1)
                 } else if entry == nil {
                     Text("empty").foregroundStyle(.secondary)
@@ -257,7 +258,7 @@ private struct Pocket: View {
         }
         var parts = [card?.name ?? entry.cardId ?? "Card"]
         if entry.onWishlist { parts.append("on your wishlist") }
-        if let price { parts.append(price.formatted(.currency(code: "USD"))) }
+        if let price, !hidesPrices { parts.append(price.formatted(.currency(code: "USD"))) }
         return parts.joined(separator: ", ")
     }
 }
@@ -273,6 +274,7 @@ struct BinderSlotSheet: View {
     let store: CatalogStore
     let slot: BinderSlot
     @State private var searching = false
+    @Environment(\.hidesPrices) private var hidesPrices
     /// Resolved ONCE in `.task`, never in `body`. ⚠️ `store.card(id:)` and `store.set(id:)` are
     /// synchronous GRDB reads, and `body` re-runs — building four options inline meant eight catalog
     /// reads per render of this sheet. Same class of mistake as the twelve synchronous reads that used
@@ -296,7 +298,7 @@ struct BinderSlotSheet: View {
                     if let set = model.setNameCache[cardId] {
                         LabeledContent("Set", value: set)
                     }
-                    if let price = model.priceCache[cardId] {
+                    if let price = model.priceCache[cardId], !hidesPrices {
                         LabeledContent("Price") {
                             Text(price, format: .currency(code: "USD")).monospacedDigit()
                         }
@@ -531,6 +533,7 @@ struct BinderListView: View {
 /// printing-specific claim (price included) may be made.
 private struct BinderRowView: View {
     let row: BinderRow
+    @Environment(\.hidesPrices) private var hidesPrices
 
     var body: some View {
         HStack(spacing: 10) {
@@ -554,7 +557,7 @@ private struct BinderRowView: View {
                 }
             }
             Spacer(minLength: 8)
-            if let price = row.priceUsd {
+            if let price = row.priceUsd, !hidesPrices {
                 Text(price, format: .currency(code: "USD")).monospacedDigit()
             }
         }

@@ -90,6 +90,7 @@ private struct EntryCardPage: View {
     let onEdit: (CollectionEntry) -> Void
     @State private var history: [PricePoint] = []
     @State private var confirmingRemove = false
+    @Environment(\.hidesPrices) private var hidesPrices
 
     private var card: CardRecord? { try? store.card(id: entry.cardId) }
     private var value: Double? { model.entryValue(entry) }
@@ -109,23 +110,25 @@ private struct EntryCardPage: View {
 
                 chips
 
-                VStack(spacing: 3) {
-                    if let value {
-                        Text(value, format: .currency(code: "USD"))
-                            .font(.system(.title, design: .rounded).weight(.bold))
-                            .monospacedDigit()
-                    } else {
-                        Text("No price data").font(.title3).foregroundStyle(.secondary)
-                    }
-                    if let paid = entry.pricePaid {
-                        paidDelta(paid: paid)
-                    }
-                    if value != nil, let asOf = model.priceAsOf {
-                        AsOfLabel(date: asOf)
+                if !hidesPrices {
+                    VStack(spacing: 3) {
+                        if let value {
+                            Text(value, format: .currency(code: "USD"))
+                                .font(.system(.title, design: .rounded).weight(.bold))
+                                .monospacedDigit()
+                        } else {
+                            Text("No price data").font(.title3).foregroundStyle(.secondary)
+                        }
+                        if let paid = entry.pricePaid {
+                            paidDelta(paid: paid)
+                        }
+                        if value != nil, let asOf = model.priceAsOf {
+                            AsOfLabel(date: asOf)
+                        }
                     }
                 }
 
-                if history.count > 1 {
+                if history.count > 1, !hidesPrices {
                     VStack(alignment: .leading, spacing: 4) {
                         // Accent blue, not the divider pastel: the raw-market series keeps one
                         // color everywhere (it's blue in PriceHistoryChart too).

@@ -8,11 +8,12 @@ import SwiftUI
 struct DeltaBadge: View {
     let record: DeltaRecord?
     @AppStorage("deltaPeriod") private var periodRaw: String = DeltaPeriod.d1.rawValue
+    @Environment(\.hidesPrices) private var hidesPrices
 
     private var period: DeltaPeriod { DeltaPeriod(rawValue: periodRaw) ?? .d1 }
 
     var body: some View {
-        if let record, record.hasData {
+        if let record, record.hasData, !hidesPrices {
             if let pct = record.pct(for: period) {
                 label(pct: pct).accessibilityLabel(accessibility(pct: pct))
             } else {
@@ -60,8 +61,14 @@ struct DeltaBadge: View {
 /// wherever badges are shown (the card-detail header, a divider's stats).
 struct DeltaPeriodPicker: View {
     @AppStorage("deltaPeriod") private var periodRaw: String = DeltaPeriod.d1.rawValue
+    @Environment(\.hidesPrices) private var hidesPrices
 
     var body: some View {
+        // No badges to pick a window for in collecting mode.
+        if !hidesPrices { picker }
+    }
+
+    private var picker: some View {
         Picker("Change vs", selection: $periodRaw) {
             ForEach(DeltaPeriod.allCases, id: \.rawValue) { period in
                 Text(period.short).tag(period.rawValue)

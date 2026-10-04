@@ -21,6 +21,23 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertNil(decoded.sparkline)
     }
 
+    /// Collecting mode (#198) rides in the snapshot, and a snapshot written before it existed —
+    /// already on disk in the app group when this ships — must still decode, as "not hidden".
+    func testCollectingModeRoundTripsAndOldSnapshotsStillDecode() throws {
+        var snap = WidgetSnapshot(totalValue: 10, cardCount: 3, delta7d: nil, sparkline: nil,
+                                  asOf: nil, updatedAt: Date(timeIntervalSince1970: 0))
+        snap.hidesPrices = true
+        let decoded = try WidgetShared.decoder()
+            .decode(WidgetSnapshot.self, from: WidgetShared.encoder().encode(snap))
+        XCTAssertEqual(decoded.hidesPrices, true)
+
+        var old = try JSONSerialization.jsonObject(with: WidgetShared.encoder().encode(snap)) as! [String: Any]
+        old.removeValue(forKey: "hidesPrices")
+        let legacy = try WidgetShared.decoder()
+            .decode(WidgetSnapshot.self, from: JSONSerialization.data(withJSONObject: old))
+        XCTAssertNil(legacy.hidesPrices)
+    }
+
     func testTinCurrencyMatchesHeaderRules() {
         // Same rule as the Collection header: cents under $1000, whole dollars at/above.
         let en = Locale(identifier: "en_US")

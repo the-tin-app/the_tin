@@ -323,6 +323,7 @@ private struct StagingTray: View {
     /// What the tin already knows about the newest capture; nil when the tray is empty.
     let knowledge: ScanKnowledge?
     let onReview: () -> Void
+    @Environment(\.hidesPrices) private var hidesPrices
     private var latestCard: CardRecord? {
         guard let id = staging.drafts.first?.cardId else { return nil }
         return try? store.card(id: id)
@@ -349,8 +350,10 @@ private struct StagingTray: View {
                 // The condition this total is priced at lives in the settings chip at the top of
                 // the screen, which is always visible — repeating it here was one more line in
                 // the viewfinder saying something already on screen.
-                Text(staging.totalUsd, format: .currency(code: "USD"))
-                    .font(.caption).foregroundStyle(.secondary)
+                if !hidesPrices {
+                    Text(staging.totalUsd, format: .currency(code: "USD"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 // Only when there's something to say — a card you neither own nor want stays quiet
                 // so the line means something when it does appear.
                 if let caption = knowledge?.caption {
@@ -373,7 +376,8 @@ private struct StagingTray: View {
     }
 
     private var trayAccessibilityLabel: String {
-        let base = "\(staging.drafts.count) \(staging.drafts.count == 1 ? "card" : "cards") staged, \(staging.totalUsd.formatted(.currency(code: "USD")))"
+        let base = "\(staging.drafts.count) \(staging.drafts.count == 1 ? "card" : "cards") staged"
+            + (hidesPrices ? "" : ", \(staging.totalUsd.formatted(.currency(code: "USD")))")
         guard let caption = knowledge?.caption else { return base }
         return base + ". Latest: " + caption
     }
