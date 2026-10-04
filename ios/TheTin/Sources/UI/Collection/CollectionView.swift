@@ -702,6 +702,26 @@ final class CollectionModel {
         catch { return false }
     }
 
+    /// Files a whole tray in one place (#199 — "I have to one-by-one put them in a divider").
+    /// A `.newGroup` destination is created ONCE and every draft lands in it; routing each draft
+    /// through `commitScan` would mint a divider per card. Returns the ids actually filed, so the
+    /// caller removes only those from the tray and a partial failure keeps the rest for a retry.
+    func commitScans(_ drafts: [ScanDraft], to destination: RouteDestination) async -> Set<String> {
+        let resolved: RouteDestination
+        if case .newGroup(let name) = destination {
+            let id = await createGroup(name: name)
+            guard !id.isEmpty else { return [] }
+            resolved = .group(id)
+        } else {
+            resolved = destination
+        }
+        var filed = Set<String>()
+        for draft in drafts {
+            if await commitScan(draft, to: resolved) { filed.insert(draft.id) }
+        }
+        return filed
+    }
+
     /// Copies a measured draft's scan plate into the entry's own photo store, so the picture the
     /// ratios were placed on survives filing.
     ///

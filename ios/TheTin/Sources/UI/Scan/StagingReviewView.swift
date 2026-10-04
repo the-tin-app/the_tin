@@ -17,9 +17,12 @@ struct StagingReviewView: View {
     /// Where this tray's scan plates live. Injectable so tests and previews can point elsewhere.
     var platesDir: URL = ScanStagingPaths.default().platesDir
     @State private var newGroupName = ""
-    @State private var showingNewGroup: ScanDraft?
+    /// Who the "New divider" alert is naming a divider for — one draft, or the whole tray.
+    @State private var showingNewGroup: FilingTarget?
     @State private var showingClearConfirm = false
-    @State private var commitError = false
+    @State private var routingAll = false
+    /// Drafts the last filing couldn't write; 0 = no error showing.
+    @State private var failedToFile = 0
     // Batch-fetched once on open (same tables the collection UI uses); drive draft repricing.
     @State private var prices: [String: PriceRecord] = [:]
     @State private var variantsByCard: [String: [VariantPrice]] = [:]
@@ -69,6 +72,20 @@ struct StagingReviewView: View {
         .navigationTitle("Review scans")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+            // #199: a stack of scans usually goes behind ONE divider, and filing them one row at a
+            // time was the whole complaint. Only with 2+ drafts — for one, the row's own "File
+            // in…" is the same thing. Dialog anchored on the button for the reason "Clear all"
+            // gives below.
+            ToolbarItem(placement: .bottomBar) {
+                if staging.drafts.count > 1 {
+                    Button("File all ^[\(staging.drafts.count) card](inflect: true) in…") { routingAll = true }
+                        .buttonStyle(.borderedProminent)
+                        .confirmationDialog("File all ^[\(staging.drafts.count) card](inflect: true) in…",
+                                            isPresented: $routingAll, titleVisibility: .visible) {
+                            routeAllDialogActions
+                        }
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 // Confirm before wiping the whole tray. Anchored on the button, NOT the root view:
                 // a second .confirmationDialog stacked on the root (already carries the routing one
@@ -104,9 +121,13 @@ struct StagingReviewView: View {
                 }
             }
         }
-        .alert("Couldn't file that card", isPresented: $commitError) {
+        .alert(failedToFile > 1 ? "Couldn't file \(failedToFile) cards" : "Couldn't file that card",
+               isPresented: commitErrorIsPresented) {
             commitErrorAlertActions
-        } message: { Text("It's still in your staging tray — try again.") }
+        } message: {
+            Text(failedToFile > 1 ? "They're still in your staging tray — try again."
+                                  : "It's still in your staging tray — try again.")
+        }
     }
 
     /// Bridges the optional `routing` draft to the `Bool` the confirmation dialog needs.
@@ -114,7 +135,11 @@ struct StagingReviewView: View {
         Binding(get: { routing != nil }, set: { if !$0 { routing = nil } })
     }
 
-    /// Bridges the optional `showingNewGroup` draft to the `Bool` the alert needs.
+    private var commitErrorIsPresented: Binding<Bool> {
+        Binding(get: { failedToFile > 0 }, set: { if !$0 { failedToFile = 0 } })
+    }
+
+    /// Bridges the optional `showingNewGroup` target to the `Bool` the alert needs.
     private var newGroupIsPresented: Binding<Bool> {
         Binding(get: { showingNewGroup != nil }, set: { if !$0 { showingNewGroup = nil } })
     }
@@ -126,19 +151,32 @@ struct StagingReviewView: View {
             ForEach(collection.groups) { g in
                 Button(g.name) { Task { await commit(draft, to: .group(g.id)) } }
             }
-            Button("New divider…") { showingNewGroup = draft; routing = nil }
+            Button("New divider…") { showingNewGroup = .one(draft); routing = nil }
             Button("Cancel", role: .cancel) { routing = nil }
         }
+    }
+
+    @ViewBuilder
+    private var routeAllDialogActions: some View {
+        Button("No divider") { Task { await commitAll(to: .tin) } }
+        ForEach(collection.groups) { g in
+            Button(g.name) { Task { await commitAll(to: .group(g.id)) } }
+        }
+        Button("New divider…") { showingNewGroup = .all }
+        Button("Cancel", role: .cancel) {}
     }
 
     @ViewBuilder
     private var newGroupAlertActions: some View {
         TextField("Name", text: $newGroupName)
         Button("Create") {
-            let draft = showingNewGroup; let name = newGroupName.trimmingCharacters(in: .whitespaces)
+            let target = showingNewGroup; let name = newGroupName.trimmingCharacters(in: .whitespaces)
             showingNewGroup = nil; newGroupName = ""
-            guard let draft, !name.isEmpty else { return }
-            Task { await commit(draft, to: .newGroup(name)) }
+            guard let target, !name.isEmpty else { return }
+            switch target {
+            case .one(let draft): Task { await commit(draft, to: .newGroup(name)) }
+            case .all: Task { await commitAll(to: .newGroup(name)) }
+            }
         }
         Button("Cancel", role: .cancel) { showingNewGroup = nil; newGroupName = "" }
     }
@@ -152,8 +190,16 @@ struct StagingReviewView: View {
         if await collection.commitScan(draft, to: destination) {
             staging.remove(id: draft.id)   // only leave staging on a confirmed write
         } else {
-            commitError = true             // keep the draft; let the user retry
+            failedToFile = 1               // keep the draft; let the user retry
         }
+    }
+
+    /// Same rule as `commit`, for the whole tray: only drafts with a confirmed write leave it.
+    private func commitAll(to destination: RouteDestination) async {
+        let drafts = staging.drafts
+        let filed = await collection.commitScans(drafts, to: destination)
+        for id in filed { staging.remove(id: id) }
+        failedToFile = drafts.count - filed.count
     }
 
     /// Batch-fetch the price tables for every staged card, then reprice all drafts with the
@@ -203,6 +249,12 @@ struct StagingReviewView: View {
                                  gradedByPrinting: gradedByPrintingByCard[d.cardId] ?? [])
         }
     }
+}
+
+/// What the review screen is filing: one row's draft, or every draft in the tray.
+private enum FilingTarget: Equatable {
+    case one(ScanDraft)
+    case all
 }
 
 private struct DraftRow: View {
