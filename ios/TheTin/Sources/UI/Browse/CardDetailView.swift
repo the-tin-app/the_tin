@@ -26,6 +26,8 @@ final class CardDetailModel {
     /// non-PSA equivalent (no non-PSA graded prices exist in the catalog).
     private(set) var populationGroups: [GraderPopulation] = []
     private(set) var deltas: [DeltaRecord] = []
+    /// "Abra → Kadabra → Alakazam" around this card's species; nil when there is no line to draw.
+    private(set) var evolution: EvolutionLine?
     private(set) var historyState: HistoryState = .loading
     /// The active catalog tier — drives how much price history the chart shows and its empty copy.
     let tier: CatalogTier
@@ -66,6 +68,7 @@ final class CardDetailModel {
         var population: [PopulationRow] = []
         var populationGroups: [GraderPopulation] = []
         var deltas: [DeltaRecord] = []
+        var evolution: EvolutionLine?
         var availableConditions: [Condition] = []
         var availableGrades: [Grade] = []
     }
@@ -92,6 +95,7 @@ final class CardDetailModel {
         population = out.population
         populationGroups = out.populationGroups
         deltas = out.deltas
+        evolution = out.evolution
         availableConditions = out.availableConditions
         availableGrades = out.availableGrades
         overlayCondition = out.availableConditions.contains(.nearMint) ? .nearMint : nil
@@ -111,6 +115,10 @@ final class CardDetailModel {
         out.population = (try? store.population(cardId: card.id)) ?? []
         out.populationGroups = (try? store.populationByGrader(cardId: card.id)) ?? []
         out.deltas = (try? store.deltas(cardId: card.id)) ?? []
+        // One species only: a tag team ("Pikachu & Zekrom") is two species and has no single line.
+        if let dex = (try? store.dexIds(forCards: [card.id]))?[card.id], dex.count == 1 {
+            out.evolution = store.evolutionLine(forDex: dex[0])
+        }
         if tier == .expert {
             out.availableConditions = (try? store.availableConditions(cardId: card.id)) ?? []
             out.availableGrades = (try? store.availableGrades(cardId: card.id)) ?? []
@@ -171,15 +179,18 @@ struct CardDetailView: View {
     /// Scopes the printing menu and tints the matching condition tile; nil when the route that
     /// opened this screen knew nothing about a particular copy.
     var highlight: CardHighlight? = nil
+    /// Whether a copy's divider name links to the divider. Off over the scanner, see `dividerLink`.
+    var linksDividers = true
 
     init(model: CardDetailModel, store: CatalogStore,
          collection: CollectionModel? = nil, wants: WantsModel? = nil,
-         highlight: CardHighlight? = nil) {
+         highlight: CardHighlight? = nil, linksDividers: Bool = true) {
         _model = State(wrappedValue: model)
         self.store = store
         self.collection = collection
         self.wants = wants
         self.highlight = highlight
+        self.linksDividers = linksDividers
     }
 
     @State private var showingAddSheet = false
@@ -246,7 +257,14 @@ struct CardDetailView: View {
                     }
                     Text("#\(model.card.number) · \(model.card.rarity ?? "—") · \(model.card.artist ?? "Unknown artist")")
                         .font(.subheadline).foregroundStyle(.secondary)
-                    if let hp = model.card.hp { Text("HP \(hp)").font(.subheadline).foregroundStyle(.secondary) }
+                    // What kind of card it is (#197): "Stage 1 · Psychic · HP 80". Each part only
+                    // when the catalog has it — a Trainer has none of the three.
+                    let kind = [model.card.detail?.stage,
+                                model.card.types.isEmpty ? nil : model.card.types.joined(separator: "/"),
+                                model.card.hp.map { "HP \($0)" }].compactMap { $0 }
+                    if !kind.isEmpty {
+                        Text(kind.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
+                    }
                 }
 
                 ownedSection
@@ -402,6 +420,8 @@ struct CardDetailView: View {
                 }
 
                 priceHistorySection
+
+                evolutionSection
 
                 // "Grade it?" — grading-ROI verdict beside the population section. Hidden when
                 // compute() returns nil (no PSA rows, no graded prices, or no baseline).
@@ -559,7 +579,8 @@ struct CardDetailView: View {
     /// "In your tin" — the card-shop answer to *do I already own this?*. Without it the only
     /// ownership signal lived on the grids you tapped through, never on the card itself, so the
     /// question could only be answered by leaving the screen and searching the tin. Each copy
-    /// says what it is and where it's filed, and taps through to its edit sheet.
+    /// says what it is and taps through to its edit sheet; where it's filed is a link to that
+    /// divider (#197 — "a button so I can go directly to where the card is").
     @ViewBuilder private var ownedSection: some View {
         let entries = ownedEntries
         if !entries.isEmpty {
@@ -569,42 +590,43 @@ struct CardDetailView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tint)
                 ForEach(entries) { entry in
-                    HStack(spacing: 8) {
-                        Button { editingEntry = entry } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(sleeveText(entry)).font(.caption)
-                                    Text("·").font(.caption).foregroundStyle(.tertiary)
-                                    Text(dividerName(entry)).font(.caption).foregroundStyle(.secondary)
-                                    Spacer()
-                                    // THIS copy's change — the number its tin row and Movers
-                                    // showed. The headline above quotes the printing's market;
-                                    // a scanned copy is priced on printing × condition, a
-                                    // different series, so without this the % you tapped on
-                                    // appeared nowhere on the screen it opened.
-                                    DeltaBadge(record: GroupStats.unitDelta(entry, records: model.deltas))
-                                    Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 8) {
+                            Button { editingEntry = entry } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(sleeveText(entry)).font(.caption)
+                                        Spacer()
+                                        // THIS copy's change — the number its tin row and Movers
+                                        // showed. The headline above quotes the printing's market;
+                                        // a scanned copy is priced on printing × condition, a
+                                        // different series, so without this the % you tapped on
+                                        // appeared nowhere on the screen it opened.
+                                        DeltaBadge(record: GroupStats.unitDelta(entry, records: model.deltas))
+                                        Image(systemName: "pencil").font(.caption2).foregroundStyle(.tertiary)
+                                    }
+                                    paidLine(entry)
                                 }
-                                paidLine(entry)
+                                .contentShape(Rectangle())
                             }
-                            .contentShape(Rectangle())
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Edit this copy")
+                            // A sibling of the edit button, not a glyph inside it: a tappable control
+                            // nested in another button is a hit-testing coin flip. This is the screen
+                            // you are on right after adding a card, so the verb belongs here rather
+                            // than back on the list you'd have to navigate to.
+                            Button {
+                                app?.labelRequest = LabelPrintRequest(title: model.card.name,
+                                                                      entries: [entry])
+                            } label: {
+                                Image(systemName: "qrcode").font(.caption)
+                            }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.small)
+                            .accessibilityLabel("Print label for this copy")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("Edit this copy")
-                        // A sibling of the edit button, not a glyph inside it: a tappable control
-                        // nested in another button is a hit-testing coin flip. This is the screen
-                        // you are on right after adding a card, so the verb belongs here rather
-                        // than back on the list you'd have to navigate to.
-                        Button {
-                            app?.labelRequest = LabelPrintRequest(title: model.card.name,
-                                                                  entries: [entry])
-                        } label: {
-                            Image(systemName: "qrcode").font(.caption)
-                        }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.small)
-                        .accessibilityLabel("Print label for this copy")
+                        dividerLink(entry)
                     }
                 }
             }
@@ -706,6 +728,76 @@ struct CardDetailView: View {
         else if let c = entry.condition { parts.append(c) }
         if let via = entry.acquiredViaValue { parts.append(via.shortLabel) }
         return parts.joined(separator: " · ")
+    }
+
+    /// "Abra → Kadabra → Alakazam" (#197). Each species opens its Pokédex page — every card of it,
+    /// which is also the ask's "other Abra cards". Pushed by destination, not by value: this screen
+    /// lives in seven stacks and only the Pokédex list's registers `DexID`.
+    @ViewBuilder private var evolutionSection: some View {
+        if let line = model.evolution {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Evolution").font(.headline)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(line.stages.enumerated()), id: \.offset) { index, stage in
+                            if index > 0 {
+                                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                                    .accessibilityHidden(true)
+                            }
+                            // A branch stacks, up to three to a column, so "Gloom → Vileplume /
+                            // Bellossom" can't read as Bellossom evolving from Vileplume — and
+                            // Eevee's eight stay a block rather than a screen-tall list.
+                            HStack(alignment: .top, spacing: 6) {
+                                ForEach(Array(stride(from: 0, to: stage.count, by: 3)), id: \.self) { start in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        ForEach(stage[start..<min(start + 3, stage.count)]) { mon in
+                                            evolutionChip(mon, isCurrent: mon.dexId == line.current)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func evolutionChip(_ mon: PokemonRecord, isCurrent: Bool) -> some View {
+        NavigationLink {
+            SpeciesPage(mon: mon, store: store, collection: collection, wants: wants)
+        } label: {
+            Text(mon.name)
+                .font(.subheadline.weight(isCurrent ? .semibold : .regular))
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(isCurrent ? AnyShapeStyle(.tint.opacity(0.15)) : AnyShapeStyle(.quaternary.opacity(0.4)),
+                            in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        .accessibilityHint("Shows every \(mon.name) card")
+    }
+
+    /// Where this copy is filed. A sibling under the edit button, never inside it — same
+    /// hit-testing reason as the label button. Plain text where a jump can't land: no app model,
+    /// or a screen presented over the scanner (`linksDividers`), where switching to the Tin tab
+    /// would happen behind the sheet.
+    @ViewBuilder private func dividerLink(_ entry: CollectionEntry) -> some View {
+        let name = Text(dividerName(entry)).font(.caption)
+        if let app, linksDividers {
+            Button { app.openPinned(.divider(entry.groupId)) } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "rectangle.stack").font(.caption2)
+                    name
+                    Image(systemName: "chevron.right").font(.caption2)
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .accessibilityHint("Opens this divider in your tin")
+        } else {
+            name.foregroundStyle(.secondary)
+        }
     }
 
     private func dividerName(_ entry: CollectionEntry) -> String {
@@ -1056,5 +1148,30 @@ private struct PriceTile: View {
                 RoundedRectangle(cornerRadius: 10).strokeBorder(Color.accentColor, lineWidth: 2)
             }
         }
+    }
+}
+
+/// A species' Pokédex page, built only once it's on screen. `NavigationLink(destination:)`
+/// constructs its destination with the link, and `PokemonDetailModel.init` reads the catalog
+/// synchronously — so building it inline ran those reads for every evolution chip on every pass
+/// of the card screen's body, on the main thread.
+private struct SpeciesPage: View {
+    let mon: PokemonRecord
+    let store: CatalogStore
+    let collection: CollectionModel?
+    let wants: WantsModel?
+    @State private var model: PokemonDetailModel?
+
+    var body: some View {
+        Group {
+            if let model {
+                PokemonDetailView(model: model, entries: collection?.entries ?? [], store: store,
+                                  collection: collection, wants: wants)
+            } else {
+                Color.clear
+            }
+        }
+        .navigationTitle(mon.name)   // drawn before the model lands; the page sets the same one
+        .onAppear { if model == nil { model = PokemonDetailModel(store: store, mon: mon) } }
     }
 }
