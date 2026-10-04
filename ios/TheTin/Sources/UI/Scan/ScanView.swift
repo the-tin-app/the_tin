@@ -281,9 +281,11 @@ struct ScanView: View {
     @ViewBuilder private func lookUpSheet(_ id: CardID) -> some View {
         if let card = try? store.card(id: id.raw) {
             NavigationStack {
+                // No divider links over the camera: the jump lands on the Tin tab, behind this sheet.
                 CardDetailView(model: CardDetailModel(store: store, card: card,
                                                       history: CatalogPriceHistory(store: store)),
-                               store: store, collection: collection, wants: wants)
+                               store: store, collection: collection, wants: wants,
+                               linksDividers: false)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Done") { Task { await model.clearLookedUpCard() } }

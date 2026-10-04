@@ -558,6 +558,72 @@ final class CatalogStore {
         }
     }
 
+    /// The evolution line around one species, read out of the cards' printed "Evolves from"
+    /// (see `EvolutionLine`). nil on catalogs without the `detail` column — the queries throw and
+    /// each hop reads as "nothing there".
+    func evolutionLine(forDex dexId: Int) -> EvolutionLine? {
+        Evolution.line(for: dexId, lookup: Evolution.Lookup(
+            species: { [self] id in try? self.species(dexId: id) },
+            evolvesFrom: { [self] id in try? self.preEvolution(ofDex: id) },
+            evolvesInto: { [self] id in (try? self.evolutions(ofDex: id)) ?? [] }))
+    }
+
+    private func species(dexId: Int) throws -> PokemonRecord? {
+        try dbQueue.read { db in
+            try Row.fetchOne(db, sql: "SELECT dex_id, name, rep_card_id FROM pokemon WHERE dex_id = ?",
+                             arguments: [dexId]).map(Self.pokemonRecord)
+        }
+    }
+
+    /// The species `dexId` evolves from: the most common "Evolves from" across its cards (one
+    /// odd printing must not rewrite the line), resolved to a species by name.
+    private func preEvolution(ofDex dexId: Int) throws -> PokemonRecord? {
+        try dbQueue.read { db in
+            let names = try String.fetchAll(db, sql: """
+                SELECT json_extract(c.detail, '$.evolveFrom') AS ev
+                FROM card c JOIN card_dex d ON d.card_id = c.id
+                WHERE d.dex_id = ? AND json_extract(c.detail, '$.evolveFrom') != ''
+                GROUP BY ev ORDER BY COUNT(*) DESC, ev LIMIT 3
+                """, arguments: [dexId])
+            for name in names {
+                if let mon = try Self.species(named: name, db: db), mon.dexId != dexId { return mon }
+            }
+            return nil
+        }
+    }
+
+    /// Species whose cards say they evolve from `dexId`'s species. The suffix leg is what lets
+    /// "Dark Kadabra" and "Galarian Ponyta" count as their species.
+    private func evolutions(ofDex dexId: Int) throws -> [PokemonRecord] {
+        try dbQueue.read { db in
+            guard let name = try String.fetchOne(db, sql: "SELECT name FROM pokemon WHERE dex_id = ?",
+                                                 arguments: [dexId]) else { return [] }
+            return try Row.fetchAll(db, sql: """
+                SELECT DISTINCT p.dex_id, p.name, p.rep_card_id
+                FROM card c JOIN card_dex d ON d.card_id = c.id JOIN pokemon p ON p.dex_id = d.dex_id
+                WHERE d.dex_id != ?
+                  AND (json_extract(c.detail, '$.evolveFrom') = ? COLLATE NOCASE
+                       OR json_extract(c.detail, '$.evolveFrom') LIKE '% ' || ?)
+                ORDER BY p.dex_id
+                """, arguments: [dexId, name, name]).map(Self.pokemonRecord)
+        }
+    }
+
+    /// A printed "Evolves from" name → its species. Exact first; then the longest species name the
+    /// string ENDS with after a space, so a prefixed form ("Dark Kadabra", "Alolan Vulpix") lands on
+    /// its species while "Charizard V" (a different mechanic, same species) resolves to nothing.
+    private static func species(named name: String, db: Database) throws -> PokemonRecord? {
+        try Row.fetchOne(db, sql: """
+            SELECT dex_id, name, rep_card_id FROM pokemon
+            WHERE name = ?1 COLLATE NOCASE OR ?1 LIKE '% ' || name
+            ORDER BY (name = ?1 COLLATE NOCASE) DESC, LENGTH(name) DESC LIMIT 1
+            """, arguments: [name]).map(pokemonRecord)
+    }
+
+    private static func pokemonRecord(_ r: Row) -> PokemonRecord {
+        PokemonRecord(dexId: r["dex_id"], name: r["name"], repCardId: r["rep_card_id"])
+    }
+
     /// card_id → dex_ids owning it (a card may map to more than one species). Used to
     /// build per-species owned counts from collection entries without a per-row join.
     func dexIds(forCards ids: [String]) throws -> [String: [Int]] {

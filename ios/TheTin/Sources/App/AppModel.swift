@@ -68,9 +68,10 @@ final class AppModel {
         }
     }
 
-    /// Which pinned row a confirmation points at. These are the two rows under the dividers that
-    /// a state change can send a card to.
-    enum PinnedRoute: Equatable { case wishlist, trade }
+    /// A row in the Tin a confirmation or a link points at: the two pinned rows under the
+    /// dividers that a state change can send a card to, or a divider itself (card detail's "in
+    /// <divider>", #197). `divider("")` is No divider, which lives at the top of Everything.
+    enum PinnedRoute: Equatable { case wishlist, trade, divider(String) }
 
     /// A short-lived "that worked — here's where it went" toast with one navigation action.
     ///

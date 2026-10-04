@@ -289,6 +289,8 @@ private struct MainTabView: View {
         switch route {
         case .trade: tinPath.append(TradeRoute())
         case .wishlist: tinPath.append(WantedRoute())
+        case .divider(let id) where id.isEmpty: tinPath.append(TinAllCardsRoute())
+        case .divider(let id): tinPath.append(id)
         }
     }
 }
