@@ -181,6 +181,42 @@ final class CollectionModelTests: XCTestCase {
         XCTAssertNil(repo.entries.first?.photos)
     }
 
+    /// #199: filing a whole tray into a NEW divider makes one divider, not one per card.
+    func testCommitScansToANewDividerCreatesItOnce() async throws {
+        let repo = InMemoryCollectionRepository()
+        let model = CollectionModel(repository: repo, store: try FixtureCatalog.make())
+        let drafts = [ScanDraft(id: "a", cardId: "ex6-58", variant: .holo, condition: .nm,
+                                qty: 1, addedAt: Date(), priceUsdSnapshot: nil),
+                      ScanDraft(id: "b", cardId: "ex8-63", variant: .regular, condition: .lp,
+                                qty: 2, addedAt: Date(), priceUsdSnapshot: nil),
+                      ScanDraft(id: "c", cardId: "ex6-58", variant: .reverseHolo, condition: .nm,
+                                qty: 1, addedAt: Date(), priceUsdSnapshot: nil)]
+        let filed = await model.commitScans(drafts, to: .newGroup("Water"))
+        XCTAssertEqual(filed, ["a", "b", "c"])
+        XCTAssertEqual(repo.groups.map(\.name), ["Water"])
+        let gid = try XCTUnwrap(repo.groups.first).id
+        XCTAssertEqual(repo.entries.count, 3)
+        XCTAssertTrue(repo.entries.allSatisfy { $0.groupId == gid })
+    }
+
+    /// An existing divider or No divider is passed straight through; each draft keeps its own
+    /// printing, condition and quantity.
+    func testCommitScansKeepsEachDraftsOwnDetails() async throws {
+        let repo = InMemoryCollectionRepository()
+        let model = CollectionModel(repository: repo, store: try FixtureCatalog.make())
+        let drafts = [ScanDraft(id: "a", cardId: "ex6-58", variant: .holo, condition: .nm,
+                                qty: 1, addedAt: Date(), priceUsdSnapshot: nil),
+                      ScanDraft(id: "b", cardId: "ex8-63", variant: .regular, condition: .lp,
+                                qty: 2, addedAt: Date(), priceUsdSnapshot: nil)]
+        let filed = await model.commitScans(drafts, to: .tin)
+        XCTAssertEqual(filed, ["a", "b"])
+        XCTAssertTrue(repo.groups.isEmpty)
+        let lp = try XCTUnwrap(repo.entries.first { $0.cardId == "ex8-63" })
+        XCTAssertEqual(lp.groupId, "")
+        XCTAssertEqual(lp.condition, "LP")
+        XCTAssertEqual(lp.qty, 2)
+    }
+
     func testCommitScanToTinUsesEmptyGroupId() async throws {
         let repo = InMemoryCollectionRepository()
         let model = CollectionModel(repository: repo, store: try FixtureCatalog.make())
