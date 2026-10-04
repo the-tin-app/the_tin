@@ -44,10 +44,12 @@ struct CollectionEntryRow: View {
 /// performance over time, then the cards themselves. The swipe deck (`GroupPagerView`) is the
 /// explicit "Flip through" mode. Searchable, so "do I own this?" is answerable from any list.
 struct GroupDetailView: View {
-    /// Entry orderings offered by the toolbar sort menu.
-    private enum EntrySort: String, CaseIterable, Identifiable {
-        case newest = "Newest first", value = "Highest value", name = "A to Z"
+    /// List rows, or a grid of card art (#193). Persisted, unlike the sort and filter: it's how
+    /// you like to look at cards, not a question you're asking this one divider.
+    private enum Layout: String, CaseIterable, Identifiable {
+        case list = "Show as list", grid = "Show as grid"
         var id: String { rawValue }
+        var symbol: String { self == .list ? "list.bullet" : "square.grid.2x2" }
     }
 
     /// What tapping a row does. A mode rather than a per-row chip: the chip had to be squeezed in
@@ -76,7 +78,9 @@ struct GroupDetailView: View {
     @Bindable var model: CollectionModel
     let group: CardGroup?   // nil = the whole tin ("Everything")
     let store: CatalogStore
-    @State private var sort: EntrySort = .newest
+    @State private var sort: TinSort = .newest
+    @State private var filter = TinFilter()
+    @AppStorage("tinLayout") private var layout: Layout = .list
     @State private var rowTap: RowTap = .details
     @State private var searchText = ""
     @State private var editingEntry: CollectionEntry?
@@ -99,34 +103,8 @@ struct GroupDetailView: View {
     @State private var showingGone = false
 
     var body: some View {
-        List(selection: listSelection) {
-            if searchText.isEmpty {
-                if scope.isEmpty {
-                    emptyState   // instead of a "$0.00 · Priced 0 of 0" ledger for nothing
-                } else {
-                // `EditCardTip` can't anchor to the toolbar Menu it explains — `.popoverTip` on a
-                // `Menu` inside a `ToolbarItem` doesn't present (confirmed by direct test), and
-                // there's no lower control to point at instead. Inline at the top of the list, so
-                // it explains the menu above from below rather than pointing at it.
-                if !isSelecting { TipView(EditCardTip()) }
-                // While selecting, the cards ARE the screen: the plaque + performance chart push
-                // the first row below the fold, which reads as "there's nothing here to tick".
-                if !isSelecting { statsSection }
-                if let group {
-                    entriesSection(sortedAll(model.entries(in: group.id)), header: nil, showDivider: false)
-                } else {
-                    entriesSection(sortedAll(model.ungroupedEntries), header: "No divider", showDivider: false)
-                    entriesSection(sortedAll(model.entries.filter { !$0.groupId.isEmpty }),
-                                   header: "Behind dividers", showDivider: true)
-                }
-                }
-                // Outside the empty branch on purpose: sell your last card and the stack IS
-                // empty of things you own, but the history of what was there is exactly what
-                // you'd have come looking for.
-                if !isSelecting { goneSection }
-            } else {
-                searchResults
-            }
+        Group {
+            if showsGrid { gridBody } else { listBody }
         }
         .searchable(text: $searchText, prompt: group == nil ? "Search by name, set, or number" : "Search this divider")
         // The title carries the selection state — the count is the feedback that ticking worked,
@@ -188,6 +166,43 @@ struct GroupDetailView: View {
         }
     }
 
+    /// Grid only when there's a grid to show: selecting ticks rows in the list (a grid has no
+    /// selection), and search results are a list in either mode.
+    private var showsGrid: Bool { layout == .grid && !isSelecting && searchText.isEmpty && !scope.isEmpty }
+
+    private var listBody: some View {
+        List(selection: listSelection) {
+            if searchText.isEmpty {
+                if scope.isEmpty {
+                    emptyState   // instead of a "$0.00 · Priced 0 of 0" ledger for nothing
+                } else {
+                // `EditCardTip` can't anchor to the toolbar Menu it explains — `.popoverTip` on a
+                // `Menu` inside a `ToolbarItem` doesn't present (confirmed by direct test), and
+                // there's no lower control to point at instead. Inline at the top of the list, so
+                // it explains the menu above from below rather than pointing at it.
+                if !isSelecting { TipView(EditCardTip()) }
+                // While selecting, the cards ARE the screen: the plaque + performance chart push
+                // the first row below the fold, which reads as "there's nothing here to tick".
+                if !isSelecting { statsSection }
+                if filter.isActive { Section { filterSummary } }
+                if let group {
+                    entriesSection(sortedAll(visible(model.entries(in: group.id))), header: nil, showDivider: false)
+                } else {
+                    entriesSection(sortedAll(visible(model.ungroupedEntries)), header: "No divider", showDivider: false)
+                    entriesSection(sortedAll(visible(model.entries.filter { !$0.groupId.isEmpty })),
+                                   header: "Behind dividers", showDivider: true)
+                }
+                }
+                // Outside the empty branch on purpose: sell your last card and the stack IS
+                // empty of things you own, but the history of what was there is exactly what
+                // you'd have come looking for.
+                if !isSelecting { goneSection }
+            } else {
+                searchResults
+            }
+        }
+    }
+
     private var scope: [CollectionEntry] {
         group.map { model.entries(in: $0.id) } ?? model.entries
     }
@@ -221,7 +236,7 @@ struct GroupDetailView: View {
                     // is. So the MENU stays live and the three actions carry their own disabled
                     // state.
                     Button(allSelected ? "Deselect All" : "Select All") {
-                        selection = allSelected ? [] : Set(scope.map(\.id))
+                        selection = allSelected ? [] : Set(visibleScope.map(\.id))
                     }
                     Divider()
                     Button { choosingDestination = true }
@@ -254,7 +269,11 @@ struct GroupDetailView: View {
                     // apart by reading the options, which is why the mode's read "Tap opens …"
                     // rather than the shorter "Details" / "Edit" a header would have qualified.
                     Picker("Sort", selection: $sort) {
-                        ForEach(EntrySort.allCases) { Text($0.rawValue).tag($0) }
+                        ForEach(TinSort.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    filterMenu
+                    Picker("Layout", selection: $layout) {
+                        ForEach(Layout.allCases) { Label($0.rawValue, systemImage: $0.symbol).tag($0) }
                     }
                     Picker("Tapping a card", selection: $rowTap) {
                         ForEach(RowTap.allCases) { Text($0.rawValue).tag($0) }
@@ -264,9 +283,12 @@ struct GroupDetailView: View {
                     // is already truncated to "Test di…" by the Print and Select items beside it,
                     // so the "· Editing" suffix below is invisible on iPhone — it earns its keep
                     // only where the divider name is short or the screen is an iPad.
+                    // Filled while a filter is on, the same way edit mode fills the glyph: the list
+                    // is narrowed and the button is where you'd go to undo it.
                     Label("View options",
                           systemImage: rowTap == .edit ? "pencil.circle.fill"
-                                                       : "line.3.horizontal.decrease.circle")
+                                       : filter.isActive ? "line.3.horizontal.decrease.circle.fill"
+                                                         : "line.3.horizontal.decrease.circle")
                 }
                 .accessibilityLabel(rowTap == .edit ? "View options, tapping a card opens edit"
                                                     : "View options")
@@ -310,6 +332,38 @@ struct GroupDetailView: View {
         }
     }
 
+    /// One submenu per facet, each offering only values present in this list. Built from `scope`,
+    /// not the filtered list, so picking Psychic doesn't erase every other type from the menu.
+    @ViewBuilder private var filterMenu: some View {
+        let options = TinFilter.options(for: scope.compactMap { card($0.cardId) })
+        Menu {
+            facet("Type", any: "Any type", options.types, $filter.type)
+            facet("Stage", any: "Any stage", options.stages, $filter.stage)
+            facet("Weakness", any: "Any weakness", options.weaknesses, $filter.weakness)
+            facet("Rarity", any: "Any rarity", options.rarities, $filter.rarity)
+            if filter.isActive {
+                Divider()
+                Button("Clear filters", role: .destructive) { filter = TinFilter() }
+            }
+        } label: {
+            Label(filter.isActive ? "Filter: \(filter.summary)" : "Filter",
+                  systemImage: "line.3.horizontal.decrease")
+        }
+    }
+
+    /// `.menu` style, so the facet is a titled submenu ("Type ›") — an inline picker in a menu
+    /// renders its options with no label at all (see the note on the Sort picker above).
+    @ViewBuilder private func facet(_ title: String, any: String, _ values: [String],
+                                    _ selection: Binding<String?>) -> some View {
+        if !values.isEmpty {
+            Picker(title, selection: selection) {
+                Text(any).tag(String?.none)
+                ForEach(values, id: \.self) { Text($0).tag(Optional($0)) }
+            }
+            .pickerStyle(.menu)
+        }
+    }
+
     /// "1 card" / "3 cards". Spelled out rather than `^[…](inflect: true)`: that markup only
     /// resolves where SwiftUI takes a LocalizedStringKey, and dialog titles / navigationTitle
     /// take a plain String — they render the raw markup instead. Matches how the rest of the
@@ -317,7 +371,7 @@ struct GroupDetailView: View {
     private static func cardCount(_ n: Int) -> String { "\(n) \(n == 1 ? "card" : "cards")" }
 
     private var isSelecting: Bool { editMode == .active }
-    private var allSelected: Bool { !scope.isEmpty && selection.count == scope.count }
+    private var allSelected: Bool { !visibleScope.isEmpty && selection.count == visibleScope.count }
 
     /// The ticked rows, in the order they're listed. Drawn from `scope` (which excludes sold
     /// copies) rather than from the selection set, so a stale id left by a row that disappeared
@@ -413,30 +467,51 @@ struct GroupDetailView: View {
         }
     }
 
-    /// The divider tab blown up into a title plaque (kept from the old pager summary),
-    /// then this stack's performance and the flip-through mode switch.
+    /// The divider tab blown up into a title plaque (kept from the old pager summary). Shared by
+    /// the list's stats section and the top of the grid.
+    private var plaque: some View {
+        let value = group.map { model.groupValue($0.id) } ?? model.tinValue
+        return VStack(spacing: 6) {
+            Text(title)
+                .font(.system(.largeTitle, design: .serif).italic().weight(.semibold))
+                .multilineTextAlignment(.center)
+            Text(value.total, format: .currency(code: "USD"))
+                .font(.system(.title, design: .rounded).weight(.bold))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+            Text("Priced \(value.pricedCards) of \(value.totalCards) \(value.totalCards == 1 ? "card" : "cards")")
+                .font(.footnote).foregroundStyle(.secondary)
+            if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24).padding(.horizontal)
+        .background(color.opacity(0.3), in: UnevenRoundedRectangle(
+            topLeadingRadius: 18, bottomLeadingRadius: 6,
+            bottomTrailingRadius: 6, topTrailingRadius: 18))
+    }
+
+    /// "Showing 12 of 240 · Psychic · Stage 1 — Clear". Always on screen while a filter is, so a
+    /// short list can't read as cards gone missing.
+    private var filterSummary: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Showing \(visibleScope.count) of \(Self.cardCount(scope.count))")
+                    .font(.subheadline.weight(.medium))
+                Text(filter.summary).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Clear") { filter = TinFilter() }
+                .buttonStyle(.bordered).controlSize(.small)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Then this stack's performance and the flip-through mode switch.
     private var statsSection: some View {
         Section {
-            let value = group.map { model.groupValue($0.id) } ?? model.tinValue
-            VStack(spacing: 6) {
-                Text(title)
-                    .font(.system(.largeTitle, design: .serif).italic().weight(.semibold))
-                    .multilineTextAlignment(.center)
-                Text(value.total, format: .currency(code: "USD"))
-                    .font(.system(.title, design: .rounded).weight(.bold))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                Text("Priced \(value.pricedCards) of \(value.totalCards) \(value.totalCards == 1 ? "card" : "cards")")
-                    .font(.footnote).foregroundStyle(.secondary)
-                if let asOf = try? store.priceAsOf() { AsOfLabel(date: asOf) }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 24).padding(.horizontal)
-            .background(color.opacity(0.3), in: UnevenRoundedRectangle(
-                topLeadingRadius: 18, bottomLeadingRadius: 6,
-                bottomTrailingRadius: 6, topTrailingRadius: 18))
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            plaque
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             performanceRow
             // App-wide selector for the per-row change badges below — only when there's data.
             if hasDeltas {
@@ -623,16 +698,69 @@ struct GroupDetailView: View {
             Button { printLabel(for: entry) } label: { Label("Label", systemImage: "qrcode") }
                 .tint(.teal)
         }
-        .contextMenu {
-            Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
-            // The one edit common enough to deserve skipping the form entirely: pulling a second
-            // identical card out of a pack cost a tap, a mode switch, a sheet, a stepper and Save.
-            Button { Task { await model.addCopy(entry) } } label: {
-                Label("Add another copy", systemImage: "plus")
-            }
-            Button { printLabel(for: entry) } label: { Label("Print label", systemImage: "qrcode") }
-            Button { sellingEntry = entry } label: { Label("Sold or traded…", systemImage: "bag") }
+        .contextMenu { entryMenu(entry) }
+    }
+
+    /// The long-press menu, shared by list rows and grid tiles.
+    @ViewBuilder private func entryMenu(_ entry: CollectionEntry) -> some View {
+        Button { editingEntry = entry } label: { Label("Edit entry", systemImage: "pencil") }
+        // The one edit common enough to deserve skipping the form entirely: pulling a second
+        // identical card out of a pack cost a tap, a mode switch, a sheet, a stepper and Save.
+        Button { Task { await model.addCopy(entry) } } label: {
+            Label("Add another copy", systemImage: "plus")
         }
+        Button { printLabel(for: entry) } label: { Label("Print label", systemImage: "qrcode") }
+        Button { sellingEntry = entry } label: { Label("Sold or traded…", systemImage: "bag") }
+    }
+
+    // MARK: grid (#193)
+
+    private static let gridColumns = [GridItem(.adaptive(minimum: 104), spacing: 12, alignment: .top)]
+
+    /// The cards as art, the way the set and Pokédex grids show them — a ScrollView, not the List:
+    /// a List row can't hold a grid of independent links. No swipe actions here, so everything
+    /// they offer is on the long press, and Select switches back to the list to tick rows.
+    private var gridBody: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                plaque
+                if filter.isActive { filterSummary }
+                if let group {
+                    gridSection(sortedAll(visible(model.entries(in: group.id))), header: nil)
+                } else {
+                    gridSection(sortedAll(visible(model.ungroupedEntries)), header: "No divider")
+                    gridSection(sortedAll(visible(model.entries.filter { !$0.groupId.isEmpty })),
+                                header: "Behind dividers")
+                }
+            }
+            .padding()
+        }
+    }
+
+    @ViewBuilder private func gridSection(_ entries: [CollectionEntry], header: String?) -> some View {
+        if !entries.isEmpty {
+            if let header {
+                Text(header).font(.headline).padding(.top, 4)
+            }
+            LazyVGrid(columns: Self.gridColumns, spacing: 12) {
+                ForEach(entries) { entry in tile(entry) }
+            }
+        }
+    }
+
+    @ViewBuilder private func tile(_ entry: CollectionEntry) -> some View {
+        let content = EntryTile(card: card(entry.cardId), entry: entry,
+                                value: model.entryValue(entry), delta: deltaRecord(entry))
+        Group {
+            if rowTap == .edit {
+                Button { editingEntry = entry } label: { content }
+                    .accessibilityHint("Edit this entry")
+            } else {
+                NavigationLink(value: CardID(raw: entry.cardId, highlight: CardHighlight(entry: entry))) { content }
+            }
+        }
+        .buttonStyle(.plain)
+        .contextMenu { entryMenu(entry) }
     }
 
     /// The delta matching what this entry actually is — resolved by the same ladder as its value
@@ -642,22 +770,24 @@ struct GroupDetailView: View {
     }
 
     private func sortedAll(_ entries: [CollectionEntry]) -> [CollectionEntry] {
-        switch sort {
-        case .newest:
-            return entries.sorted { $0.addedAt > $1.addedAt }
-        case .value:
-            return GroupStats.sortedByValueDescending(entries: entries, prices: model.prices,
-                                                      variantsByCard: model.variantsByCard,
-                                                      conditionsByCard: model.conditionsByCard,
-                                                      matrixByCard: model.matrixByCard,
-                                                      gradedByPrintingByCard: model.gradedByPrintingByCard)
-        case .name:
-            return entries.sorted {
-                searchIndex.name(for: $0, store: store)
-                    .localizedStandardCompare(searchIndex.name(for: $1, store: store)) == .orderedAscending
-            }
-        }
+        // `model.entryValue`, the figure the row prints — an entry the catalog can't price
+        // exactly says "no data" and sorts last, rather than sitting mid-list on a hidden estimate.
+        TinSorting.sorted(entries, by: sort, card: card,
+                          setDate: { searchIndex.releaseDate(setId: $0, store: store) },
+                          value: model.entryValue)
     }
+
+    private func card(_ cardId: String) -> CardRecord? { searchIndex.card(id: cardId, store: store) }
+
+    /// The entries the filter lets through. Search deliberately bypasses this: "do I own this?"
+    /// must not be answered "no" by a filter you forgot was on.
+    private func visible(_ entries: [CollectionEntry]) -> [CollectionEntry] {
+        filter.isActive ? entries.filter { filter.matches(card($0.cardId)) } : entries
+    }
+
+    /// What Select All ticks and what the summary counts: the cards on screen, so "filter to
+    /// Psychic → Select All → Move to…" files exactly the Psychic ones (#193's whole point).
+    private var visibleScope: [CollectionEntry] { visible(scope) }
 
     private func cardName(_ entry: CollectionEntry) -> String {
         searchIndex.name(for: entry, store: store)
@@ -668,5 +798,35 @@ struct GroupDetailView: View {
     /// the whole point: one label lands on the next free slot of a part-used sheet.
     private func printLabel(for entry: CollectionEntry) {
         app?.labelRequest = LabelPrintRequest(title: cardName(entry), entries: [entry])
+    }
+}
+
+/// One owned entry as a grid tile: art, a ×N badge when the row holds copies, name, value and
+/// change — the list row's facts, stacked.
+private struct EntryTile: View {
+    let card: CardRecord?
+    let entry: CollectionEntry
+    let value: Double?
+    let delta: DeltaRecord?
+
+    var body: some View {
+        VStack(spacing: 4) {
+            CardImageView(card: card, quality: "low")
+                .overlay(alignment: .topTrailing) {
+                    if entry.qty > 1 {
+                        Text("×\(entry.qty)")
+                            .font(.caption2.weight(.bold)).monospacedDigit()
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(.thinMaterial, in: Capsule())
+                            .padding(4)
+                    }
+                }
+            Text(card?.name ?? entry.cardId).font(.caption).lineLimit(1)
+            HStack(spacing: 4) {
+                PriceLabel(value: value)
+                DeltaBadge(record: delta)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }

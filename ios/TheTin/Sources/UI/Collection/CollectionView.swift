@@ -732,6 +732,9 @@ final class CardSearchIndex {
     /// cardId → record, including misses (a `nil` value is a cached "not in this catalog", so a
     /// missing card isn't re-queried on every pass). Double-optional subscript is deliberate.
     private var cards: [String: CardRecord?] = [:]
+    /// setId → release date ("yyyy-MM-dd"), misses cached the same way. Set-order sorting asks
+    /// for it inside a comparator, which runs n log n times.
+    private var releaseDates: [String: String?] = [:]
 
     /// The catalog record for a card, cached. `CollectionView.riffleCards` spreads up to seven
     /// cards per divider and re-ran this query for every one of them on every body pass — ~280
@@ -741,6 +744,13 @@ final class CardSearchIndex {
         let record = try? store.card(id: cardId)
         cards[cardId] = record
         return record
+    }
+
+    func releaseDate(setId: String, store: CatalogStore) -> String? {
+        if let cached = releaseDates[setId] { return cached }
+        let date = (try? store.set(id: setId))?.releaseDate
+        releaseDates[setId] = date
+        return date
     }
 
     func name(for entry: CollectionEntry, store: CatalogStore) -> String {
@@ -777,6 +787,7 @@ final class CardSearchIndex {
         haystacks.removeAll()
         names.removeAll()
         cards.removeAll()
+        releaseDates.removeAll()
     }
 }
 
