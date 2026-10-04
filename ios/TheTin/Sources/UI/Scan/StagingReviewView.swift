@@ -76,11 +76,16 @@ struct StagingReviewView: View {
             // time was the whole complaint. Only with 2+ drafts — for one, the row's own "File
             // in…" is the same thing. Dialog anchored on the button for the reason "Clear all"
             // gives below.
+            //
+            // Plain "\(n) cards", never `^[…](inflect: true)`: a confirmationDialog title is a plain
+            // String and printed that markup raw (device, 2026-10-04). With 2+ drafts the plural is
+            // always right anyway. Hidden while the New divider alert is up: its text field raises
+            // the keyboard, and this bottom-bar button showed through the keyboard's glass.
             ToolbarItem(placement: .bottomBar) {
-                if staging.drafts.count > 1 {
-                    Button("File all ^[\(staging.drafts.count) card](inflect: true) in…") { routingAll = true }
+                if staging.drafts.count > 1, showingNewGroup == nil {
+                    Button("File all \(staging.drafts.count) cards in…") { routingAll = true }
                         .buttonStyle(.borderedProminent)
-                        .confirmationDialog("File all ^[\(staging.drafts.count) card](inflect: true) in…",
+                        .confirmationDialog("File all \(staging.drafts.count) cards in…",
                                             isPresented: $routingAll, titleVisibility: .visible) {
                             routeAllDialogActions
                         }
