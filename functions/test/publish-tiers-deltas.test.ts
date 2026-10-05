@@ -511,12 +511,14 @@ describe("computePriceDeltasFrom — sanity rules", () => {
     expect(pct("printing", "Normal")).toBeCloseTo(17.32 / 17.27 - 1);           // the real card: +0.3%
   });
 
-  it("a graded delta needs at least three sales behind the grade tonight", () => {
-    const old = [{ id: "c1", psa: { 9: { usd: 100, sales: 13 }, 10: { usd: 300, sales: 1 } } }];
-    const now = [{ id: "c1", psa: { 9: { usd: 110, sales: 13 }, 10: { usd: 3437, sales: 1 } } }];
-    const pct = run(old, now);
-    expect(pct("psa", "10")).toBeUndefined();                              // one sale behind it: a listing
-    expect(pct("psa", "9")).toBeCloseTo(0.1);
+  it("a big graded move needs another grade to move with it", () => {
+    const g = (usd: number) => ({ usd, sales: 1 });
+    const alone = run([{ id: "c1", psa: { 9: g(100), 10: g(300) } }], [{ id: "c1", psa: { 9: g(105), 10: g(1200) } }]);
+    expect(alone("psa", "10")).toBeUndefined();                            // +300%, PSA 9 moved +5%: no witness
+    expect(alone("psa", "9")).toBeCloseTo(0.05);                           // small moves need none
+    rmSync(dir, { recursive: true, force: true }); dir = mkdtempSync(join(tmpdir(), "sanity-"));
+    const together = run([{ id: "c1", psa: { 9: g(100), 10: g(300) } }], [{ id: "c1", psa: { 9: g(180), 10: g(1200) } }]);
+    expect(together("psa", "10")).toBeCloseTo(3);                          // PSA 9 +80% vouches for it
   });
 
   it("a card whose PPT product changed gets no delta of any kind", () => {
@@ -582,7 +584,39 @@ describe("computePriceDeltasFrom — sanity rules", () => {
     const now = [{ id: "pl3-142", psa: { 7: g(112.14), 8: g(1024), 9: g(2990), 10: g(54997.47) } }];
     const pct = run(old, now);
     expect(pct("psa", "10")).toBeUndefined();                              // was +343,634%: PSA 10 $16 under PSA 7 $136
-    expect(pct("psa", "9")).toBeUndefined();
+    expect(pct("psa", "7")).toBeCloseTo(112.14 / 136 - 1);                 // the odd one out goes alone: PSA 7 keeps -17.5%
+  });
+
+  it("Corphish: a quote that jumps alone on a frozen ladder is not a market move", () => {
+    const ladder = (nm: number, lp: number): Ladder => ({ "Near Mint": nm, "Lightly Played": lp,
+      "Moderately Played": 3.17, "Heavily Played": 2.99, "Damaged": 3.0 });
+    const card = (nm: number, lp: number) => ({ id: "ex4-51", printings: { "Reverse Holofoil": { usd: nm, matrix: ladder(nm, lp) } } });
+    const pct = run([card(10.45, 7.27)], [card(49.99, 8.64)]);
+    expect(pct("printing", "Reverse Holofoil")).toBeUndefined();          // was +378.4%, Market #1
+    expect(pct("matrix", "Reverse Holofoil|Near Mint")).toBeUndefined();
+    expect(pct("matrix", "Reverse Holofoil|Lightly Played")).toBeCloseTo(8.64 / 7.27 - 1);  // +18.8%: under the bar, stands
+  });
+
+  it("a whole ladder that moves together is a real move, up or down", () => {
+    const ladder = (k: number): Ladder => Object.fromEntries(Object.entries(sane).map(([c, v]) => [c, v * k])) as Ladder;
+    const card = (k: number) => ({ id: "c1", raw: 20 * k, rawPrinting: "Holofoil", conditions: ladder(k),
+      printings: { "Holofoil": { usd: 20 * k, matrix: ladder(k) } } });
+    const up = run([card(1)], [card(2.9)]);
+    for (const [kind, key] of [["raw", ""], ["printing", "Holofoil"], ["matrix", "Holofoil|Near Mint"], ["condition", "Near Mint"]])
+      expect(up(kind, key)).toBeCloseTo(1.9);
+    rmSync(dir, { recursive: true, force: true }); dir = mkdtempSync(join(tmpdir(), "sanity-"));
+    expect(run([card(1)], [card(0.4)])("printing", "Holofoil")).toBeCloseTo(-0.6);
+  });
+
+  it("a big drop with nothing else falling is dropped too, and so is a lone card-level jump", () => {
+    const card = (nm: number) => ({ id: "c1", raw: nm, rawPrinting: "Holofoil",
+      conditions: { "Near Mint": nm, "Lightly Played": 6, "Damaged": 2 },
+      printings: { "Holofoil": { usd: nm, matrix: { "Near Mint": nm, "Lightly Played": 6, "Damaged": 2 } } } });
+    const down = run([card(20)], [card(8)]);
+    expect(down("printing", "Holofoil")).toBeUndefined();                  // -60%, LP and DMG flat
+    expect(down("raw")).toBeUndefined();
+    expect(down("condition", "Near Mint")).toBeUndefined();
+    expect(down("condition", "Lightly Played")).toBeCloseTo(0);
   });
 
   it("a healthy card loses nothing", () => {
