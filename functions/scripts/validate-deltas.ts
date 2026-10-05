@@ -9,6 +9,10 @@
  * the same lookback artifacts (the "after"), and prints, per window: rows dropped by kind, the
  * garbage bands before/after, a check that every KEPT row's value is unchanged, the named
  * regression cards, and the Market 1M list exactly as the app would render it. Inputs are only read.
+ *
+ * Memory: a `.gz` path is gunzipped in-process (~1.3 GB of heap per expert artifact), which OOM-killed
+ * the run on a 2.5 GB host. On a small box, gunzip to plain `.sqlite` first and pass those paths —
+ * both this script and computePriceDeltasFrom take either.
  */
 import Database from "better-sqlite3";
 import { copyFileSync, readFileSync, writeFileSync, rmSync } from "node:fs";

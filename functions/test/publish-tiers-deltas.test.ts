@@ -476,6 +476,8 @@ describe("computePriceDeltasFrom — sanity rules", () => {
     const pct = run(old, now);
     expect(pct("printing", "Reverse Holofoil")).toBeUndefined();          // was +454.9%
     expect(pct("matrix", "Reverse Holofoil|Near Mint")).toBeUndefined();
+    expect(pct("matrix", "Reverse Holofoil|Lightly Played")).toBeUndefined();  // the other half of the bad pair
+    expect(pct("matrix", "Reverse Holofoil|Damaged")).toBeCloseTo(4.44 / 4.24 - 1); // the rest of the ladder keeps its delta
     expect(pct("printing", "Holofoil")).toBeCloseTo(24.39 / 20.88 - 1);   // the sane printing still moves
     expect(pct("raw")).toBeCloseTo(24.39 / 20.88 - 1);                    // +16.8%, matching the history
   });
@@ -496,11 +498,11 @@ describe("computePriceDeltasFrom — sanity rules", () => {
 
   it("Charizard and Meltan: a 'printing' with no condition ladder gets no printing delta", () => {
     const old = [
-      { id: "sm9-14", printings: { "Miscellaneous Cards & Products": { usd: 50.64 }, "Normal": { usd: 17.27, matrix: { "Near Mint": 17.27 } } } },
+      { id: "sm9-14", printings: { "Miscellaneous Cards & Products": { usd: 50.64 }, "Normal": { usd: 17.27, matrix: { "Near Mint": 17.27, "Lightly Played": 15 } } } },
       { id: "sv07-102", printings: { "Stellar Crown Stamped": { usd: 1 } } },
     ];
     const now = [
-      { id: "sm9-14", printings: { "Miscellaneous Cards & Products": { usd: 275 }, "Normal": { usd: 17.32, matrix: { "Near Mint": 17.32 } } } },
+      { id: "sm9-14", printings: { "Miscellaneous Cards & Products": { usd: 275 }, "Normal": { usd: 17.32, matrix: { "Near Mint": 17.32, "Lightly Played": 15 } } } },
       { id: "sv07-102", printings: { "Stellar Crown Stamped": { usd: 15.65 } } },
     ];
     const pct = run(old, now);
@@ -510,10 +512,10 @@ describe("computePriceDeltasFrom — sanity rules", () => {
   });
 
   it("a graded delta needs at least three sales behind the grade tonight", () => {
-    const old = [{ id: "pl3-142", psa: { 9: { usd: 100, sales: 13 }, 10: { usd: 1, sales: 1 } } }];
-    const now = [{ id: "pl3-142", psa: { 9: { usd: 110, sales: 13 }, 10: { usd: 3437, sales: 1 } } }];
+    const old = [{ id: "c1", psa: { 9: { usd: 100, sales: 13 }, 10: { usd: 300, sales: 1 } } }];
+    const now = [{ id: "c1", psa: { 9: { usd: 110, sales: 13 }, 10: { usd: 3437, sales: 1 } } }];
     const pct = run(old, now);
-    expect(pct("psa", "10")).toBeUndefined();                              // one sale: +343,634% is a listing
+    expect(pct("psa", "10")).toBeUndefined();                              // one sale behind it: a listing
     expect(pct("psa", "9")).toBeCloseTo(0.1);
   });
 
@@ -532,6 +534,55 @@ describe("computePriceDeltasFrom — sanity rules", () => {
     rmSync(dir, { recursive: true, force: true }); dir = mkdtempSync(join(tmpdir(), "sanity-"));
     const preSource = FULL_SCHEMA.replace(" price_source INTEGER,", "");
     expect(run([card(null, 10)], [card(222, 12)], preSource)("raw")).toBeCloseTo(0.2);
+  });
+
+  it("small inversions are noise, not evidence — Damaged a little over Heavily Played keeps everything", () => {
+    const ladder = (k: number): Ladder => ({ "Near Mint": 20 * k, "Lightly Played": 15 * k, "Moderately Played": 9 * k,
+                                              "Heavily Played": 5.36 * k, "Damaged": 5.6 * k });
+    const card = (k: number) => ({ id: "c1", raw: 20 * k, rawPrinting: "Normal", conditions: ladder(k),
+      printings: { "Normal": { usd: 20 * k, matrix: ladder(k) } } });
+    const pct = run([card(1)], [card(1.1)]);
+    for (const [kind, key] of [["raw", ""], ["printing", "Normal"], ["matrix", "Normal|Damaged"],
+                               ["matrix", "Normal|Heavily Played"], ["condition", "Damaged"]])
+      expect(pct(kind, key)).toBeCloseTo(0.1);
+  });
+
+  it("a bad pair low on the ladder blanks only that pair, not the printing it doesn't quote", () => {
+    // Heavily Played at 3× Moderately Played: one of them is a bad print. Near Mint, which the
+    // printing quotes, is coherent — so the printing, raw and the other cells keep their deltas.
+    const ladder = (k: number): Ladder => ({ "Near Mint": 20 * k, "Lightly Played": 15 * k, "Moderately Played": 3 * k,
+                                              "Heavily Played": 9 * k, "Damaged": 2 * k });
+    const card = (k: number) => ({ id: "c1", raw: 20 * k, rawPrinting: "Holofoil",
+      printings: { "Holofoil": { usd: 20 * k, matrix: ladder(k) } } });
+    const pct = run([card(1)], [card(1.2)]);
+    expect(pct("matrix", "Holofoil|Moderately Played")).toBeUndefined();
+    expect(pct("matrix", "Holofoil|Heavily Played")).toBeUndefined();
+    expect(pct("matrix", "Holofoil|Near Mint")).toBeCloseTo(0.2);
+    expect(pct("matrix", "Holofoil|Damaged")).toBeCloseTo(0.2);
+    expect(pct("printing", "Holofoil")).toBeCloseTo(0.2);
+    expect(pct("raw")).toBeCloseTo(0.2);
+  });
+
+  it("Rayquaza: a printing price that changed WHICH condition it quotes is not a move", () => {
+    const old = [{ id: "ex9-9", printings: { "Normal": { usd: 112.06, matrix: { "Lightly Played": 112.06, "Damaged": 49.99 } } } }];
+    const now = [{ id: "ex9-9", printings: { "Normal": { usd: 400, matrix: { "Near Mint": 400, "Lightly Played": 112.06, "Damaged": 49.99 } } } }];
+    const pct = run(old, now);
+    expect(pct("printing", "Normal")).toBeUndefined();                     // was +257.0%: LP one night, NM the next
+    expect(pct("matrix", "Normal|Lightly Played")).toBeCloseTo(0);        // the cells themselves didn't move
+  });
+
+  it("a one-condition ladder can't be checked, so its printing gets no delta", () => {
+    const card = (usd: number) => ({ id: "ecard3-146", printings: { "Reverse Holofoil": { usd, matrix: { "Damaged": usd } } } });
+    expect(run([card(799.99)], [card(2999.99)])("printing", "Reverse Holofoil")).toBeUndefined();  // was +275%
+  });
+
+  it("Blaziken: a grade ladder running backwards blanks the grades involved", () => {
+    const g = (usd: number) => ({ usd, sales: 9 });
+    const old = [{ id: "pl3-142", psa: { 7: g(136), 8: g(240.22), 9: g(849.48), 10: g(16) } }];
+    const now = [{ id: "pl3-142", psa: { 7: g(112.14), 8: g(1024), 9: g(2990), 10: g(54997.47) } }];
+    const pct = run(old, now);
+    expect(pct("psa", "10")).toBeUndefined();                              // was +343,634%: PSA 10 $16 under PSA 7 $136
+    expect(pct("psa", "9")).toBeUndefined();
   });
 
   it("a healthy card loses nothing", () => {
