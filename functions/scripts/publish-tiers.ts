@@ -74,6 +74,82 @@ function pickLookbackArtifact(catalogDir: string, now: Date,
  * history table) and grades/conditions below the expert tier. MUTATES sourceDbPath.
  */
 export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now: Date): void {
+  const lookbacks: DeltaLookback[] = [];
+  for (const lb of LOOKBACKS) {
+    const artifact = pickLookbackArtifact(catalogDir, now, lb);
+    if (artifact) lookbacks.push({ col: lb.col, gzPath: join(catalogDir, artifact) });
+  }
+  computePriceDeltasFrom(sourceDbPath, lookbacks);
+}
+
+export interface DeltaLookback { col: (typeof LOOKBACKS)[number]["col"]; gzPath: string }
+
+/** A move bigger than this needs a witness: another price on the same ladder (another condition
+ *  of the printing, another grade of the card) moving at least WITNESS_MOVE the same way. A real
+ *  market lifts more than one cell; a bad quote lifts only the cell being quoted. After rules 1–2
+ *  the Market list was still led by single-cell jumps on frozen ladders — Team Aqua's Corphish
+ *  Reverse Holofoil NM $10.45 → $49.99 while MP/HP/DMG sat byte-identical; 15 of the top 25 had
+ *  no other cell move even 20% (v92 vs v62). */
+const CORROBORATE_ABOVE = 0.5;
+const WITNESS_MOVE = 0.2;
+/** …and the witness must be in proportion: the headline may be at most this many times the
+ *  witness's move. A witness that merely clears WITNESS_MOVE licensed a headline of any size — a
+ *  Togepi PSA 10 at $222.50 → $150,000 (+67,316%) stood on a PSA 8 +50% (v92 vs v62). A real move
+ *  lifts the ladder in the same order of magnitude; Zoroark's +292% stood on a DMG +423%. */
+const MAX_OVER_WITNESS = 4;
+
+/** How far a ladder may run backwards before it is evidence rather than noise. Thin markets
+ *  routinely price Damaged a few cents over Heavily Played; that is not what broke the movers.
+ *  What did was off by multiples — Sceptile NM $2.97 under LP $18.88 (6.4×), Kyogre Star MP
+ *  $299.99 under HP $600 (2.0×), Blaziken PSA 10 $16 under PSA 7 $136 (8.5×). A strict "any
+ *  inversion" rule removed ~60% of every window's deltas (validated 2026-10-04, v92), and blaming
+ *  both sides of every pair still let one bad PSA 10 take out its whole grade ladder — so only the
+ *  cell in the MOST inverted pairs is blamed (both, on a tie: then we can't tell which is wrong). */
+const INVERSION_FACTOR = 1.5;
+
+/** Better condition → lower rank. NULL for anything else — PPT leaks printing names into the
+ *  condition column, and an unranked row must never vote on a ladder. */
+const CONDITION_RANK = (col: string) => `CASE ${col}
+  WHEN 'Near Mint' THEN 0 WHEN 'Lightly Played' THEN 1 WHEN 'Moderately Played' THEN 2
+  WHEN 'Heavily Played' THEN 3 WHEN 'Damaged' THEN 4 END`;
+
+/**
+ * `computePriceDeltas` with the lookback artifacts named explicitly — what `validate-deltas.ts`
+ * runs against preserved artifacts, never a served catalog dir. MUTATES sourceDbPath.
+ *
+ * A delta is the difference between two single-night PPT snapshots, and for thin markets either
+ * night can be garbage. Measured 2026-10-04 (v92 vs v62): 512 rows past +500%, and the screen
+ * showed the band just under the app's clamp — Sceptile's Reverse Holofoil at +454.9% while its
+ * history moved +16.8%. So a delta is only written where both nights are coherent:
+ *
+ * 1. **Inversions** — on either night, prices on the same ladder that run backwards by more than
+ *    INVERSION_FACTOR (a worse condition, or a lower grade, priced well above a better one) blame
+ *    the cell caught in the most such pairs, and that cell gets no delta. Applies to a printing's
+ *    condition cells (`price_matrix`), the card-level conditions, and the PSA grades (Blaziken's
+ *    PSA 10 $16 under PSA 7 $136). A printing's own delta, and `raw`, quote the TOP of their
+ *    ladder, so they go when that top cell does — which is what catches Kyogre Star, whose
+ *    raw_printing label matched both nights while its MP sat at half its HP.
+ * 2. **A modelled printing** — a printing delta needs, on each night that has the table, a ladder
+ *    of at least two ranked conditions, and the SAME top condition on both nights. No ladder is a
+ *    PPT category bucket ("Miscellaneous Cards & Products": Charizard's +443%, Meltan's +1465%); a
+ *    ladder of one can't be checked (a Damaged-only cell shown as the market); and a different
+ *    top condition means the variant price changed which condition it quotes (Rayquaza: LP $112
+ *    one night, NM $400 the next — a change of subject, the raw_printing defect one axis down).
+ *    `raw` gets the same-top check when its printing has a ladder on both nights.
+ * 3. **Corroboration** — a move past ±CORROBORATE_ABOVE survives only with a witness on its own
+ *    ladder moving ≥ WITNESS_MOVE the same way, and at least 1/MAX_OVER_WITNESS of the headline. A printing or `raw` is
+ *    witnessed by its printing's OTHER conditions, never by the cell it quotes. (This replaced a
+ *    minimum-sales gate on grades, which cost ~40% of graded deltas and still passed Blaziken,
+ *    which had 11 sales.)
+ * 4. **Same product** — when both nights record `price_source` (the PPT product the card's prices
+ *    came from), a card whose product changed gets no delta of any kind. Artifacts from before
+ *    the column skip this check.
+ *
+ * Each rule applies only where both databases carry what it reads, so older artifacts keep the
+ * behaviour they had rather than going blank. Rules only ever REMOVE a delta; a kept delta is
+ * computed exactly as before (validate-deltas.ts checks both).
+ */
+export function computePriceDeltasFrom(sourceDbPath: string, lookbacks: DeltaLookback[]): void {
   const db = new Database(sourceDbPath);
   db.exec(`
     CREATE TABLE IF NOT EXISTS price_delta(
@@ -82,25 +158,127 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
       PRIMARY KEY(card_id, kind, key));
     CREATE INDEX IF NOT EXISTS idx_price_delta_card ON price_delta(card_id);
     DELETE FROM price_delta;`);
+  const tables = (schema: string) => new Set((db.prepare(
+    `SELECT name FROM ${schema}.sqlite_master WHERE type='table'`).all() as { name: string }[])
+    .map((t) => t.name));
+  const columns = (schema: string, table: string) => new Set((db.pragma(
+    `${schema}.table_info(${table})`) as { name: string }[]).map((c) => c.name));
+  const rank = CONDITION_RANK;
+  // Every pair on a ladder that runs backwards by more than INVERSION_FACTOR, as (card, ladder,
+  // better cell, worse cell). `lad` names the ladder within a card: the printing for price_matrix,
+  // '' for the card-level conditions and the grades.
+  const matrixPairs = (schema: string) => `
+    SELECT a.card_id AS card_id, a.printing AS lad, a.condition AS hi, b.condition AS lo
+    FROM ${schema}.price_matrix a JOIN ${schema}.price_matrix b ON b.card_id = a.card_id AND b.printing = a.printing
+    WHERE ${rank("a.condition")} < ${rank("b.condition")} AND b.usd > a.usd * ${INVERSION_FACTOR}`;
+  const conditionPairs = (schema: string) => `
+    SELECT a.card_id AS card_id, '' AS lad, a.condition AS hi, b.condition AS lo
+    FROM ${schema}.price_by_condition a JOIN ${schema}.price_by_condition b ON b.card_id = a.card_id
+    WHERE ${rank("a.condition")} < ${rank("b.condition")} AND b.usd > a.usd * ${INVERSION_FACTOR}`;
+  const gradePairs = `
+    SELECT a.card_id AS card_id, '' AS lad, CAST(a.grade AS TEXT) AS hi, CAST(b.grade AS TEXT) AS lo
+    FROM temp._grades a JOIN temp._grades b ON b.card_id = a.card_id
+    WHERE a.grade > b.grade AND b.usd > a.usd * ${INVERSION_FACTOR}`;
+  /** Blame, per ladder, the cell(s) caught in the most inverted pairs, into `target(card_id,
+   *  lad, cell)`. One bad cell inverts against many neighbours and is the clear odd one out; a
+   *  lone pair is a tie, and then both are blamed because nothing says which is wrong. */
+  const blame = (pairs: string, target: string) => db.exec(`
+    DROP TABLE IF EXISTS temp._viol;
+    CREATE TEMP TABLE _viol(card_id TEXT, lad TEXT, cell TEXT, n INTEGER, PRIMARY KEY(card_id, lad, cell));
+    INSERT INTO _viol SELECT card_id, lad, cell, COUNT(*) FROM (
+      SELECT card_id, lad, hi AS cell FROM (${pairs}) UNION ALL SELECT card_id, lad, lo FROM (${pairs}))
+      GROUP BY card_id, lad, cell;
+    INSERT OR IGNORE INTO ${target} SELECT v.card_id, v.lad, v.cell FROM _viol v
+      WHERE v.n = (SELECT MAX(w.n) FROM _viol w WHERE w.card_id = v.card_id AND w.lad = v.lad);`);
+  // price_latest's psaN columns as rows, so the grade ladder can be self-joined like the others.
+  const gradeRows = (schema: string, cols: Set<string>) => Array.from({ length: 10 }, (_, i) => i + 1)
+    .filter((g) => cols.has(`psa${g}`))
+    .map((g) => `SELECT card_id, ${g} AS grade, psa${g} AS usd FROM ${schema}.price_latest WHERE psa${g} > 0`)
+    .join(" UNION ALL ");
+  // A printing's ladder summary: how many ranked conditions it has, and which one is its top.
+  const ladders = (schema: string) => `
+    SELECT card_id, printing, COUNT(*) AS n, MIN(${rank("condition")}) AS top
+    FROM ${schema}.price_matrix WHERE ${rank("condition")} IS NOT NULL GROUP BY card_id, printing`;
+
+  const newTables = tables("main");
+  const newLatest = columns("main", "price_latest");
+  const newHasMatrix = newTables.has("price_matrix");
   try {
-    for (const lb of LOOKBACKS) {
-      const artifact = pickLookbackArtifact(catalogDir, now, lb);
-      if (!artifact) continue;
+    for (const lb of lookbacks) {
       // OS tempdir, not catalogDir — a leaked temp (ATTACH throws on a corrupt/partial artifact)
       // must never land in the served catalog dir, where the prune regex never touches it.
       const tmp = join(tmpdir(), `_delta-lookback-${lb.col}-${process.pid}-${Date.now()}.sqlite`);
+      const artifact = lb.gzPath;
       let attached = false;
       // Per-lookback isolation: one bad/old-schema artifact must not kill the other windows
       // (2026-07-19: a pre-psa-widening 7d artifact aborted 7d cond/psa/printing AND all of 30d).
       try {
-        writeFileSync(tmp, gunzipSync(readFileSync(join(catalogDir, artifact))));
+        if (artifact.endsWith(".gz")) writeFileSync(tmp, gunzipSync(readFileSync(artifact)));
+        else copyFileSync(artifact, tmp);
         db.exec(`ATTACH DATABASE '${tmp.replace(/'/g, "''")}' AS old`);
         attached = true;
         const upsert = (select: string) => db.exec(`
           INSERT INTO price_delta(card_id, kind, key, ${lb.col}) ${select}
           ON CONFLICT(card_id, kind, key) DO UPDATE SET ${lb.col} = excluded.${lb.col}`);
-        const oldCols = new Set((db.pragma("old.table_info(price_latest)") as
-          { name: string }[]).map((c) => c.name));
+        const oldCols = columns("old", "price_latest");
+        const oldTables = tables("old");
+        const oldHasMatrix = oldTables.has("price_matrix");
+
+        // ---- the sanity sets, rebuilt per lookback: half of each comes from `old` ----
+        db.exec(`
+          DROP TABLE IF EXISTS temp._bad_cell; DROP TABLE IF EXISTS temp._bad_condition;
+          DROP TABLE IF EXISTS temp._bad_grade; DROP TABLE IF EXISTS temp._moved_source;
+          DROP TABLE IF EXISTS temp._ladder_new; DROP TABLE IF EXISTS temp._ladder_old;
+          CREATE TEMP TABLE _bad_cell(card_id TEXT, printing TEXT, condition TEXT,
+            PRIMARY KEY(card_id, printing, condition));
+          CREATE TEMP TABLE _bad_condition(card_id TEXT, lad TEXT, condition TEXT, PRIMARY KEY(card_id, condition));
+          CREATE TEMP TABLE _bad_grade(card_id TEXT, lad TEXT, grade TEXT, PRIMARY KEY(card_id, grade));
+          CREATE TEMP TABLE _moved_source(card_id TEXT PRIMARY KEY);
+          CREATE TEMP TABLE _ladder_new(card_id TEXT, printing TEXT, n INTEGER, top INTEGER,
+            PRIMARY KEY(card_id, printing));
+          CREATE TEMP TABLE _ladder_old(card_id TEXT, printing TEXT, n INTEGER, top INTEGER,
+            PRIMARY KEY(card_id, printing));`);
+        // Each night's ladders are judged on their own; a cell blamed on EITHER night is out.
+        if (newHasMatrix) {
+          blame(matrixPairs("main"), "_bad_cell");
+          db.exec(`INSERT INTO _ladder_new ${ladders("main")}`);
+        }
+        if (oldHasMatrix) {
+          blame(matrixPairs("old"), "_bad_cell");
+          db.exec(`INSERT INTO _ladder_old ${ladders("old")}`);
+        }
+        blame(conditionPairs("main"), "_bad_condition");
+        blame(conditionPairs("old"), "_bad_condition");
+        for (const [schema, cols] of [["main", newLatest], ["old", oldCols]] as const) {
+          const rows = gradeRows(schema, cols);
+          if (!rows) continue;
+          // Materialised and keyed first: a self-join of the bare 10-way UNION has no index to use,
+          // and over ~200k grade rows that is a nested loop the nightly can't afford.
+          db.exec(`DROP TABLE IF EXISTS temp._grades;
+            CREATE TEMP TABLE _grades(card_id TEXT, grade INTEGER, usd REAL, PRIMARY KEY(card_id, grade));
+            INSERT OR IGNORE INTO _grades ${rows};`);
+          blame(gradePairs, "_bad_grade");
+        }
+        if (newLatest.has("price_source") && oldCols.has("price_source")) {
+          db.exec(`INSERT OR IGNORE INTO _moved_source
+                   SELECT n.card_id FROM main.price_latest n JOIN old.price_latest o ON o.card_id = n.card_id
+                   WHERE o.price_source IS NOT n.price_source`);
+        }
+        const sameSource = "AND n.card_id NOT IN (SELECT card_id FROM temp._moved_source)";
+        // The top cell of `printing` (an SQL expression) is disqualified on either night.
+        const topCellOk = (printing: string) => `
+          AND NOT EXISTS (SELECT 1 FROM temp._ladder_new l JOIN temp._bad_cell bc ON bc.card_id = l.card_id
+                AND bc.printing = l.printing AND ${rank("bc.condition")} = l.top
+                WHERE l.card_id = n.card_id AND l.printing = ${printing})
+          AND NOT EXISTS (SELECT 1 FROM temp._ladder_old l JOIN temp._bad_cell bc ON bc.card_id = l.card_id
+                AND bc.printing = l.printing AND ${rank("bc.condition")} = l.top
+                WHERE l.card_id = n.card_id AND l.printing = ${printing})`;
+        // Where both nights have a ladder for `printing`, it must quote the same condition.
+        const sameTop = (printing: string) => `
+          AND NOT EXISTS (SELECT 1 FROM temp._ladder_new ln JOIN temp._ladder_old lo
+                ON lo.card_id = ln.card_id AND lo.printing = ln.printing
+                WHERE ln.card_id = n.card_id AND ln.printing = ${printing} AND lo.top IS NOT ln.top)`;
+
         // raw_usd quotes whichever printing had a market price that night, so the same column can
         // describe a different printing in each artifact. Diffing across a flip measures the SPREAD
         // BETWEEN TWO PRINTINGS, not a price move (+1800% rows, 2026-07-25). Requiring the basis to
@@ -111,6 +289,10 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
         // old card_id-only join rather than blacking out every raw delta for the 30 days it takes
         // the ledger to age over: 1d is correct after one nightly, 7d after a week, 30d after a
         // month, and the client's implausible-pct clamp still covers the gap.
+        //
+        // A matching label is NOT a matching subject, though: Kyogre Star kept 'Holofoil' both
+        // nights while one of them was garbage. Rules 1 and 2, applied to the printing raw quotes,
+        // are what catch that.
         const basisMatch = oldCols.has("raw_printing")
           ? "AND (o.raw_printing IS n.raw_printing)"   // IS, not =: NULL basis must match NULL basis
           : "";
@@ -118,37 +300,78 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
           console.warn(`[publish-tiers] ${lb.col} lookback vs ${artifact} predates raw_printing —` +
             " raw deltas for this window are unverified (basis flips can still slip through)");
         }
+        const rawChecks = newLatest.has("raw_printing")
+          ? topCellOk("n.raw_printing") + sameTop("n.raw_printing") : "";
         upsert(`SELECT n.card_id, 'raw', '', (n.raw_usd - o.raw_usd) / o.raw_usd
                 FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id ${basisMatch}
-                WHERE n.raw_usd > 0 AND o.raw_usd > 0`);
+                WHERE n.raw_usd > 0 AND o.raw_usd > 0 ${rawChecks} ${sameSource}`);
         // Artifacts published before the psa1-10 widening only carry psa8-10.
         for (let g = 1; g <= 10; g++) {
           if (!oldCols.has(`psa${g}`)) continue;
           upsert(`SELECT n.card_id, 'psa', '${g}', (n.psa${g} - o.psa${g}) / o.psa${g}
                   FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id
-                  WHERE n.psa${g} > 0 AND o.psa${g} > 0`);
+                  WHERE n.psa${g} > 0 AND o.psa${g} > 0
+                    AND NOT EXISTS (SELECT 1 FROM temp._bad_grade bg WHERE bg.card_id = n.card_id AND bg.grade = '${g}')
+                    ${sameSource}`);
         }
         upsert(`SELECT n.card_id, 'condition', n.condition, (n.usd - o.usd) / o.usd
                 FROM price_by_condition n JOIN old.price_by_condition o
                   ON o.card_id = n.card_id AND o.condition = n.condition
-                WHERE n.usd > 0 AND o.usd > 0`);
+                WHERE n.usd > 0 AND o.usd > 0
+                  AND NOT EXISTS (SELECT 1 FROM temp._bad_condition bc
+                                  WHERE bc.card_id = n.card_id AND bc.condition = n.condition)
+                  ${sameSource}`);
+        // Rule 2 — a modelled printing: ≥2 ranked conditions on each night that has the table.
+        const modelled = (newHasMatrix
+          ? "AND EXISTS (SELECT 1 FROM temp._ladder_new l WHERE l.card_id = n.card_id AND l.printing = n.printing AND l.n >= 2)" : "")
+          + (oldHasMatrix
+          ? " AND EXISTS (SELECT 1 FROM temp._ladder_old l WHERE l.card_id = n.card_id AND l.printing = n.printing AND l.n >= 2)" : "");
         upsert(`SELECT n.card_id, 'printing', n.printing, (n.usd - o.usd) / o.usd
                 FROM price_by_variant n JOIN old.price_by_variant o
                   ON o.card_id = n.card_id AND o.printing = n.printing
-                WHERE n.usd > 0 AND o.usd > 0`);
+                WHERE n.usd > 0 AND o.usd > 0 ${modelled} ${sameTop("n.printing")} ${topCellOk("n.printing")}
+                  ${sameSource}`);
         // Matrix deltas: keyed "printing|condition" ('|' appears in neither PPT key set).
         // Guarded like the psa-column probe — artifacts published before the matrix feature
         // have no price_matrix table, and one missing table must not abort the window's
         // remaining upserts (they already ran) or log a scary failure for a normal rollout.
-        const oldTables = new Set((db.prepare(
-          "SELECT name FROM old.sqlite_master WHERE type='table'").all() as { name: string }[])
-          .map((t) => t.name));
-        if (oldTables.has("price_matrix")) {
+        if (newHasMatrix && oldHasMatrix) {
           upsert(`SELECT n.card_id, 'matrix', n.printing || '|' || n.condition, (n.usd - o.usd) / o.usd
                   FROM price_matrix n JOIN old.price_matrix o
                     ON o.card_id = n.card_id AND o.printing = n.printing AND o.condition = n.condition
-                  WHERE n.usd > 0 AND o.usd > 0`);
+                  WHERE n.usd > 0 AND o.usd > 0
+                    AND NOT EXISTS (SELECT 1 FROM temp._bad_cell bc WHERE bc.card_id = n.card_id
+                                    AND bc.printing = n.printing AND bc.condition = n.condition)
+                    ${sameSource}`);
         }
+
+        // Rule 3 — corroboration, over what rules 1, 2 and 4 let through for THIS window. Witnesses
+        // are judged on those survivors, all decided before any is cleared, so two unwitnessed
+        // jumps can't vouch for each other by order of evaluation.
+        const c = lb.col;
+        const witnessed = (scope: string) => `EXISTS (SELECT 1 FROM price_delta w WHERE w.card_id = d.card_id
+            AND ${scope} AND w.${c} IS NOT NULL
+            AND ((d.${c} > 0 AND w.${c} >= ${WITNESS_MOVE}) OR (d.${c} < 0 AND w.${c} <= -${WITNESS_MOVE}))
+            AND ABS(d.${c}) <= ${MAX_OVER_WITNESS} * ABS(w.${c}))`;
+        // Another condition of `printing` (an SQL expression), never the top cell the price quotes.
+        const otherCondition = (printing: string) => `w.kind = 'matrix'
+            AND substr(w.key, 1, length(${printing}) + 1) = ${printing} || '|'
+            AND ${rank(`substr(w.key, length(${printing}) + 2)`)} IS NOT
+                (SELECT l.top FROM temp._ladder_new l WHERE l.card_id = d.card_id AND l.printing = ${printing})`;
+        db.exec(`
+          DROP TABLE IF EXISTS temp._unwitnessed;
+          CREATE TEMP TABLE _unwitnessed(card_id TEXT, kind TEXT, key TEXT, PRIMARY KEY(card_id, kind, key));
+          INSERT INTO _unwitnessed SELECT d.card_id, d.kind, d.key FROM price_delta d
+          WHERE d.${c} IS NOT NULL AND ABS(d.${c}) > ${CORROBORATE_ABOVE} AND NOT (
+               (d.kind = 'matrix' AND ${witnessed(`w.kind = 'matrix' AND w.key != d.key
+                  AND substr(w.key, 1, instr(w.key, '|')) = substr(d.key, 1, instr(d.key, '|'))`)})
+            OR (d.kind = 'condition' AND ${witnessed("w.kind = 'condition' AND w.key != d.key")})
+            OR (d.kind = 'psa' AND ${witnessed("w.kind = 'psa' AND w.key != d.key")})
+            OR (d.kind = 'printing' AND ${witnessed(otherCondition("d.key"))})
+            ${newLatest.has("raw_printing") ? `OR (d.kind = 'raw' AND ${witnessed(otherCondition(
+              "(SELECT p.raw_printing FROM main.price_latest p WHERE p.card_id = d.card_id)"))})` : ""});
+          UPDATE price_delta SET ${c} = NULL WHERE EXISTS (SELECT 1 FROM temp._unwitnessed u
+            WHERE u.card_id = price_delta.card_id AND u.kind = price_delta.kind AND u.key = price_delta.key);`);
       } catch (e) {
         console.warn(`[publish-tiers] ${lb.col} lookback vs ${artifact} failed — skipping:`, e);
       } finally {
@@ -161,6 +384,8 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
         }
       }
     }
+    // A row whose every window was cleared by rule 3 is no row at all.
+    db.exec("DELETE FROM price_delta WHERE pct_1d IS NULL AND pct_7d IS NULL AND pct_30d IS NULL");
   } finally {
     db.close();
   }

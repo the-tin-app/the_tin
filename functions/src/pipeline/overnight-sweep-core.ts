@@ -62,6 +62,7 @@ export async function runOvernightSweep(
   // Same guard `ppt-export` carries: this sweep now writes raw_printing too, and it can run over a
   // db built before the column existed (a rebuild on yesterday's file, or a test fixture).
   if (!plCols.has("raw_printing")) db.exec(`ALTER TABLE price_latest ADD COLUMN raw_printing TEXT`);
+  if (!plCols.has("price_source")) db.exec(`ALTER TABLE price_latest ADD COLUMN price_source INTEGER`);
   const pbcCols = new Set((db.pragma("table_info(price_by_condition)") as { name: string }[]).map((c) => c.name));
   if (!pbcCols.has("sales_count")) db.exec(`ALTER TABLE price_by_condition ADD COLUMN sales_count INTEGER`);
   const insHist = db.prepare("INSERT OR REPLACE INTO price_history(card_id, date, raw_usd) VALUES (?,?,?)");
@@ -90,6 +91,9 @@ export async function runOvernightSweep(
     VALUES (@id,@raw,@printing,@low,@as_of)
     ON CONFLICT(card_id) DO UPDATE SET
       raw_usd=@raw, raw_printing=@printing, low_usd=COALESCE(@low, low_usd), as_of=@as_of`);
+  // Which PPT product tonight's prices for a card came from — see `price_source` in catalog.ts.
+  // UPDATE, never insert: a card with no price row has nothing for a source to describe.
+  const setSource = db.prepare("UPDATE price_latest SET price_source=? WHERE card_id=?");
   const ourStmt = db.prepare("SELECT id, number, name, tcgplayer_id AS tcgplayerId FROM card WHERE set_id = ?");
 
   const sum: OvernightSummary = {
@@ -166,6 +170,7 @@ export async function runOvernightSweep(
           insGs.run(m.id, gs.grade, gs.salesCount, gs.confidence, opts.asOf);
           sum.gradedSalesRows++;
         }
+        setSource.run(pc.tcgPlayerId, m.id);
       }
     });
     write(cards);
