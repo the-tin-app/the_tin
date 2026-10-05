@@ -92,6 +92,11 @@ export interface DeltaLookback { col: (typeof LOOKBACKS)[number]["col"]; gzPath:
  *  no other cell move even 20% (v92 vs v62). */
 const CORROBORATE_ABOVE = 0.5;
 const WITNESS_MOVE = 0.2;
+/** …and the witness must be in proportion: the headline may be at most this many times the
+ *  witness's move. A witness that merely clears WITNESS_MOVE licensed a headline of any size — a
+ *  Togepi PSA 10 at $222.50 → $150,000 (+67,316%) stood on a PSA 8 +50% (v92 vs v62). A real move
+ *  lifts the ladder in the same order of magnitude; Zoroark's +292% stood on a DMG +423%. */
+const MAX_OVER_WITNESS = 4;
 
 /** How far a ladder may run backwards before it is evidence rather than noise. Thin markets
  *  routinely price Damaged a few cents over Heavily Played; that is not what broke the movers.
@@ -132,7 +137,7 @@ const CONDITION_RANK = (col: string) => `CASE ${col}
  *    one night, NM $400 the next — a change of subject, the raw_printing defect one axis down).
  *    `raw` gets the same-top check when its printing has a ladder on both nights.
  * 3. **Corroboration** — a move past ±CORROBORATE_ABOVE survives only with a witness on its own
- *    ladder moving ≥ WITNESS_MOVE the same way (see CORROBORATE_ABOVE). A printing or `raw` is
+ *    ladder moving ≥ WITNESS_MOVE the same way, and at least 1/MAX_OVER_WITNESS of the headline. A printing or `raw` is
  *    witnessed by its printing's OTHER conditions, never by the cell it quotes. (This replaced a
  *    minimum-sales gate on grades, which cost ~40% of graded deltas and still passed Blaziken,
  *    which had 11 sales.)
@@ -346,7 +351,8 @@ export function computePriceDeltasFrom(sourceDbPath: string, lookbacks: DeltaLoo
         const c = lb.col;
         const witnessed = (scope: string) => `EXISTS (SELECT 1 FROM price_delta w WHERE w.card_id = d.card_id
             AND ${scope} AND w.${c} IS NOT NULL
-            AND ((d.${c} > 0 AND w.${c} >= ${WITNESS_MOVE}) OR (d.${c} < 0 AND w.${c} <= -${WITNESS_MOVE})))`;
+            AND ((d.${c} > 0 AND w.${c} >= ${WITNESS_MOVE}) OR (d.${c} < 0 AND w.${c} <= -${WITNESS_MOVE}))
+            AND ABS(d.${c}) <= ${MAX_OVER_WITNESS} * ABS(w.${c}))`;
         // Another condition of `printing` (an SQL expression), never the top cell the price quotes.
         const otherCondition = (printing: string) => `w.kind = 'matrix'
             AND substr(w.key, 1, length(${printing}) + 1) = ${printing} || '|'

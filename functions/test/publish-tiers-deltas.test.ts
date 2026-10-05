@@ -587,6 +587,14 @@ describe("computePriceDeltasFrom — sanity rules", () => {
     expect(pct("psa", "7")).toBeCloseTo(112.14 / 136 - 1);                 // the odd one out goes alone: PSA 7 keeps -17.5%
   });
 
+  it("Togepi: a witness has to be in proportion, not merely present", () => {
+    const g = (usd: number) => ({ usd, sales: 4 });
+    const pct = run([{ id: "si1-4", psa: { 6: g(100), 8: g(300), 10: g(222.5) } }],
+                    [{ id: "si1-4", psa: { 6: g(140.7), 8: g(450.6), 10: g(150000) } }]);
+    expect(pct("psa", "10")).toBeUndefined();                              // +67,316% on a +50% witness
+    expect(pct("psa", "8")).toBeCloseTo(0.502);                            // PSA 6 +40.7% vouches for PSA 8's +50.2%
+  });
+
   it("Corphish: a quote that jumps alone on a frozen ladder is not a market move", () => {
     const ladder = (nm: number, lp: number): Ladder => ({ "Near Mint": nm, "Lightly Played": lp,
       "Moderately Played": 3.17, "Heavily Played": 2.99, "Damaged": 3.0 });
