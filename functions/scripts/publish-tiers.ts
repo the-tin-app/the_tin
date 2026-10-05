@@ -74,6 +74,54 @@ function pickLookbackArtifact(catalogDir: string, now: Date,
  * history table) and grades/conditions below the expert tier. MUTATES sourceDbPath.
  */
 export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now: Date): void {
+  const lookbacks: DeltaLookback[] = [];
+  for (const lb of LOOKBACKS) {
+    const artifact = pickLookbackArtifact(catalogDir, now, lb);
+    if (artifact) lookbacks.push({ col: lb.col, gzPath: join(catalogDir, artifact) });
+  }
+  computePriceDeltasFrom(sourceDbPath, lookbacks);
+}
+
+export interface DeltaLookback { col: (typeof LOOKBACKS)[number]["col"]; gzPath: string }
+
+/** Graded deltas need at least this many sales behind the grade tonight. A PSA 10 quoted off one
+ *  sale moved +343,634% in a month (Blaziken FB LV.X, 2026-10-04); a price that thin is a
+ *  listing, not a market. */
+const MIN_GRADED_SALES = 3;
+
+/** Better condition → lower rank. NULL for anything else — PPT leaks printing names into the
+ *  condition column, and an unranked row must never vote on a ladder. */
+const CONDITION_RANK = (col: string) => `CASE ${col}
+  WHEN 'Near Mint' THEN 0 WHEN 'Lightly Played' THEN 1 WHEN 'Moderately Played' THEN 2
+  WHEN 'Heavily Played' THEN 3 WHEN 'Damaged' THEN 4 END`;
+
+/**
+ * `computePriceDeltas` with the lookback artifacts named explicitly — what `validate-deltas.ts`
+ * runs against preserved artifacts, never a served catalog dir. MUTATES sourceDbPath.
+ *
+ * A delta is the difference between two single-night PPT snapshots, and for thin markets either
+ * night can be garbage. Measured 2026-10-04 (v92 vs v62): 512 rows past +500%, and the screen
+ * showed the band just under the app's clamp — Sceptile's Reverse Holofoil at +454.9% while its
+ * history moved +16.8%. So a delta is only written when both nights describe something coherent:
+ *
+ * 1. **Ladder** — on BOTH nights, a printing's condition prices must run NM ≥ LP ≥ MP ≥ HP ≥ DMG.
+ *    Sceptile's Sep 4 Reverse Holofoil had NM $2.97 under Damaged $4.24. A night like that
+ *    blanks the printing's `printing` and `matrix` deltas, and `raw` when raw quotes that
+ *    printing (Kyogre Star: MP $299.99 under HP $600 — the case the raw_printing label guard
+ *    let through, because the label matched). The card-level condition ladder gates `condition`.
+ * 2. **No ladder, no printing delta** — a `price_by_variant` row with no `price_matrix` rows is
+ *    not a printing this pipeline models: "Miscellaneous Cards & Products", "League &
+ *    Championship Cards" (PPT category buckets), and the print runs PPT prices without a
+ *    condition breakdown. Nothing can validate those, and they carried the +1465% / +443% rows.
+ * 3. **Thin graded** — a `psa` delta needs ≥ MIN_GRADED_SALES sales behind that grade tonight.
+ * 4. **Same product** — when both nights record `price_source` (the PPT product the card's prices
+ *    came from), a card whose product changed gets no delta of any kind: that is two products,
+ *    not one product's move. Artifacts from before the column skip this check.
+ *
+ * Each rule applies only where both databases carry what it reads, so older artifacts keep the
+ * behaviour they had rather than going blank.
+ */
+export function computePriceDeltasFrom(sourceDbPath: string, lookbacks: DeltaLookback[]): void {
   const db = new Database(sourceDbPath);
   db.exec(`
     CREATE TABLE IF NOT EXISTS price_delta(
@@ -82,25 +130,64 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
       PRIMARY KEY(card_id, kind, key));
     CREATE INDEX IF NOT EXISTS idx_price_delta_card ON price_delta(card_id);
     DELETE FROM price_delta;`);
+  const tables = (schema: string) => new Set((db.prepare(
+    `SELECT name FROM ${schema}.sqlite_master WHERE type='table'`).all() as { name: string }[])
+    .map((t) => t.name));
+  const columns = (schema: string, table: string) => new Set((db.pragma(
+    `${schema}.table_info(${table})`) as { name: string }[]).map((c) => c.name));
+  const brokenLadders = (schema: string) => `
+    SELECT DISTINCT a.card_id, a.printing FROM ${schema}.price_matrix a
+    JOIN ${schema}.price_matrix b ON b.card_id = a.card_id AND b.printing = a.printing
+    WHERE ${CONDITION_RANK("a.condition")} < ${CONDITION_RANK("b.condition")} AND a.usd < b.usd`;
+  const brokenCardLadders = (schema: string) => `
+    SELECT DISTINCT a.card_id FROM ${schema}.price_by_condition a
+    JOIN ${schema}.price_by_condition b ON b.card_id = a.card_id
+    WHERE ${CONDITION_RANK("a.condition")} < ${CONDITION_RANK("b.condition")} AND a.usd < b.usd`;
+
+  const newTables = tables("main");
+  const newLatest = columns("main", "price_latest");
+  const newHasMatrix = newTables.has("price_matrix");
   try {
-    for (const lb of LOOKBACKS) {
-      const artifact = pickLookbackArtifact(catalogDir, now, lb);
-      if (!artifact) continue;
+    for (const lb of lookbacks) {
       // OS tempdir, not catalogDir — a leaked temp (ATTACH throws on a corrupt/partial artifact)
       // must never land in the served catalog dir, where the prune regex never touches it.
       const tmp = join(tmpdir(), `_delta-lookback-${lb.col}-${process.pid}-${Date.now()}.sqlite`);
+      const artifact = lb.gzPath;
       let attached = false;
       // Per-lookback isolation: one bad/old-schema artifact must not kill the other windows
       // (2026-07-19: a pre-psa-widening 7d artifact aborted 7d cond/psa/printing AND all of 30d).
       try {
-        writeFileSync(tmp, gunzipSync(readFileSync(join(catalogDir, artifact))));
+        if (artifact.endsWith(".gz")) writeFileSync(tmp, gunzipSync(readFileSync(artifact)));
+        else copyFileSync(artifact, tmp);
         db.exec(`ATTACH DATABASE '${tmp.replace(/'/g, "''")}' AS old`);
         attached = true;
         const upsert = (select: string) => db.exec(`
           INSERT INTO price_delta(card_id, kind, key, ${lb.col}) ${select}
           ON CONFLICT(card_id, kind, key) DO UPDATE SET ${lb.col} = excluded.${lb.col}`);
-        const oldCols = new Set((db.pragma("old.table_info(price_latest)") as
-          { name: string }[]).map((c) => c.name));
+        const oldCols = columns("old", "price_latest");
+        const oldTables = tables("old");
+        const bothMatrix = newHasMatrix && oldTables.has("price_matrix");
+
+        // ---- the sanity sets (rules 1, 2, 4), rebuilt per lookback: half of each is `old` ----
+        db.exec(`
+          DROP TABLE IF EXISTS temp._bad_printing; DROP TABLE IF EXISTS temp._bad_card;
+          DROP TABLE IF EXISTS temp._moved_source;
+          CREATE TEMP TABLE _bad_printing(card_id TEXT, printing TEXT, PRIMARY KEY(card_id, printing));
+          CREATE TEMP TABLE _bad_card(card_id TEXT PRIMARY KEY);
+          CREATE TEMP TABLE _moved_source(card_id TEXT PRIMARY KEY);`);
+        if (newHasMatrix) db.exec(`INSERT OR IGNORE INTO _bad_printing ${brokenLadders("main")}`);
+        if (oldTables.has("price_matrix")) db.exec(`INSERT OR IGNORE INTO _bad_printing ${brokenLadders("old")}`);
+        db.exec(`INSERT OR IGNORE INTO _bad_card ${brokenCardLadders("main")}`);
+        db.exec(`INSERT OR IGNORE INTO _bad_card ${brokenCardLadders("old")}`);
+        if (newLatest.has("price_source") && oldCols.has("price_source")) {
+          db.exec(`INSERT OR IGNORE INTO _moved_source
+                   SELECT n.card_id FROM main.price_latest n JOIN old.price_latest o ON o.card_id = n.card_id
+                   WHERE o.price_source IS NOT n.price_source`);
+        }
+        const sameSource = "AND n.card_id NOT IN (SELECT card_id FROM temp._moved_source)";
+        const printingLadderOk = (printing: string) =>
+          `AND NOT EXISTS (SELECT 1 FROM temp._bad_printing bp WHERE bp.card_id = n.card_id AND bp.printing = ${printing})`;
+
         // raw_usd quotes whichever printing had a market price that night, so the same column can
         // describe a different printing in each artifact. Diffing across a flip measures the SPREAD
         // BETWEEN TWO PRINTINGS, not a price move (+1800% rows, 2026-07-25). Requiring the basis to
@@ -111,6 +198,10 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
         // old card_id-only join rather than blacking out every raw delta for the 30 days it takes
         // the ledger to age over: 1d is correct after one nightly, 7d after a week, 30d after a
         // month, and the client's implausible-pct clamp still covers the gap.
+        //
+        // A matching label is NOT a matching subject, though: Kyogre Star kept 'Holofoil' both
+        // nights while one of them was garbage. Rule 1 (the ladder of the printing raw quotes)
+        // is what catches that.
         const basisMatch = oldCols.has("raw_printing")
           ? "AND (o.raw_printing IS n.raw_printing)"   // IS, not =: NULL basis must match NULL basis
           : "";
@@ -118,36 +209,45 @@ export function computePriceDeltas(sourceDbPath: string, catalogDir: string, now
           console.warn(`[publish-tiers] ${lb.col} lookback vs ${artifact} predates raw_printing —` +
             " raw deltas for this window are unverified (basis flips can still slip through)");
         }
+        const rawLadder = newLatest.has("raw_printing") ? printingLadderOk("n.raw_printing") : "";
         upsert(`SELECT n.card_id, 'raw', '', (n.raw_usd - o.raw_usd) / o.raw_usd
                 FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id ${basisMatch}
-                WHERE n.raw_usd > 0 AND o.raw_usd > 0`);
+                WHERE n.raw_usd > 0 AND o.raw_usd > 0 ${rawLadder} ${sameSource}`);
         // Artifacts published before the psa1-10 widening only carry psa8-10.
+        const gradedGate = newTables.has("graded_sales")
+          ? (g: number) => `AND EXISTS (SELECT 1 FROM main.graded_sales gs WHERE gs.card_id = n.card_id
+                              AND gs.grade = 'psa${g}' AND gs.sales_count >= ${MIN_GRADED_SALES})`
+          : () => "";
         for (let g = 1; g <= 10; g++) {
           if (!oldCols.has(`psa${g}`)) continue;
           upsert(`SELECT n.card_id, 'psa', '${g}', (n.psa${g} - o.psa${g}) / o.psa${g}
                   FROM price_latest n JOIN old.price_latest o ON o.card_id = n.card_id
-                  WHERE n.psa${g} > 0 AND o.psa${g} > 0`);
+                  WHERE n.psa${g} > 0 AND o.psa${g} > 0 ${gradedGate(g)} ${sameSource}`);
         }
         upsert(`SELECT n.card_id, 'condition', n.condition, (n.usd - o.usd) / o.usd
                 FROM price_by_condition n JOIN old.price_by_condition o
                   ON o.card_id = n.card_id AND o.condition = n.condition
-                WHERE n.usd > 0 AND o.usd > 0`);
+                WHERE n.usd > 0 AND o.usd > 0
+                  AND n.card_id NOT IN (SELECT card_id FROM temp._bad_card) ${sameSource}`);
+        // Rule 2: a printing is only diffed where this pipeline models it — a condition ladder on
+        // each night that has the table.
+        const laddered = (newHasMatrix
+          ? "AND EXISTS (SELECT 1 FROM main.price_matrix m WHERE m.card_id = n.card_id AND m.printing = n.printing)" : "")
+          + (oldTables.has("price_matrix")
+          ? " AND EXISTS (SELECT 1 FROM old.price_matrix m WHERE m.card_id = n.card_id AND m.printing = n.printing)" : "");
         upsert(`SELECT n.card_id, 'printing', n.printing, (n.usd - o.usd) / o.usd
                 FROM price_by_variant n JOIN old.price_by_variant o
                   ON o.card_id = n.card_id AND o.printing = n.printing
-                WHERE n.usd > 0 AND o.usd > 0`);
+                WHERE n.usd > 0 AND o.usd > 0 ${laddered} ${printingLadderOk("n.printing")} ${sameSource}`);
         // Matrix deltas: keyed "printing|condition" ('|' appears in neither PPT key set).
         // Guarded like the psa-column probe — artifacts published before the matrix feature
         // have no price_matrix table, and one missing table must not abort the window's
         // remaining upserts (they already ran) or log a scary failure for a normal rollout.
-        const oldTables = new Set((db.prepare(
-          "SELECT name FROM old.sqlite_master WHERE type='table'").all() as { name: string }[])
-          .map((t) => t.name));
-        if (oldTables.has("price_matrix")) {
+        if (bothMatrix) {
           upsert(`SELECT n.card_id, 'matrix', n.printing || '|' || n.condition, (n.usd - o.usd) / o.usd
                   FROM price_matrix n JOIN old.price_matrix o
                     ON o.card_id = n.card_id AND o.printing = n.printing AND o.condition = n.condition
-                  WHERE n.usd > 0 AND o.usd > 0`);
+                  WHERE n.usd > 0 AND o.usd > 0 ${printingLadderOk("n.printing")} ${sameSource}`);
         }
       } catch (e) {
         console.warn(`[publish-tiers] ${lb.col} lookback vs ${artifact} failed — skipping:`, e);

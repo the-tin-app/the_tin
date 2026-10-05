@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, readFileSync
 import { gzipSync, gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computePriceDeltas, publishTiers, pruneOldArtifacts, NasManifest } from "../scripts/publish-tiers";
+import { computePriceDeltas, computePriceDeltasFrom, publishTiers, pruneOldArtifacts, NasManifest } from "../scripts/publish-tiers";
 import { StoragePort } from "../src/pipeline/publish";
 
 const DAY_MS = 86_400_000;
@@ -395,5 +395,155 @@ describe("pruneOldArtifacts — per-tier retention", () => {
     artifact(dir, "catalog-v9.sqlite.gz", 99);
     expect(pruneOldArtifacts(dir, manifestFor(30), NOW)).toEqual([]);
     expect(existsSync(join(dir, "supporters.json"))).toBe(true);
+  });
+});
+
+/**
+ * The four sanity rules, on the cases that put garbage on screen on 2026-10-04 (v92 vs v62).
+ * Every DB here carries the full current schema, so each rule is live; the legacy-schema
+ * behaviour is covered above.
+ */
+describe("computePriceDeltasFrom — sanity rules", () => {
+  const FULL_SCHEMA = `
+    CREATE TABLE price_latest(card_id TEXT PRIMARY KEY, raw_usd REAL,
+      psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
+      psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, raw_printing TEXT, price_source INTEGER, as_of TEXT);
+    CREATE TABLE price_by_condition(card_id TEXT, condition TEXT, usd REAL, as_of TEXT, PRIMARY KEY(card_id, condition));
+    CREATE TABLE price_by_variant(card_id TEXT, printing TEXT, usd REAL, as_of TEXT, PRIMARY KEY(card_id, printing));
+    CREATE TABLE price_matrix(card_id TEXT, printing TEXT, condition TEXT, usd REAL, as_of TEXT,
+      PRIMARY KEY(card_id, printing, condition));
+    CREATE TABLE graded_sales(card_id TEXT, grade TEXT, sales_count INTEGER, confidence TEXT, as_of TEXT,
+      PRIMARY KEY(card_id, grade));`;
+
+  type Ladder = Partial<Record<"Near Mint" | "Lightly Played" | "Moderately Played" | "Heavily Played" | "Damaged", number>>;
+  interface Card {
+    id: string; raw?: number; rawPrinting?: string; source?: number | null;
+    psa?: Record<number, { usd: number; sales: number }>;
+    conditions?: Ladder;
+    /** printing → its market price, and (optionally) its condition ladder in price_matrix. */
+    printings?: Record<string, { usd: number; matrix?: Ladder }>;
+  }
+
+  function db(path: string, cards: Card[], schema = FULL_SCHEMA) {
+    const d = new Database(path);
+    d.exec(schema);
+    for (const c of cards) {
+      const psa = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`psa${i + 1}`, c.psa?.[i + 1]?.usd ?? null]));
+      const hasSource = (d.pragma("table_info(price_latest)") as { name: string }[]).some((x) => x.name === "price_source");
+      d.prepare(`INSERT INTO price_latest(card_id, raw_usd, ${Object.keys(psa).join(",")}, raw_printing${hasSource ? ", price_source" : ""}, as_of)
+                 VALUES (@id, @raw, ${Object.keys(psa).map((k) => "@" + k).join(",")}, @rp${hasSource ? ", @src" : ""}, 'x')`)
+        .run({ id: c.id, raw: c.raw ?? null, rp: c.rawPrinting ?? null, src: c.source ?? null, ...psa });
+      for (const [g, v] of Object.entries(c.psa ?? {}))
+        d.prepare("INSERT INTO graded_sales VALUES (?, ?, ?, NULL, 'x')").run(c.id, `psa${g}`, v.sales);
+      for (const [cond, usd] of Object.entries(c.conditions ?? {}))
+        d.prepare("INSERT INTO price_by_condition VALUES (?, ?, ?, 'x')").run(c.id, cond, usd);
+      for (const [printing, v] of Object.entries(c.printings ?? {})) {
+        d.prepare("INSERT INTO price_by_variant VALUES (?, ?, ?, 'x')").run(c.id, printing, v.usd);
+        for (const [cond, usd] of Object.entries(v.matrix ?? {}))
+          d.prepare("INSERT INTO price_matrix VALUES (?, ?, ?, ?, 'x')").run(c.id, printing, cond, usd);
+      }
+    }
+    d.close();
+  }
+
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "sanity-")); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  /** Old snapshot (gzipped, as published) → new DB → deltas for the 30d column. */
+  function run(oldCards: Card[], newCards: Card[], oldSchema = FULL_SCHEMA) {
+    const oldRaw = join(dir, "old.sqlite");
+    db(oldRaw, oldCards, oldSchema);
+    const gz = join(dir, "expert-v62.sqlite.gz");
+    writeFileSync(gz, gzipSync(readFileSync(oldRaw)));
+    const src = join(dir, "source.sqlite");
+    db(src, newCards);
+    computePriceDeltasFrom(src, [{ col: "pct_30d", gzPath: gz }]);
+    const rows = deltaRows(src);
+    return (kind: string, key = "", card?: string) =>
+      rows.find((r) => r.kind === kind && r.key === key && (!card || r.card_id === card))?.pct_30d;
+  }
+
+  const sane: Ladder = { "Near Mint": 20, "Lightly Played": 15, "Moderately Played": 9, "Heavily Played": 6, "Damaged": 4 };
+
+  it("Sceptile: a printing whose NM sat under Damaged one night gets no printing or matrix delta", () => {
+    const old = [{ id: "dp4-8", raw: 20.88, rawPrinting: "Holofoil", conditions: sane, printings: {
+      "Holofoil": { usd: 20.88, matrix: { ...sane, "Near Mint": 20.88 } },
+      "Reverse Holofoil": { usd: 2.97, matrix: { "Near Mint": 2.97, "Lightly Played": 18.88, "Damaged": 4.24 } } } }];
+    const now = [{ id: "dp4-8", raw: 24.39, rawPrinting: "Holofoil", conditions: sane, printings: {
+      "Holofoil": { usd: 24.39, matrix: { ...sane, "Near Mint": 24.39 } },
+      "Reverse Holofoil": { usd: 16.48, matrix: { "Near Mint": 25, "Lightly Played": 20.52, "Damaged": 4.44 } } } }];
+    const pct = run(old, now);
+    expect(pct("printing", "Reverse Holofoil")).toBeUndefined();          // was +454.9%
+    expect(pct("matrix", "Reverse Holofoil|Near Mint")).toBeUndefined();
+    expect(pct("printing", "Holofoil")).toBeCloseTo(24.39 / 20.88 - 1);   // the sane printing still moves
+    expect(pct("raw")).toBeCloseTo(24.39 / 20.88 - 1);                    // +16.8%, matching the history
+  });
+
+  it("Kyogre Star: raw is blanked when the printing it quotes has a broken ladder, though the label matched", () => {
+    const old = [{ id: "ex11-112", raw: 299.99, rawPrinting: "Holofoil",
+      conditions: { "Moderately Played": 299.99, "Heavily Played": 600, "Damaged": 500 },
+      printings: { "Holofoil": { usd: 299.99, matrix: { "Moderately Played": 299.99, "Heavily Played": 600, "Damaged": 500 } } } }];
+    const now = [{ id: "ex11-112", raw: 1602.99, rawPrinting: "Holofoil",
+      conditions: { "Moderately Played": 1602.99, "Heavily Played": 600, "Damaged": 500 },
+      printings: { "Holofoil": { usd: 1602.99, matrix: { "Moderately Played": 1602.99, "Heavily Played": 600, "Damaged": 500 } } } }];
+    const pct = run(old, now);
+    expect(pct("raw")).toBeUndefined();                                    // was +434.3%, past the raw_printing guard
+    expect(pct("printing", "Holofoil")).toBeUndefined();
+    expect(pct("matrix", "Holofoil|Moderately Played")).toBeUndefined();
+    expect(pct("condition", "Moderately Played")).toBeUndefined();         // the card-level ladder was broken too
+  });
+
+  it("Charizard and Meltan: a 'printing' with no condition ladder gets no printing delta", () => {
+    const old = [
+      { id: "sm9-14", printings: { "Miscellaneous Cards & Products": { usd: 50.64 }, "Normal": { usd: 17.27, matrix: { "Near Mint": 17.27 } } } },
+      { id: "sv07-102", printings: { "Stellar Crown Stamped": { usd: 1 } } },
+    ];
+    const now = [
+      { id: "sm9-14", printings: { "Miscellaneous Cards & Products": { usd: 275 }, "Normal": { usd: 17.32, matrix: { "Near Mint": 17.32 } } } },
+      { id: "sv07-102", printings: { "Stellar Crown Stamped": { usd: 15.65 } } },
+    ];
+    const pct = run(old, now);
+    expect(pct("printing", "Miscellaneous Cards & Products")).toBeUndefined();  // was +443%
+    expect(pct("printing", "Stellar Crown Stamped")).toBeUndefined();           // was +1465%
+    expect(pct("printing", "Normal")).toBeCloseTo(17.32 / 17.27 - 1);           // the real card: +0.3%
+  });
+
+  it("a graded delta needs at least three sales behind the grade tonight", () => {
+    const old = [{ id: "pl3-142", psa: { 9: { usd: 100, sales: 13 }, 10: { usd: 1, sales: 1 } } }];
+    const now = [{ id: "pl3-142", psa: { 9: { usd: 110, sales: 13 }, 10: { usd: 3437, sales: 1 } } }];
+    const pct = run(old, now);
+    expect(pct("psa", "10")).toBeUndefined();                              // one sale: +343,634% is a listing
+    expect(pct("psa", "9")).toBeCloseTo(0.1);
+  });
+
+  it("a card whose PPT product changed gets no delta of any kind", () => {
+    const card = (source: number, usd: number) => ({ id: "c1", raw: usd, rawPrinting: "Holofoil", source,
+      conditions: { "Near Mint": usd }, printings: { "Holofoil": { usd, matrix: { "Near Mint": usd } } } });
+    const moved = run([card(111, 10)], [card(222, 50)]);
+    for (const [kind, key] of [["raw", ""], ["condition", "Near Mint"], ["printing", "Holofoil"], ["matrix", "Holofoil|Near Mint"]])
+      expect(moved(kind, key)).toBeUndefined();
+  });
+
+  it("the same product, or an artifact from before price_source, is diffed as before", () => {
+    const card = (source: number | null, usd: number) => ({ id: "c1", raw: usd, rawPrinting: "Holofoil", source,
+      conditions: { "Near Mint": usd }, printings: { "Holofoil": { usd, matrix: { "Near Mint": usd } } } });
+    expect(run([card(111, 10)], [card(111, 12)])("raw")).toBeCloseTo(0.2);
+    rmSync(dir, { recursive: true, force: true }); dir = mkdtempSync(join(tmpdir(), "sanity-"));
+    const preSource = FULL_SCHEMA.replace(" price_source INTEGER,", "");
+    expect(run([card(null, 10)], [card(222, 12)], preSource)("raw")).toBeCloseTo(0.2);
+  });
+
+  it("a healthy card loses nothing", () => {
+    const card = (k: number) => ({ id: "ok", raw: 20 * k, rawPrinting: "Holofoil",
+      psa: { 10: { usd: 300 * k, sales: 8 } },
+      conditions: Object.fromEntries(Object.entries(sane).map(([c, v]) => [c, v * k])) as Ladder,
+      printings: { "Holofoil": { usd: 20 * k, matrix: Object.fromEntries(Object.entries(sane).map(([c, v]) => [c, v * k])) as Ladder } } });
+    const pct = run([card(1)], [card(1.1)]);
+    expect(pct("raw")).toBeCloseTo(0.1);
+    expect(pct("psa", "10")).toBeCloseTo(0.1);
+    expect(pct("condition", "Lightly Played")).toBeCloseTo(0.1);
+    expect(pct("printing", "Holofoil")).toBeCloseTo(0.1);
+    expect(pct("matrix", "Holofoil|Damaged")).toBeCloseTo(0.1);
   });
 });

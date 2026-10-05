@@ -25,10 +25,13 @@ CREATE VIRTUAL TABLE card_text USING fts5(card_id UNINDEXED, name, body);
 -- when the primary has no market price that night, so the column can change identity between
 -- artifacts; without recording it, a day-over-day diff silently measures the spread between two
 -- printings instead of a price move (that is how a card read +1800% while its own detail said +0.2%).
+-- price_source is the PPT product (its tcgPlayerId) the card's PPT prices came from that night. A
+-- printing LABEL can match across a re-match of the product behind it; this can't. NULL when the
+-- sweep never reached the card. computePriceDeltas refuses to diff a card whose source moved.
 CREATE TABLE price_latest(card_id TEXT PRIMARY KEY REFERENCES card(id), raw_usd REAL, raw_eur REAL,
   psa1 REAL, psa2 REAL, psa3 REAL, psa4 REAL, psa5 REAL, psa6 REAL,
   psa7 REAL, psa8 REAL, psa9 REAL, psa10 REAL, sellers INTEGER, listings INTEGER, low_usd REAL,
-  raw_printing TEXT, as_of TEXT NOT NULL);
+  raw_printing TEXT, price_source INTEGER, as_of TEXT NOT NULL);
 CREATE TABLE connected_art(scene_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'combined', title TEXT NOT NULL, card_id TEXT NOT NULL, position INTEGER NOT NULL,
   PRIMARY KEY(scene_id, card_id));
 CREATE TABLE pokemon(dex_id INTEGER PRIMARY KEY, name TEXT NOT NULL, rep_card_id TEXT);
