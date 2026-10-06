@@ -109,6 +109,11 @@ describe("verifyAssertion", () => {
     const clientDataHash = createHash("sha256").update(nonce).digest();
     const rpIdHash = createHash("sha256").update(opts.appId ?? APP_ID).digest();
     const authenticatorData = buildAuthData(rpIdHash, opts.counter);
+    // Apple sets AT (0x40) on assertion authData even though no attested credential data follows,
+    // leaving the 37-byte buffer this fixture produces. Mirroring that is the difference between
+    // covering the real POST /assert path and the one that passed here while production returned
+    // 400 for every device. Set before signing: the signature is over these exact bytes.
+    authenticatorData[32] |= 0x40;
     const signedData = createHash("sha256").update(Buffer.concat([authenticatorData, clientDataHash])).digest();
     const signature = cryptoSign("sha256", signedData, privateKey);
     if (opts.tamperSignature) signature[0] ^= 0xff;

@@ -65,7 +65,7 @@ export function verifyAttestation(opts: AttestOptions): AttestedDevice {
   const certNonce = extractNonceExtension(x5c[0]);
   if (!certNonce.equals(composedNonce)) throw new Error("nonce mismatch");
 
-  const parsed = parseAuthenticatorData(authData);
+  const parsed = parseAuthenticatorData(authData, { attested: true });
   const expectedRpIdHash = createHash("sha256").update(opts.appId).digest();
   if (!parsed.rpIdHash.equals(expectedRpIdHash)) throw new Error("rpIdHash mismatch");
   if (parsed.counter !== 0) throw new Error("attestation counter must be 0 for a fresh key");
