@@ -242,6 +242,42 @@ struct CardDetailView: View {
         return CardVariant.defaultFor(rarity: rarity).row(in: variants) ?? variants.first
     }
 
+    /// What the history chart says about printings. The catalog keeps ONE weekly series per card:
+    /// PPT's `priceHistory.conditions`, which is its primary printing's history (byte-identical to
+    /// `priceHistory.variants[primaryPrinting]`, checked against Sceptile 2026-10-06), and
+    /// `price_latest.raw_printing` names that printing. So on a multi-printing card the chart can
+    /// be a different printing from the one the menu and the % badge are about — a reverse holo up
+    /// 400% drawn as a flat holofoil line. Until per-printing history ships, the chart says which
+    /// printing it is, and says so loudly when that isn't the selected one.
+    enum ChartPrintingNote: Equatable {
+        /// One printing: there is nothing to disambiguate.
+        case onePrinting
+        case matches(String)
+        case differs(chart: String, selected: String)
+        /// The catalog doesn't name a printing the card is priced in.
+        case unknown(selected: String)
+
+        var chart: String? {
+            switch self {
+            case .matches(let p), .differs(let p, _): p
+            case .onePrinting, .unknown: nil
+            }
+        }
+    }
+
+    /// `raw_printing` is trusted only when it names one of the card's own priced printings —
+    /// exactly, since both sides carry PPT's key. Older artifacts filled it from a TCGdex-derived
+    /// label ("Normal" for a card PPT only prices as "Holofoil"), and naming that would be wrong.
+    static func chartPrintingNote(chartPrinting: String?, selected: VariantPrice?,
+                                  variants: [VariantPrice]) -> ChartPrintingNote {
+        guard variants.count > 1, let selected else { return .onePrinting }
+        guard let chart = chartPrinting, variants.contains(where: { $0.printing == chart }) else {
+            return .unknown(selected: selected.printing)
+        }
+        return chart == selected.printing ? .matches(chart)
+            : .differs(chart: chart, selected: selected.printing)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -827,11 +863,22 @@ struct CardDetailView: View {
                     Spacer()
                     if model.tier == .expert { overlayPickers }
                 }
-                Text("Weekly market price").font(.caption).foregroundStyle(.secondary)
+                let note = Self.chartPrintingNote(chartPrinting: model.price?.rawPrinting,
+                                                  selected: currentPrinting, variants: model.variants)
+                Text(note.chart.map { "Weekly market price · \($0)" } ?? "Weekly market price")
+                    .font(.caption).foregroundStyle(.secondary)
                 PriceHistoryChart(series: series)
-                if currentPrinting != nil {
-                    Text("History is for the card overall — PPT has no per-printing history.")
-                        .font(.caption2).foregroundStyle(.tertiary)
+                switch note {
+                case .differs(let chart, let selected):
+                    Label("This chart is \(chart), not \(selected). History for other printings isn't in the catalog yet.",
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                case .unknown(let selected):
+                    Label("This chart is the card's main printing, which may not be \(selected).",
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                case .onePrinting, .matches:
+                    EmptyView()
                 }
             }
         case .empty where model.tier == .casual:
