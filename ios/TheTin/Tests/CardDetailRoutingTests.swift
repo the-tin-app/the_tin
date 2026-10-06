@@ -65,4 +65,39 @@ final class CardDetailRoutingTests: XCTestCase {
         XCTAssertEqual(h?.condition, .lp)
         XCTAssertNil(CardHighlight(entry: entry(variant: nil, condition: nil)))
     }
+
+    // MARK: Which printing the history chart is
+
+    private func note(chart: String?, selected: String?, _ variants: [VariantPrice]? = nil)
+        -> CardDetailView.ChartPrintingNote {
+        let vs = variants ?? printings
+        return CardDetailView.chartPrintingNote(chartPrinting: chart,
+                                                selected: vs.first { $0.printing == selected },
+                                                variants: vs)
+    }
+
+    /// The Sceptile report: the reverse holo is selected and up, the chart is PPT's primary
+    /// printing. The caption has to say the line isn't the printing above it.
+    func testAChartOfAnotherPrintingSaysWhichItIs() {
+        XCTAssertEqual(note(chart: "Holofoil", selected: "Reverse Holofoil"),
+                       .differs(chart: "Holofoil", selected: "Reverse Holofoil"))
+    }
+
+    func testAChartOfTheSelectedPrintingIsLabelledQuietly() {
+        XCTAssertEqual(note(chart: "Holofoil", selected: "Holofoil"), .matches("Holofoil"))
+    }
+
+    /// An older artifact's TCGdex-derived label ("Normal" on a card PPT prices only as foils)
+    /// must not be presented as the chart's printing.
+    func testARawPrintingTheCardIsntPricedInIsNotNamed() {
+        XCTAssertEqual(note(chart: "Normal", selected: "Holofoil"), .unknown(selected: "Holofoil"))
+        XCTAssertEqual(note(chart: nil, selected: "Holofoil"), .unknown(selected: "Holofoil"))
+    }
+
+    /// One printing: no menu, so nothing for the chart to disagree with.
+    func testASinglePrintingCardsChartNeedsNoNote() {
+        let one = [VariantPrice(printing: "Holofoil", usd: 40)]
+        XCTAssertEqual(note(chart: "Holofoil", selected: nil, one), .onePrinting)
+        XCTAssertNil(note(chart: "Holofoil", selected: nil, one).chart)
+    }
 }
