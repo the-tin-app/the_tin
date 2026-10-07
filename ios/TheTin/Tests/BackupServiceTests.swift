@@ -39,12 +39,13 @@ final class BackupServiceTests: XCTestCase {
     }
 
     private func makeService(collection: LocalCollectionRepository, wants: LocalWantsRepository,
-                             setGoals: SetGoalsModel? = nil,
+                             setGoals: SetGoalsModel? = nil, binders: BinderLayoutsModel? = nil,
                              debounce: Duration = .seconds(5)) -> BackupService {
         // A per-service defaults suite: `.standard` is shared by every test in the process (and
         // survives the run), so the last-written fingerprint would leak between cases.
         BackupService(store: TempDirBackupStore(dir: dir.appendingPathComponent("icloud", isDirectory: true)),
-                      collection: collection, wants: wants, setGoals: setGoals, uid: "local",
+                      collection: collection, wants: wants, setGoals: setGoals, binders: binders,
+                      uid: "local",
                       defaults: UserDefaults(suiteName: "test-\(UUID().uuidString)")!,
                       debounce: debounce, now: { self.fixedNow })
     }
@@ -53,6 +54,12 @@ final class BackupServiceTests: XCTestCase {
     private func makeGoals(sub: String) -> SetGoalsModel {
         SetGoalsModel(paths: SetGoalPaths(fileURL: dir.appendingPathComponent(sub, isDirectory: true)
             .appendingPathComponent("set-goals.json")))
+    }
+
+    /// A binders model persisting under `<dir>/<sub>/binders.json`.
+    private func makeBinders(sub: String) -> BinderLayoutsModel {
+        BinderLayoutsModel(paths: BinderPaths(fileURL: dir.appendingPathComponent(sub, isDirectory: true)
+            .appendingPathComponent("binders.json")))
     }
 
     /// Whole-second dates: ISO-8601 truncates fractional seconds, and these must round-trip.
@@ -83,7 +90,7 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(service.status, .backedUp(fixedNow))
 
         let snapshot = try await service.loadBackup()
-        XCTAssertEqual(snapshot.schemaVersion, 4)
+        XCTAssertEqual(snapshot.schemaVersion, 5)
         XCTAssertEqual(snapshot.setGoals, ["base1"])
         XCTAssertEqual(snapshot.exportedAt, fixedNow)
         XCTAssertEqual(snapshot.groups.map(\.id), [gid])
@@ -235,6 +242,32 @@ final class BackupServiceTests: XCTestCase {
             .appendingPathComponent("set-goals.json")), ["base1", "sv1"])
     }
 
+    /// Binder layouts survive device A → backup file → device B, and the restore replaces
+    /// (not merges) whatever the new device had laid out.
+    func testBindersRoundTripThroughBackupAndRestore() async throws {
+        let (colA, wantsA) = try makeRepos(sub: "bindersA")
+        try await colA.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        // A real divider, because a restore now prunes layouts whose divider the backup lacks.
+        let gid = try await colA.createGroup(name: "Binder")
+        let bindersA = makeBinders(sub: "bindersA")
+        let layout = BinderLayout(groupId: gid, shape: PageShape(rows: 1, cols: 2),
+                                  pages: [BinderPage(slots: [PlannedCard(cardId: "a"), nil])])
+        bindersA.save(layout)
+        await makeService(collection: colA, wants: wantsA, binders: bindersA).backUpNow()
+
+        let (colB, wantsB) = try makeRepos(sub: "bindersB")
+        let bindersB = makeBinders(sub: "bindersB")
+        bindersB.save(BinderLayout(groupId: "other"))
+        let serviceB = makeService(collection: colB, wants: wantsB, binders: bindersB)
+        try await serviceB.performRestore(snapshot: serviceB.loadBackup())
+
+        XCTAssertEqual(bindersB.all, [layout])
+        // Persisted, not just in memory — a relaunch must see the restored layout.
+        let bindersPath = dir.appendingPathComponent("bindersB", isDirectory: true)
+            .appendingPathComponent("binders.json")
+        XCTAssertEqual(BinderLayoutsModel(paths: BinderPaths(fileURL: bindersPath)).all, [layout])
+    }
+
     /// A v2 backup file has no `setGoals` key. It must still decode (as nil), and restoring it
     /// must leave the device's own goals alone rather than wiping them.
     func testV2BackupDecodesAsV3AndLeavesGoalsUntouched() async throws {
@@ -286,16 +319,18 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(sealed.first?.pricePaid, 900)
     }
 
-    /// A v4 backup carries sealed, and restoring it replaces what's on the device — last writer
-    /// wins, exactly as it does for cards.
-    func testV4BackupCapturesAndRestoresSealed() async throws {
+    /// A backup carries sealed, and restoring it replaces what's on the device — last writer
+    /// wins, exactly as it does for cards. (Was `testV4BackupCapturesAndRestoresSealed`; renamed
+    /// when `schemaVersion` moved to 5 — this asserts the version a fresh write CARRIES, not that
+    /// an old file decodes, so "V4" in the name was never accurate to what it checks.)
+    func testABackupCapturesAndRestoresSealed() async throws {
         let (colA, wantsA) = try makeRepos(sub: "sealedA")
         try await colA.addSealed(SealedEntry(id: "s1", productId: 517_898, qty: 3, pricePaid: 1350,
                                              acquiredFrom: "card show", addedAt: fixedNow))
         await makeService(collection: colA, wants: wantsA).backUpNow()
 
         let written = try await makeService(collection: colA, wants: wantsA).loadBackup()
-        XCTAssertEqual(written.schemaVersion, 4)
+        XCTAssertEqual(written.schemaVersion, 5)
         XCTAssertEqual(written.sealed?.map(\.id), ["s1"])
 
         let (colB, wantsB) = try makeRepos(sub: "sealedB")
@@ -325,6 +360,25 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(service.status, .backedUp(fixedNow))
         let written = try await service.loadBackup()
         XCTAssertEqual(written.setGoals, ["base1"])
+    }
+
+    /// Laying out a binder is a backup-worthy change on its own — it must arm the debounce even
+    /// when the collection and wishlist never move. Mirrors `testGoalChangeAloneTriggersBackup`,
+    /// including its debounce-vs-sleep timing (see that test's sibling flakiness note).
+    func testBinderChangeAloneTriggersBackup() async throws {
+        let (col, wants) = try makeRepos(sub: "binderTrigger")
+        try await col.addEntry(fixtureEntry(id: "e1", groupId: ""))
+        let binders = makeBinders(sub: "binderTrigger")
+        let service = makeService(collection: col, wants: wants, binders: binders,
+                                  debounce: .milliseconds(50))
+        service.start()
+
+        binders.save(BinderLayout(groupId: "g1"))
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertEqual(service.status, .backedUp(fixedNow))
+        let written = try await service.loadBackup()
+        XCTAssertEqual(written.binders?.map(\.groupId), ["g1"])
     }
 
     func testAutoBackupDebouncesAndSkipsInitialEmissions() async throws {
@@ -467,5 +521,67 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertNil(phone.conflict)
         let onDisk = try await phone.loadBackup()
         XCTAssertEqual(Set(onDisk.entries.map(\.id)), ["e1", "e2"])
+    }
+
+    /// A v4 backup has no `binders` key. It must still decode (as nil) — the actual "leaves local
+    /// binders untouched" claim is proved by `testAPreV5BackupLeavesBindersOnDiskUntouched` below,
+    /// which runs this JSON through a real restore; this test only checks the decode.
+    func testAPreV5BackupDecodesWithNoBindersAndClearsNothing() throws {
+        let json = #"{"schemaVersion":4,"exportedAt":0,"groups":[],"entries":[],"wanted":[]}"#
+        let snapshot = try JSONDecoder().decode(BackupSnapshot.self, from: Data(json.utf8))
+        XCTAssertNil(snapshot.binders)
+    }
+
+    /// A v4 backup says NOTHING about binders. Restoring one through the real `BackupService`
+    /// must leave the device's own binder layouts alone rather than wiping them — the same rule
+    /// `setGoals` and `sealed` each earn, and what makes the test above's name honest.
+    func testAPreV5BackupLeavesBindersOnDiskUntouched() async throws {
+        // The divider IS in the backup: a layout whose divider is not is a separate rule, pinned
+        // by `testARestoreDropsALayoutWhoseDividerIsGone`.
+        let json = #"{"schemaVersion":4,"exportedAt":0,"groups":[{"id":"g1","name":"Binder","sortOrder":0,"createdAt":0}],"entries":[],"wanted":[]}"#
+        let snapshot = try JSONDecoder().decode(BackupSnapshot.self, from: Data(json.utf8))
+        XCTAssertNil(snapshot.binders)
+
+        let (col, wants) = try makeRepos(sub: "deviceV4Binders")
+        let binders = makeBinders(sub: "deviceV4Binders")
+        let layout = BinderLayout(groupId: "g1")
+        binders.save(layout)
+        try await makeService(collection: col, wants: wants, binders: binders)
+            .performRestore(snapshot: snapshot)
+
+        XCTAssertEqual(binders.all, [layout], "a v4 backup says nothing about binders")
+    }
+
+    /// A restore replaces the dividers wholesale, so a layout keyed to one the backup does not
+    /// have is orphaned — invisible forever, and copied into every later backup. Both branches
+    /// prune: a v5 backup can carry a stale layout too.
+    func testARestoreDropsALayoutWhoseDividerIsGone() async throws {
+        let (col, wants) = try makeRepos(sub: "orphanBinders")
+        let binders = makeBinders(sub: "orphanBinders")
+        let kept = BinderLayout(groupId: "g1")
+        binders.save(kept)
+        binders.save(BinderLayout(groupId: "gone"))
+        let group = CardGroup(id: "g1", name: "Binder", sortOrder: 0, createdAt: fixedNow)
+        let service = makeService(collection: col, wants: wants, binders: binders)
+
+        try await service.performRestore(
+            snapshot: BackupSnapshot(exportedAt: fixedNow, groups: [group], entries: [], wanted: []))
+        XCTAssertEqual(binders.all, [kept], "a v4 backup keeps local layouts, minus the orphan")
+
+        try await service.performRestore(
+            snapshot: BackupSnapshot(exportedAt: fixedNow, groups: [group], entries: [], wanted: [],
+                                     binders: [kept, BinderLayout(groupId: "stale")]))
+        XCTAssertEqual(binders.all, [kept], "and the snapshot's own list is pruned the same way")
+    }
+
+    func testABinderLayoutRoundTripsThroughASnapshot() throws {
+        let layout = BinderLayout(groupId: "g1", shape: PageShape(rows: 1, cols: 2),
+                                  pages: [BinderPage(slots: [PlannedCard(cardId: "a"), nil])])
+        let snapshot = BackupSnapshot(exportedAt: Date(), groups: [], entries: [], wanted: [],
+                                      binders: [layout])
+        let decoded = try JSONDecoder().decode(
+            BackupSnapshot.self, from: try JSONEncoder().encode(snapshot))
+        XCTAssertEqual(decoded.binders, [layout])
+        XCTAssertEqual(decoded.schemaVersion, 5)
     }
 }
