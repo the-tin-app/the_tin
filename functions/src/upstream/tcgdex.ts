@@ -31,6 +31,9 @@ export interface TcgdexCard {
   text: string; imageBase: string | null;
   imageUrl?: string | null;
   rawUsd: number | null; rawEur: number | null;
+  /** First TCGplayer sku, kept only so PPT gap-fill can resolve by exact product identity
+   *  instead of a bare card number. Not persisted to the catalog. */
+  tcgplayerId?: number | null;
   attacks?: TcgdexAttack[];
   detail?: TcgdexDetail;
 }

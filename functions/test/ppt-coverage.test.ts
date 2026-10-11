@@ -34,6 +34,19 @@ describe("computeCoverage", () => {
     expect(computeCoverage(ours, dupNumberPpt)).toEqual({ matched: 1, imageFillable: 1, priceFillable: 1 });
   });
 
+  it("counts one PPT product once, not once per card whose number normalizes alike", () => {
+    // Coverage has to use the matcher the fill uses, or it promises fills that never arrive:
+    // `32/97` and `032` key alike, and the old code counted this Gyarados against both cards.
+    const ours: OurCard[] = [
+      { id: "np-32", localId: "32", name: "Articuno ex", hasImage: false, hasPrice: false },
+      { id: "np-032", localId: "032", name: "Gyarados", hasImage: false, hasPrice: false },
+    ];
+    const one: PptCard[] = [
+      { externalCatalogId: "np-g", cardNumber: "32/97", name: "Gyarados", imageUrl: "http://img/g.jpg", marketUsd: 262.5 },
+    ];
+    expect(computeCoverage(ours, one)).toEqual({ matched: 1, imageFillable: 1, priceFillable: 1 });
+  });
+
   it("treats a card as unmatched when same-number PPT candidates all have different names", () => {
     const dupNumberPpt: PptCard[] = [
       { externalCatalogId: "mep-1a", cardNumber: "1", name: "Raichu", imageUrl: "http://img/1a.jpg", marketUsd: 3.0 },
