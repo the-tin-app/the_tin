@@ -44,6 +44,10 @@ struct StreamView: View {
 
     private var density: StreamDensity { StreamDensity(rawValue: densityRaw) ?? .one }
 
+    /// Art quality for grid cells. One constant so the cell and its prefetch can never disagree
+    /// — a mismatch downloads and decodes each card twice at two sizes.
+    private static let gridQuality = "low"
+
     var body: some View {
         Group {
             if let pager, !pager.cards.isEmpty {
@@ -153,7 +157,13 @@ struct StreamView: View {
     private func gridCell(_ card: CardRecord) -> some View {
         NavigationLink(value: CardID(raw: card.id)) {
             VStack(spacing: 4) {
-                CardImageView(card: card, quality: "high")
+                // ⚠️ "low" (200w), not "high" (800×800). A 240pt cell needs a fraction of the
+                // pixels a 420pt hero does, and every other grid in the app already uses low —
+                // `SetDetailView`, `WantedCardsView`. Shipped as "high" for an hour, copied from
+                // the 1-up page where it IS correct, and made 2×2 unusable on an A10: ~16× the
+                // pixels per cell, four cells a page, eight more prefetched, against a 4-deep
+                // download gate and two usable cores.
+                CardImageView(card: card, quality: Self.gridQuality)
                     .overlay(alignment: .topTrailing) { heart(for: card) }
                     // ⚠️ The grid needs this too, and forgetting it made the thumbs-down INVISIBLE
                     // on iPad — `StreamDensity` is `@AppStorage`, so a device left in grid mode
@@ -188,7 +198,10 @@ struct StreamView: View {
         guard let pager else { return }
         let range = density.prefetchRange(page: page, cardCount: pager.cards.count)
         guard !range.isEmpty else { return }
-        let urls = pager.cards[range].compactMap { $0.imageURL(quality: "high") }
+        // Prefetch at the quality the page will actually render, or the grid warms 800×800 art
+        // it never displays and the cache holds two copies of every card.
+        let quality = density == .one ? "high" : Self.gridQuality
+        let urls = pager.cards[range].compactMap { $0.imageURL(quality: quality) }
         prefetcher.prefetch(urls)
     }
 
