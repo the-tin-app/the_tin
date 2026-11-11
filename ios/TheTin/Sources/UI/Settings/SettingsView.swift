@@ -75,6 +75,8 @@ struct SettingsView: View {
                 }
             }
             .task {
+                // Unstructured so a slow offerings fetch never holds up the rest of this block.
+                Task { await app.tipJar.load() }
                 await model.refresh()
                 // Without this, Settings reports whatever the pack looked like at cold launch:
                 // `pack.refresh()` ran once in RootView's `.task` and nowhere else, so a pack
@@ -624,6 +626,11 @@ struct SettingsView: View {
                 // Label and destination must always name the same platform — a button naming one
                 // and opening another reads as a scam. Both live in this one commit for that reason.
                 Link("Sponsor The Tin on GitHub", destination: AppConfig.supportURL)
+            }
+            // Only when a tip store exists and its offering loaded — a row that opens onto "tips
+            // aren't available" is worse than no row. Quiet by design: one line, Settings only.
+            if app.tipJar.isAvailable {
+                NavigationLink("Leave a tip") { TipJarView(model: app.tipJar) }
             }
             // Shown once the served list has names. Data-driven on purpose: the first listed
             // sponsor makes this appear with no app update, and until then nobody is sent to a

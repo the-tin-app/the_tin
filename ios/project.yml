@@ -43,6 +43,9 @@ packages:
   OpenCV:
     url: https://github.com/yeatse/opencv-spm
     exactVersion: 4.9.0
+  RevenueCat:
+    url: https://github.com/RevenueCat/purchases-ios
+    from: 5.102.0
 targets:
   TheTin:
     type: application
@@ -75,6 +78,8 @@ targets:
     dependencies:
       - package: GRDB
         product: GRDB
+      - package: RevenueCat
+        product: RevenueCat
       - package: Gzip
         product: Gzip
       - package: Firebase

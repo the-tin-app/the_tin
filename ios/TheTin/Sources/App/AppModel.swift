@@ -442,6 +442,9 @@ final class AppModel {
         FundingModel.display(from: catalogState?.funding)
     }
 
+    /// The in-app tip jar. Empty-handed (store nil) unless a RevenueCat key is configured.
+    let tipJar = TipJarModel(store: AppConfig.makeTipStore())
+
     /// Sponsors who asked to be listed, from the same cached state (so the screen still renders
     /// offline). Empty until the served manifest carries names — which is the honest day-one state.
     var supporters: [Supporter] {

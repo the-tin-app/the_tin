@@ -68,13 +68,26 @@ enum AppConfig {
     /// ⚠️ Shipped builds pin this hostname. Changing it strands every install that has it.
     static let backupBaseURL = URL(string: "https://backupthetin.reyes.ai")!
 
-    /// External sponsorship page. Opened in Safari — donations are NEVER processed in-app, and
-    /// nothing is unlocked by them, which is what keeps the "Support" affordance App Store-
-    /// compliant. Whatever links here must be *named* correctly wherever it's linked from: a
-    /// button naming one platform that opens another reads as a scam.
+    /// External sponsorship page, opened in Safari. Sponsoring there unlocks nothing; the in-app
+    /// tip jar (`TipJarModel`) is the other route and is equally gated on nothing. Whatever links
+    /// here must be *named* correctly wherever it's linked from: a button naming one platform
+    /// that opens another reads as a scam.
     // Personal listing, not the org one: GitHub refuses an ORGANISATION payout to an individual
     // Stripe account, which left `sponsors/the-tin-app` pending indefinitely (2026-08-12).
     static let supportURL = URL(string: "https://github.com/sponsors/treyes133")!
+
+    /// RevenueCat **public** SDK key (`appl_…`) for the tip jar. Public by design — it ships in
+    /// every build — so it is committed rather than injected. Empty ⇒ no tip jar: the Settings row
+    /// never appears, which is also how a fork with no RevenueCat project builds and runs.
+    static let revenueCatAPIKey = ""
+
+    /// The tip store, or nil when there is nothing to sell (no key, or under XCTest, where
+    /// configuring a purchases SDK against a real store is exactly what a test must not do).
+    @MainActor static func makeTipStore() -> TipStore? {
+        guard !revenueCatAPIKey.isEmpty, !BackgroundRefresh.isTesting else { return nil }
+        RevenueCatTipStore.configure(apiKey: revenueCatAPIKey)
+        return RevenueCatTipStore()
+    }
 
     /// Self-hosted `catalog-server` (Cloudflare Tunnel hostname). Non-nil ⇒ the failover composite
     /// tries the NAS first and falls back to the R2 backup origin; a wrong/undeployed host just
