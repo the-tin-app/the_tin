@@ -444,6 +444,8 @@ final class AppModel {
 
     /// The in-app tip jar. Empty-handed (store nil) unless a RevenueCat key is configured.
     let tipJar = TipJarModel(store: AppConfig.makeTipStore())
+    /// Schedules the occasional tip note (`SupportNote`). Lazy because it wraps `tipJar`.
+    @ObservationIgnored lazy var supportPrompt = SupportPromptModel(tipJar: tipJar)
 
     /// Sponsors who asked to be listed, from the same cached state (so the screen still renders
     /// offline). Empty until the served manifest carries names — which is the honest day-one state.

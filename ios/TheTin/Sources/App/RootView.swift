@@ -28,6 +28,7 @@ struct RootView: View {
             if let store = model.store, let collection = model.collection {
                 MainTabView(store: store, collection: collection, wants: model.wants, model: model)
                     .restoreBackupPrompt(model.backup)
+                    .environment(model.supportPrompt)
             }
         }
     }
@@ -303,12 +304,12 @@ private struct MainTabView: View {
     }
 }
 
-/// Anchors the offline banner + always-on support bar directly under a tab's navigation bar.
+/// Anchors the offline banner directly under a tab's navigation bar.
 /// Must live INSIDE the NavigationStack: a TabView-level `safeAreaInset` lets the child nav bars
 /// draw over it (it was covering the Discover section headers).
 private extension View {
-    /// The one honesty banner above a tab's content. The support bar is NOT here — it scrolls
-    /// with the tin's own list (see `CollectionView.fundingRow`).
+    /// The one honesty banner above a tab's content. There is no support bar anywhere in the
+    /// chrome: the only tip notes are `SupportNote`s inside the four screens that earn one.
     func statusBanners(model: AppModel, store: CatalogStore) -> some View {
         modifier(StatusBanners(model: model, store: store))
     }

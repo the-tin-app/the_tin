@@ -45,6 +45,8 @@ final class TipJarModel {
     private(set) var purchasing: String?
     private(set) var banner: Banner?
     private let store: TipStore?
+    /// Fired once per completed tip, wherever it was made, so the prompt scheduler can stand down.
+    var onThanked: (() -> Void)?
 
     /// `nil` store ⇒ no key configured (an open-source build with no RevenueCat project). The
     /// model then reports `.unavailable` and Settings never shows the row.
@@ -73,7 +75,9 @@ final class TipJarModel {
         defer { purchasing = nil }
         do {
             switch try await store.purchase(option) {
-            case .thanked: banner = .thanks
+            case .thanked:
+                banner = .thanks
+                onThanked?()
             case .cancelled: break   // They changed their mind. Not an error, not worth a message.
             }
         } catch {

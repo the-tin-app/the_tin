@@ -75,6 +75,7 @@ struct MoversView: View {
                 } footer: {
                     coverageFooter(summary)
                 }
+                SupportNote(moment: .myMovers).listRowSeparator(.hidden)
             }
             if scope == .market, !market.isEmpty {
                 Section {
@@ -96,6 +97,7 @@ struct MoversView: View {
             }
         }
         .listStyle(.plain)
+        .supportMoment(.myMovers, when: scope == .mine && !summary.rows.isEmpty)
         .overlay { emptyState(summary) }
         // Keyed on the RESOLVED scope, not `scopeRaw`: unset, `scopeRaw` is "" and never changes
         // until the picker is touched, so the market load this fallback exists to trigger would

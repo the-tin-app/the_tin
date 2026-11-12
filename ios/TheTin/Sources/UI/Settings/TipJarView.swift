@@ -11,8 +11,17 @@ struct TipJarView: View {
     var body: some View {
         List {
             Section {
-                Text("The Tin is free and always will be. Everything works the same whether or not you tip — this just helps cover the price data and hosting.")
+                Text("The Tin is free and nothing in it is ever locked — tipping or not, it works the same. It does cost money to run, and that's what tips cover:")
                     .font(.footnote).foregroundStyle(.secondary)
+                ForEach(SupportCosts.lines, id: \.name) { line in
+                    LabeledContent(line.name, value: line.amount)
+                        .font(.footnote)
+                }
+                LabeledContent("About", value: SupportCosts.totalText).font(.footnote.weight(.semibold))
+            } header: {
+                Text("Where it goes")
+            } footer: {
+                Text("With enough supporters there's a good roadmap of new features to build. Until then this just keeps the lights on.")
             }
             Section {
                 switch model.state {

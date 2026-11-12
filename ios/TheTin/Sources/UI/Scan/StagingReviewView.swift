@@ -23,6 +23,8 @@ struct StagingReviewView: View {
     @State private var routingAll = false
     /// Drafts the last filing couldn't write; 0 = no error showing.
     @State private var failedToFile = 0
+    /// True once something in this tray was actually filed — the moment a tip note may appear.
+    @State private var filedSomething = false
     // Batch-fetched once on open (same tables the collection UI uses); drive draft repricing.
     @State private var prices: [String: PriceRecord] = [:]
     @State private var variantsByCard: [String: [VariantPrice]] = [:]
@@ -38,6 +40,9 @@ struct StagingReviewView: View {
             // Answers the centring line rather than pointing at a control, so it sits above the
             // rows that carry it. Suppressed on an empty tray — there is no line to explain yet.
             if !staging.drafts.isEmpty { TipView(CenteringReviewTip()) }
+            if filedSomething && staging.drafts.isEmpty {
+                SupportNote(moment: .scanFiled).listRowSeparator(.hidden)
+            }
             Section {
                 ForEach(staging.drafts) { draft in
                     DraftRow(draft: draft, store: store,
@@ -108,6 +113,7 @@ struct StagingReviewView: View {
         .confirmationDialog("File this card in…", isPresented: routingIsPresented, titleVisibility: .visible) {
             routeDialogActions
         }
+        .supportMoment(.scanFiled, when: filedSomething && staging.drafts.isEmpty)
         .alert("New divider", isPresented: newGroupIsPresented) {
             newGroupAlertActions
         }
@@ -194,6 +200,7 @@ struct StagingReviewView: View {
     private func commit(_ draft: ScanDraft, to destination: RouteDestination) async {
         if await collection.commitScan(draft, to: destination) {
             staging.remove(id: draft.id)   // only leave staging on a confirmed write
+            filedSomething = true
         } else {
             failedToFile = 1               // keep the draft; let the user retry
         }
@@ -204,6 +211,7 @@ struct StagingReviewView: View {
         let drafts = staging.drafts
         let filed = await collection.commitScans(drafts, to: destination)
         for id in filed { staging.remove(id: id) }
+        if !filed.isEmpty { filedSomething = true }
         failedToFile = drafts.count - filed.count
     }
 

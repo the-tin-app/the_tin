@@ -51,6 +51,7 @@ struct PortfolioView: View {
             VStack(alignment: .leading, spacing: 16) { content }
                 .padding()
         }
+        .supportMoment(.portfolioValue, when: (series?.cardsWithHistory ?? 0) > 0)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.entries) {
@@ -95,6 +96,7 @@ struct PortfolioView: View {
                     Text("The chart covers cards only — sealed products have no price history.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                SupportNote(moment: .portfolioValue)
             }
         } else {
             ProgressView("Building portfolio history…").frame(maxWidth: .infinity)

@@ -32,3 +32,17 @@ the first build with a key.
 Use a sandbox tester or an Xcode StoreKit configuration with the same product ids. `TipJarModel`
 is covered by `TipJarModelTests` against a fake `TipStore`; the RevenueCat adapter itself is
 not unit-tested.
+
+## Where tips are mentioned
+
+Nowhere in the app's chrome. The always-on "Support the project" bar on the Tin page is gone. A
+`SupportNote` appears only inside four screens, after the app has just done something useful:
+filing a scan batch, wishlist price drops (Watching), the portfolio value chart, and My Cards
+movers. `SupportPromptModel` is the single gate:
+
+- one note a week across all screens; showing it spends the slot, so ignoring it = a week of quiet
+- ✕ = 30 days; a completed tip = 180 days
+- never when the offering hasn't loaded, never at launch, never modal
+
+The cost figures shown to people live in `SupportCosts` (`SupportPrompt.swift`); update them there
+when the bill changes.

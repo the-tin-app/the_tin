@@ -19,10 +19,12 @@ struct WatchingView: View {
             huntingSection
             tinSection
             dropsSection
+            if !model.drops.isEmpty { SupportNote(moment: .wishlistDrop).listRowSeparator(.hidden) }
             grailsSection
             freshnessFooter
         }
         .listStyle(.insetGrouped)
+        .supportMoment(.wishlistDrop, when: !model.drops.isEmpty)
         .navigationTitle("Watching")
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.load(store: store, wants: wants) }
