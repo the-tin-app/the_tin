@@ -28,7 +28,7 @@ settings:
     #   - Confirm 1.0.5 is READY_FOR_SALE (closed) and create a 1.0.6 appStoreVersion record before
     #     the first upload, or export fails the way build 30 did.
     #   - Build numbers have run 37 → 44 → 45; the first 1.0.6 upload should be 46 or later.
-    MARKETING_VERSION: 1.0.6
+    MARKETING_VERSION: 1.0.7
     CURRENT_PROJECT_VERSION: 1
 packages:
   GRDB:
