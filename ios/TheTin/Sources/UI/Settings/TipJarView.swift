@@ -55,7 +55,7 @@ struct TipJarView: View {
                 ForEach(SupportCosts.lines, id: \.name) { line in
                     LabeledContent(line.name, value: line.amount)
                 }
-                LabeledContent("Total, about") { Text(SupportCosts.totalText).fontWeight(.semibold) }
+                LabeledContent("Total") { Text(SupportCosts.totalText).fontWeight(.semibold) }
             } header: {
                 Text("Where it goes")
             } footer: {
