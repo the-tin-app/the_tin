@@ -79,7 +79,7 @@ enum AppConfig {
     /// RevenueCat **public** SDK key (`appl_…`) for the tip jar. Public by design — it ships in
     /// every build — so it is committed rather than injected. Empty ⇒ no tip jar: the Settings row
     /// never appears, which is also how a fork with no RevenueCat project builds and runs.
-    static let revenueCatAPIKey = ""
+    static let revenueCatAPIKey = "appl_gGKuFcjujLGQanmBlNBsDhYxFev"
 
     /// The tip store, or nil when there is nothing to sell (no key, or under XCTest, where
     /// configuring a purchases SDK against a real store is exactly what a test must not do).
