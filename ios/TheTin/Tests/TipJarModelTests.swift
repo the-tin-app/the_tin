@@ -40,6 +40,13 @@ final class TipJarModelTests: XCTestCase {
         XCTAssertTrue(model.isAvailable)
     }
 
+    func testMonthlyListsAfterOneTimeEvenWhenPricesTie() async {
+        let model = TipJarModel(store: FakeTipStore([opt("monthly", 3, recurring: true), opt("small", 3), opt("big", 10)]))
+        await model.load()
+        guard case .ready(let list) = model.state else { return XCTFail("not ready") }
+        XCTAssertEqual(list.map(\.id), ["small", "big", "monthly"])
+    }
+
     func testEmptyOfferingIsUnavailable() async {
         let model = TipJarModel(store: FakeTipStore([]))
         await model.load()

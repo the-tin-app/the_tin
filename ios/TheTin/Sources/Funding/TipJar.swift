@@ -61,7 +61,11 @@ final class TipJarModel {
         if case .loading = state { return }
         state = .loading
         do {
-            let list = try await store.options().sorted { $0.sortValue < $1.sortValue }
+            // One-time tips first, monthly last, each cheapest-first — a $2.99 subscription must not
+            // land between two one-off amounts just because the prices tie.
+            let list = try await store.options().sorted {
+                $0.isRecurring != $1.isRecurring ? !$0.isRecurring : $0.sortValue < $1.sortValue
+            }
             state = list.isEmpty ? .unavailable : .ready(list)
         } catch {
             state = .unavailable
