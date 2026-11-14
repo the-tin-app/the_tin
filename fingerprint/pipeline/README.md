@@ -23,7 +23,8 @@ Flow, gates and rollback: `fingerprint/scripts/auto_publish.py` (module docstrin
     ./run-fp.sh                       # the real thing (cron runs this daily)
 
 ## Behavior notes
-- A new version forces every device to re-download the whole pack (~550 MB). `--min-interval-days`
-  (default 1) is the floor between publishes; raise it to batch releases.
+- A new version does not force anything: the client keeps scanning with the installed pack and offers
+  the update, but the update is a full ~550 MB download (no deltas). With the default
+  `--min-interval-days 1` a user could be offered that daily; raise it (weeks) to batch releases.
 - Cards whose art stays unfetchable for 7 daily attempts stop triggering builds and are reported once.
 - State (first-seen ledger, publish history) lives in the `fp-pipeline-state` volume.
