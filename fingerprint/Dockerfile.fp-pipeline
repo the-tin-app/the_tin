@@ -1,10 +1,13 @@
 # Scanner-pack auto-publish image. Build context: the fingerprint/ directory.
 #   docker build -f Dockerfile.fp-pipeline -t fp-pipeline:latest .
 # Run via pipeline/run-fp.sh (host cron); see pipeline/README.md.
-FROM python:3.12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+# Node 22 base: wrangler 4 refuses to run on Node < 22.12 (python:3.12-slim ships Node 20).
+FROM node:22-slim
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g wrangler@4
+    && npm install -g wrangler@4 \
+    && python3 -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /app/fingerprint
 COPY pyproject.toml ./
 COPY fpcore ./fpcore
