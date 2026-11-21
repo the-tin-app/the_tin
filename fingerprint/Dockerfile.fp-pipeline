@@ -1,0 +1,14 @@
+# Scanner-pack auto-publish image. Build context: the fingerprint/ directory.
+#   docker build -f Dockerfile.fp-pipeline -t fp-pipeline:latest .
+# Run via pipeline/run-fp.sh (host cron); see pipeline/README.md.
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app/fingerprint
+COPY pyproject.toml ./
+COPY fpcore ./fpcore
+COPY scripts ./scripts
+RUN pip install --no-cache-dir -e ".[publish]"
+ENV FP_CACHE_DIR=/cache/images PYTHONUNBUFFERED=1
+ENTRYPOINT ["python", "scripts/auto_publish.py"]
+CMD ["--data-root", "/data", "--work", "/work", "--state", "/state/state.json"]
