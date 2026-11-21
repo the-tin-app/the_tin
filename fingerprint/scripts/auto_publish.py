@@ -19,11 +19,11 @@ Required layout: --data-root is the catalog-server data dir (the NAS mount): it 
 import argparse
 import fcntl
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
 import shutil
-import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timedelta
@@ -57,32 +57,68 @@ def notify(tag: str, message: str):
         print(f"[fp-auto] WARN notify failed: {e}", flush=True)
 
 
-# --- R2 (via wrangler, same as publish_fingerprints.py) ---------------------------------
+# --- R2 (S3-compatible API) -------------------------------------------------------------
+
+_r2_client = None
+
+
+def r2():
+    """boto3 S3 client for the R2 bucket. Credentials: R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY when
+    set, else derived from CLOUDFLARE_API_TOKEN the way Cloudflare documents for R2 API tokens
+    (key id = the token's id, secret = sha256 of the token value). Bucket-scoped
+    "Object Read & Write" tokens work; wrangler's REST object API would need a broader token."""
+    global _r2_client
+    if _r2_client is None:
+        import boto3
+        from botocore.config import Config
+        acct = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+        kid, secret = os.environ.get("R2_ACCESS_KEY_ID"), os.environ.get("R2_SECRET_ACCESS_KEY")
+        if not (kid and secret):
+            tok = os.environ["CLOUDFLARE_API_TOKEN"]
+            req = urllib.request.Request(
+                f"https://api.cloudflare.com/client/v4/accounts/{acct}/tokens/verify",
+                headers={"Authorization": f"Bearer {tok}"})
+            kid = json.load(urllib.request.urlopen(req, timeout=20))["result"]["id"]
+            secret = hashlib.sha256(tok.encode()).hexdigest()
+        _r2_client = boto3.client(
+            "s3", endpoint_url=f"https://{acct}.r2.cloudflarestorage.com", region_name="auto",
+            aws_access_key_id=kid, aws_secret_access_key=secret,
+            config=Config(signature_version="s3v4", retries={"max_attempts": 5}))
+    return _r2_client
+
 
 def r2_get_manifest():
-    """The manifest R2 serves, or None when absent/unreadable. Returns (dict, raw_bytes)."""
-    p = subprocess.run(["npx", "--yes", "wrangler", "r2", "object", "get",
-                        f"{R2_BUCKET}/fingerprint/parts/manifest.json", "--remote", "--pipe"],
-                       capture_output=True)
-    if p.returncode != 0:
-        return None, None
+    """The manifest R2 serves, or (None, None) when absent/unreadable. Returns (dict, raw_bytes)."""
     try:
-        return json.loads(p.stdout), p.stdout
-    except ValueError:
+        raw = r2().get_object(Bucket=R2_BUCKET, Key="fingerprint/parts/manifest.json")["Body"].read()
+        return json.loads(raw), raw
+    except Exception as e:  # noqa: BLE001 — unreadable is reported by the caller, never fatal here
+        print(f"[fp-auto] WARN cannot read R2 manifest: {type(e).__name__}: {e}", flush=True)
         return None, None
 
 
 def r2_put(path: str, key: str):
-    p = subprocess.run(["npx", "--yes", "wrangler", "r2", "object", "put",
-                        f"{R2_BUCKET}/{key}", "--file", path, "--remote"],
-                       capture_output=True, text=True)
-    if p.returncode != 0:
-        raise RuntimeError(f"R2 put {key} failed: {(p.stderr or p.stdout).strip()[:300]}")
+    try:
+        r2().upload_file(path, R2_BUCKET, key)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"R2 put {key} failed: {e}") from e
 
 
 def r2_delete(key: str):
-    subprocess.run(["npx", "--yes", "wrangler", "r2", "object", "delete",
-                    f"{R2_BUCKET}/{key}", "--remote"], capture_output=True)
+    r2().delete_object(Bucket=R2_BUCKET, Key=key)
+
+
+def r2_part_versions() -> dict:
+    """{version: [keys]} for every part object in the bucket (the S3 API can list; wrangler
+    could not, which is why prune used to rely on remembered state)."""
+    out = {}
+    pager = r2().get_paginator("list_objects_v2")
+    for page in pager.paginate(Bucket=R2_BUCKET, Prefix="fingerprint/parts/"):
+        for o in page.get("Contents", []):
+            m = ap._PART_VER_RE.search(o["Key"])
+            if m:
+                out.setdefault(int(m.group(1)), []).append(o["Key"])
+    return out
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -168,7 +204,6 @@ def ship(args, manifest, stage, state):
         # 2. R2: parts, then manifest, then read back.
         for p in manifest["parts"]:
             r2_put(os.path.join(stage, p["path"]), p["path"])
-        state.setdefault("r2_versions", {})[str(version)] = len(manifest["parts"])
         r2_put(os.path.join(stage, publish.parts_dir_name(), "manifest.json"),
                "fingerprint/parts/manifest.json")
         r2_flipped = True
@@ -213,12 +248,15 @@ def prune(args, state):
             if n.startswith(f"fingerprints-v{v}.part"):
                 os.remove(os.path.join(nas_parts, n))
         print(f"[fp-auto] pruned v{v} from the NAS", flush=True)
-    for v, count in list(state.get("r2_versions", {}).items()):
-        if int(v) not in referenced and int(v) != prev:
-            for i in range(count):
-                r2_delete(f"fingerprint/parts/fingerprints-v{v}.part{i:03d}")
-            del state["r2_versions"][v]
-            print(f"[fp-auto] pruned v{v} from R2", flush=True)
+    try:
+        r2_versions = r2_part_versions()
+    except Exception as e:  # noqa: BLE001
+        print(f"[fp-auto] WARN cannot list R2, skipping R2 prune: {e}", flush=True)
+        return
+    for v in ap.prunable_versions(set(r2_versions), referenced, prev):
+        for key in r2_versions[v]:
+            r2_delete(key)
+        print(f"[fp-auto] pruned v{v} from R2 ({len(r2_versions[v])} objects)", flush=True)
 
 
 def main():
@@ -262,7 +300,7 @@ def main():
     if r2_m is None or r2_m.get("version") != nas_m["version"] or r2_m.get("sha256") != nas_m["sha256"]:
         last = state.get("drift_alerted_at")
         if not last or now - datetime.fromisoformat(last) >= timedelta(days=3):
-            what = ("R2 could not be read (wrangler auth/network?)" if r2_m is None else
+            what = ("R2 could not be read (token/network?)" if r2_m is None else
                     f"R2 serves v{r2_m.get('version')}")
             notify("Warning", f"scanner pack origins differ or are unverifiable: NAS serves "
                               f"v{nas_m['version']}; {what}")

@@ -12,8 +12,10 @@ Flow, gates and rollback: `fingerprint/scripts/auto_publish.py` (module docstrin
     mkdir -p logs; cp .env.example .env   # fill in the values
 
 `.env` (never committed):
-    CLOUDFLARE_API_TOKEN=...      # scoped to R2 write on the tin-artifacts bucket
+    CLOUDFLARE_API_TOKEN=...      # R2 API token, "Object Read & Write", scoped to tin-artifacts
     CLOUDFLARE_ACCOUNT_ID=...
+    # R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY  optional: otherwise derived from the token
+    #   (key id = token id via /tokens/verify, secret = sha256 of the token value)
     NOTIFY_URL=...                # optional; POST {service,tag,message,recipient}
     NOTIFY_API_KEY=...
 
